@@ -519,6 +519,29 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
   await ctx.close();
 }
 
+// ---------- B5: free time before lunch still offers a route to the restaurant ----------
+{
+  const { ctx, page, errors } = await newCtx({ sim: '10:40' });
+  await step('Free time: next stop (lunch) with ルート + メニュー on home and on the map card', async () => {
+    await page.evaluate(() => {
+      const S = window.__dlnavi.S;
+      S.must = {}; S.excluded = Object.fromEntries(['rise','falcon','indy','space','haunted','thunder','mmrr','pirates','matterhorn','jungle','tiana','startours','smallworld','peterpan','toad','alice','buzz','autopia','nemo','tiki','marktwain','railroad'].map((k) => [k, true]));
+      localStorage.setItem('dlnavi-1031-v1', JSON.stringify(S));
+    });
+    await page.reload(); await page.waitForSelector('.next__title'); await page.waitForTimeout(300);
+    assert.match(await page.textContent('.next__title'), /ランチまで/);
+    assert.match(await page.textContent('.nextstop'), /ランチ：/);
+    assert.match(await page.getAttribute('.next a[data-route]', 'href'), /google\.com\/maps\/dir\//);
+    assert.equal(await page.locator('.next [data-open-food]').first().count(), 1);
+    await page.screenshot({ path: `${SHOTS}/12-free-time-route.png` });
+    await tab(page, 'map'); await page.waitForTimeout(1200);
+    assert.match(await page.textContent('#mapcard'), /ランチ/);
+    assert.equal(await page.locator('#mapcard a[data-route]').count(), 1);
+    assert.deepEqual(errors, []);
+  });
+  await ctx.close();
+}
+
 // ---------- C: GPS allowed ----------
 {
   const { ctx, page, errors } = await newCtx({ geo: { latitude: 33.81185, longitude: -117.9214, accuracy: 15 } });
@@ -566,46 +589,15 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.match(await page.textContent('#mapcard'), /GO[\s\S]*プラザ・イン[\s\S]*徒歩\d+分/);
     await page.screenshot({ path: `${SHOTS}/04-map-food.png` });
   });
-  await step('ルート = in-app walking guidance along the path; GPS every ~10 s only while guiding; arrival ends it', async () => {
+  await step('ルート opens Google Maps walking directions from my GPS position', async () => {
     await tab(page, 'explore');
     await page.click('#foodList [data-open-food="plazainn"]'); await page.waitForTimeout(250);
-    assert.equal(await page.locator('#sheet a[href*="google.com/maps"]').count(), 0, 'no Google Maps link');
-    let fixes = 0;
-    await page.exposeFunction('__countFix', () => { fixes++; });
-    await page.evaluate(() => { const o = navigator.geolocation.getCurrentPosition.bind(navigator.geolocation); navigator.geolocation.getCurrentPosition = (a, b, c) => { window.__countFix(); return o(a, b, c); }; });
-    await page.click('#sheet [data-nav]'); await page.waitForTimeout(1500);
-    assert.equal(await page.getAttribute('#view-map', 'hidden'), null, 'map tab opened');
-    assert.equal(await page.locator('path.navline').count(), 1, 'route line drawn');
-    assert.equal(await page.locator('.mk--dest').count(), 1);
-    const card = await page.textContent('#mapcard');
-    assert.match(card, /案内中[\s\S]*プラザ・イン[\s\S]*残り\s*\d+\s*m/);
-    assert.match(card, /m先\s*(やや|大きく)?(右|左)へ|m先\s*目的地/);
-    const pts = await page.evaluate(() => window.__dlnavi.R.nav.route.coords.length);
-    assert.ok(pts > 2, `follows the walkways (${pts} points), not a straight line`);
-    assert.equal(await page.evaluate(() => window.__dlnavi.R.nav.route.straight), false);
-    await page.screenshot({ path: `${SHOTS}/04-map-food-route.png` });
-    fixes = 0;
-    await page.waitForTimeout(21000);
-    assert.ok(fixes >= 1 && fixes <= 3, `GPS fixes while guiding in 21 s: ${fixes}`);
-    // walk to the shop → arrival
-    await page.evaluate(() => { const { R } = window.__dlnavi; const d = R.nav.dest.pos; R.gpsPos = { lat: d.lat, lon: d.lon, acc: 10, at: Date.now() }; window.__dlnavi.renderMap(); });
-    await page.waitForTimeout(400);
-    assert.match(await page.textContent('#toast'), /到着しました/);
-    assert.equal(await page.evaluate(() => window.__dlnavi.R.nav), null);
-    assert.equal(await page.locator('path.navline').count(), 0);
-    // leaving guidance → back to the normal (slow) cadence
-    fixes = 0;
-    await page.waitForTimeout(12000);
-    assert.equal(fixes, 0, 'no frequent GPS after guidance ended');
-  });
-  await step('ルート from the home card: walkway route to the next ride, 終了 ends guidance', async () => {
-    await tab(page, 'home');
-    await page.click('.next [data-nav]'); await page.waitForTimeout(1200);
-    assert.match(await page.textContent('#mapcard'), /案内中/);
-    assert.doesNotMatch(await page.textContent('#mapcard'), /直線/);
-    assert.equal(await page.locator('path.navline').count(), 1);
-    await page.click('[data-act="nav-end"]'); await page.waitForTimeout(200);
-    assert.equal(await page.locator('path.navline').count(), 0);
+    const href = await page.getAttribute('#sheet a[data-route]', 'href');
+    assert.match(href, /^https:\/\/www\.google\.com\/maps\/dir\/\?api=1&origin=33\.8118\d+,-117\.921\d*&destination=/);
+    assert.match(href, /travelmode=walking/);
+    await page.click('.sheet__close'); await page.waitForTimeout(100);
+    await tab(page, 'map');
+    assert.match(await page.getAttribute('#mapcard a[data-route]', 'href'), /google\.com\/maps\/dir\/.*origin=/);
   });
   await step('No uncaught JS errors (GPS)', async () => assert.deepEqual(errors, []));
   await ctx.close();
@@ -636,6 +628,7 @@ for (const [t, expect, file] of [['07:00', /開園/, '11-preopen'], ['11:28', /�
   const { ctx, page, errors } = await newCtx({ sim: t });
   await step(`Time ${t}: home adapts (${expect})`, async () => {
     assert.match(await page.textContent('#view-home'), expect);
+    if (t !== '07:00') assert.match(await page.getAttribute('.next a[data-route]', 'href') || '', /google\.com\/maps\/dir\//, 'next card has ルート');
     await page.screenshot({ path: `${SHOTS}/${file}.png` });
     assert.deepEqual(errors, []);
   });

@@ -5,7 +5,6 @@ import {
   recommend, simulateDay, buildAnchors, anchorConflicts, crowdRatio, rideRatios, walkMin, distanceM, hhmm, parseHHMM, estimateWait, availability, DEFAULT_MUST, gpsNeedsRedraw, movingPlanMin,
 } from './engine.js';
 import { SHARE_FIELDS, mergeDocs, sameDoc, newCode, CODE_RE } from './share.js';
-import { walkRoute } from './walk.js';
 
 // =====================================================================
 // State (persisted in localStorage — never sent anywhere)
@@ -276,8 +275,7 @@ const credit = (key) => { const p = R.photos?.[key]; if (!p) return ''; return `
 // No continuous tracking (watchPosition keeps the GPS radio on and drains the battery).
 // Instead: single fixes, only while the app is visible and the user has turned GPS on,
 // at most every 60 s on the map tab and every 3 min elsewhere (plus when the user taps "現在地").
-const guiding = () => !!R.nav && S.tab === 'map';
-const GPS_EVERY = () => (guiding() ? 10e3 : S.tab === 'map' ? 60e3 : 180e3);
+const GPS_EVERY = () => (S.tab === 'map' ? 60e3 : 180e3);
 const gpsDue = () => !R.gpsPos || Date.now() - R.gpsPos.at > GPS_EVERY() * 0.8;
 function requestFix({ userInitiated = false, force = false } = {}) {
   if (!('geolocation' in navigator)) {
@@ -312,7 +310,7 @@ function requestFix({ userInitiated = false, force = false } = {}) {
   }, {
     // High accuracy only when it matters (looking at the map or explicitly asked); reuse a recent fix otherwise.
     enableHighAccuracy: onMap || userInitiated,
-    maximumAge: guiding() ? 5e3 : userInitiated ? 10e3 : onMap ? 30e3 : 90e3,
+    maximumAge: userInitiated ? 10e3 : onMap ? 30e3 : 90e3,
     timeout: 15000,
   });
 }
@@ -435,6 +433,13 @@ function closeSheet() { $('#sheet').hidden = true; document.body.style.overflow 
 document.addEventListener('click', (e) => { if (e.target.closest('[data-close]')) closeSheet(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSheet(); });
 
+// Walking directions in Google Maps. Start = this phone's latest GPS fix when we have one
+// (otherwise Google Maps starts from "your location").
+function routeUrl(pos) {
+  const g = S.gps && R.gpsPos && Date.now() - R.gpsPos.at < 5 * 60e3 ? R.gpsPos : null;
+  return `https://www.google.com/maps/dir/?api=1${g ? `&origin=${g.lat.toFixed(6)},${g.lon.toFixed(6)}` : ''}&destination=${pos.lat},${pos.lon}&travelmode=walking`;
+}
+const routeAttr = (pos) => (pos ? `href="${esc(routeUrl(pos))}" data-route="${pos.lat},${pos.lon}" target="_blank" rel="noopener"` : 'aria-disabled="true"');
 const dots = (n, max = 5) => `<span aria-label="${n}/${max}" style="letter-spacing:1px">${'●'.repeat(n)}<span style="color:var(--line)">${'●'.repeat(max - n)}</span></span>`;
 const doneRides = () => Object.keys(S.done).filter((k) => attractionById[k]);
 const PACE = { relax: 'ゆったり', balance: 'ふつう', rides: 'たくさん' };
@@ -746,7 +751,7 @@ function renderNextCard(r, c) {
       ${rtags(p.reasons)}
       ${bar}
       <div class="btnrow">
-        <button class="btn" ${navAttr(coordsOf(a.id), a.short)}>${ic('route')}ルート</button>
+        <a class="btn" ${routeAttr(coordsOf(a.id))}>${ic('route')}ルート</a>
         <button class="btn" data-open="${a.id}">${ic('info')}くわしく</button>
       </div></article>`;
   }
@@ -770,7 +775,7 @@ function renderNextCard(r, c) {
       </div>
       <div class="tags">${tags.map(([t, k]) => `<span class="tag ${k ? 'tag--' + k : ''}">${esc(t)}</span>`).join('')}</div>
       <div class="btnrow">
-        <button class="btn" ${navAttr(x.pos, x.place || x.title)}>${ic('route')}ルート</button>
+        <a class="btn" ${routeAttr(x.pos)}>${ic('route')}ルート</a>
         ${rest ? `<button class="btn" data-open-food="${rest.id}">${ic('food')}メニュー</button>` : `<button class="btn" data-open-show="${x.show}">${ic('info')}くわしく</button>`}
       </div></article>`;
   }
@@ -780,7 +785,12 @@ function renderNextCard(r, c) {
   return `<article class="card next">
     <div><div class="kicker">Free time</div><h1 class="next__title">${next ? `${esc(next.title)}まで ${fmtDur(p.minutes)}` : '自由時間'}</h1>
       <div class="next__en">おやつ・写真・お土産に</div></div>
-    ${next ? `<div class="tags"><span class="tag tag--warn">${clock(r.leaveBy)} に移動開始</span></div>` : ''}
+    ${next ? `<div class="tags"><span class="tag tag--warn">${clock(r.leaveBy)} に移動開始</span></div>
+    <div class="nextstop"><div class="nextstop__t"><span class="kicker">Next · ${clock(next.start)}</span><b>${jw(next.kind === 'meal' ? `${next.title}：${next.place}` : next.title)}</b><small>${ic('walk')}徒歩${walkMin(c.pos, next.pos)}分${next.claim ? ` · 場所取り ${clock(next.start - next.claim)}〜` : ''}</small></div></div>
+    <div class="btnrow">
+      <a class="btn btn--primary" ${routeAttr(next.pos)}>${ic('route')}ルート</a>
+      ${next.restaurant ? `<button class="btn" data-open-food="${next.restaurant}">${ic('food')}メニュー</button>` : next.show ? `<button class="btn" data-open-show="${next.show}">${ic('info')}くわしく</button>` : ''}
+    </div>` : ''}
     <div class="restgrid">${nearSnacks.map((n) => `<button class="rest" data-open-food="${n.x.id}"><span class="rest__n">${jw(n.x.ja)}</span><span class="rest__s">徒歩${n.w}分</span></button>`).join('')}</div>
   </article>`;
 }
@@ -1355,7 +1365,7 @@ function openAttraction(id) {
       ${!av.ok ? `<div class="note note--bad">${ic('alert')}<div><div class="note__t">${esc(av.reason)}</div>${must ? '<div class="note__s">再開したら最優先で案内します</div>' : ''}</div></div>` : ''}
       <div class="btnrow">
         ${S.done[a.id] ? `<button class="btn" data-done="${a.id}">${ic('check')}済み ${S.doneMin[a.id] != null ? clock(S.doneMin[a.id]) : ''}</button>` : `<button class="btn btn--primary" data-done="${a.id}" data-close>${ic('check')}乗った</button>`}
-        <button class="btn" ${navAttr(pos, a.short)}>${ic('route')}ルート</button>
+        <a class="btn" ${routeAttr(pos)}>${ic('route')}ルート</a>
       </div>
       <div class="seg"><button class="${must ? 'is-active' : ''}" data-ride-st="${a.id}" data-v="must">絶対乗る</button><button class="${!must && !S.excluded[a.id] ? 'is-active' : ''}" data-ride-st="${a.id}" data-v="">おまかせ</button><button class="${S.excluded[a.id] ? 'is-active' : ''}" data-ride-st="${a.id}" data-v="skip">乗らない</button></div>
       <p class="para">${esc(a.desc)}</p>
@@ -1389,7 +1399,7 @@ function openFood(id) {
       <ul class="menu">${r.menu.map((m) => `<li><span>${esc(m.name)}<br><small class="muted">${esc(m.en)}</small></span><span>${esc(m.price)}</span></li>`).join('')}</ul>
       ${r.halloween.length ? `<div class="box"><b>ハロウィン限定（報道ベース）</b>${r.halloween.map((h) => `${esc(h.name)}<span class="muted">（${esc(h.note)}）</span>`).join('<br>')}</div>` : ''}
       <div class="btnrow">
-        <button class="btn" ${navAttr(pos, r.ja)}>${ic('route')}ルート</button>
+        <a class="btn" ${routeAttr(pos)}>${ic('route')}ルート</a>
         <button class="btn" data-food-map="${r.id}">${ic('pin')}地図で見る</button>
       </div>
       <div class="btnrow">
@@ -1637,111 +1647,6 @@ function offerJoinFromLink() {
 }
 
 // =====================================================================
-// In-app walking guidance (ルート). Route along the park's guest walkways (walk.js, computed on
-// the phone); straight line only if no route is found. GPS is read every 10 s ONLY while the
-// route is on screen.
-// =====================================================================
-const TURN_JA = { left: '左へ', right: '右へ', 'slight left': 'やや左へ', 'slight right': 'やや右へ', 'sharp left': '大きく左へ', 'sharp right': '大きく右へ', straight: 'まっすぐ', uturn: '引き返す' };
-const stepText = (s) => (s.type === 'arrive' ? '目的地に到着' : TURN_JA[s.modifier] || 'そのまま進む');
-const navAttr = (pos, name) => (pos ? `data-nav="${pos.lat},${pos.lon}" data-nav-name="${esc(name || '')}"` : 'disabled');
-function navFrom() {
-  if (S.gps && R.gpsPos && Date.now() - R.gpsPos.at < 5 * 60e3) return { lat: R.gpsPos.lat, lon: R.gpsPos.lon, gps: true };
-  const p = position();
-  return p.lat != null ? { lat: p.lat, lon: p.lon, gps: false } : null;
-}
-function startNav(dest) {
-  R.nav = { dest, route: null, refetchAt: 0, loading: true };
-  R.mapFood = null;
-  closeSheet();
-  if (!S.gps || !R.gpsPos) startGPS(true);
-  go('map');
-  navRoute(true);
-}
-function endNav(msg) {
-  R.nav = null;
-  mapMod?.setRoute(null);
-  if (S.tab === 'map') renderMap();
-  if (msg) toast(msg, 'ok');
-}
-function navRoute(force = false) {
-  const n = R.nav;
-  if (!n || (!force && Date.now() - n.refetchAt < 20e3)) return;
-  const from = navFrom(), to = n.dest.pos;
-  n.refetchAt = Date.now();
-  if (!from) { n.route = null; n.loading = false; if (S.tab === 'map') renderMap(); return; }
-  const w = walkRoute(from, to);
-  n.route = w ? { ...w, straight: false } : { coords: [[from.lat, from.lon], [to.lat, to.lon]], distance: Math.round(distanceM(from, to)), steps: [], straight: true };
-  n.route.stepIdx = n.route.steps.map((s) => (s.at ? nearestIdx(n.route.coords, { lat: s.at[0], lon: s.at[1] }) : -1));
-  n.loading = false;
-  if (S.tab === 'map') renderMap();
-}
-function nearestIdx(cs, p) {
-  let bi = 0, bd = Infinity;
-  cs.forEach((c, i) => { const d = distanceM(p, { lat: c[0], lon: c[1] }); if (d < bd) { bd = d; bi = i; } });
-  return bi;
-}
-// Where am I on the route: distance off the line, remaining distance, next turn.
-function navProgress() {
-  const n = R.nav, r = n?.route, me = navFrom();
-  if (!r || !me) return null;
-  const cs = r.coords, lat0 = me.lat * Math.PI / 180;
-  const xy = (c) => [(c[1] - me.lon) * 111320 * Math.cos(lat0), (c[0] - me.lat) * 110540];
-  let best = { d: Infinity, i: 0, t: 0 };
-  for (let i = 0; i < cs.length - 1; i++) {
-    const [ax, ay] = xy(cs[i]), [bx, by] = xy(cs[i + 1]);
-    const vx = bx - ax, vy = by - ay, L2 = vx * vx + vy * vy || 1;
-    const t = Math.max(0, Math.min(1, -(ax * vx + ay * vy) / L2));
-    const d = Math.hypot(ax + vx * t, ay + vy * t);
-    if (d < best.d) best = { d, i, t };
-  }
-  const seg = (i) => distanceM({ lat: cs[i][0], lon: cs[i][1] }, { lat: cs[i + 1][0], lon: cs[i + 1][1] });
-  let remaining = seg(best.i) * (1 - best.t);
-  const along = [];
-  let acc = remaining;
-  for (let i = best.i + 1; i < cs.length - 1; i++) { along[i] = acc; acc += seg(i); }
-  along[cs.length - 1] = acc;
-  remaining = acc;
-  let next = null, nextIn = null;
-  r.steps.forEach((s, k) => {
-    const idx = r.stepIdx?.[k];
-    if (next || s.type === 'depart' || idx == null || idx <= best.i) return;
-    next = s; nextIn = Math.round(along[idx] ?? remaining);
-  });
-  return { off: best.d, remaining: Math.round(remaining), next, nextIn, toDest: distanceM(me, n.dest.pos), gps: me.gps };
-}
-function navCardHtml() {
-  const n = R.nav;
-  const pr = navProgress();
-  const name = esc(n.dest.name);
-  if (n.loading && !n.route) return `<div class="navcard"><div class="navcard__b"><div class="mapdest__k">案内</div><div class="mapdest__n">${name}</div><div class="navcard__m">ルートを探しています…</div></div><button class="btn btn--sm" data-act="nav-end">終了</button></div>`;
-  if (!pr) return `<div class="navcard"><div class="navcard__b"><div class="mapdest__k">案内</div><div class="mapdest__n">${name}</div><div class="navcard__m">現在地がわかりません。「現在地を表示」を押してください</div></div><button class="btn btn--sm" data-act="nav-end">終了</button></div>`;
-  const mins = Math.max(1, Math.round((pr.remaining * 1.0) / PACE_M));
-  return `<div class="navcard"><div class="navcard__b"><div class="mapdest__k">案内中${n.route.straight ? '（直線）' : ''}</div><div class="mapdest__n">${name}</div>
-      <div class="navcard__m">残り <b class="num">${pr.remaining}</b>m · 約${mins}分${pr.gps ? '' : ' · 推定位置から'}</div>
-      ${n.route.straight ? '<div class="navcard__next">園内の通路ルートが見つからないため直線で案内中</div>'
-        : pr.next ? `<div class="navcard__next">${ic('route')}<b class="num">${pr.nextIn}</b>m先 ${esc(stepText(pr.next))}${pr.next.name && pr.next.type !== 'arrive' ? `（${esc(pr.next.name)}）` : ''}</div>` : ''}</div>
-    <button class="btn btn--sm" data-act="nav-end">終了</button></div>`;
-}
-const PACE_M = 70; // m/min, crowded-park walking pace (same as the plan's walking estimate)
-// Called on every map render while guiding: draw, follow me, re-route when off the path, detect arrival.
-function navUpdate() {
-  const n = R.nav;
-  if (!n || !mapMod) return;
-  const pr = navProgress();
-  if (pr && pr.gps && (pr.toDest < 25 || pr.remaining < 15)) return endNav(`到着しました：${n.dest.name}`);
-  mapMod.setRoute(n.route ? { coords: n.route.coords, straight: n.route.straight, dest: n.dest.pos, icon: ic('flag') } : null);
-  if (pr?.gps) mapMod.follow(R.gpsPos);
-  if (pr && pr.gps && pr.off > 35) navRoute(false);
-  const card = $('#mapcard');
-  if (card) { card.hidden = false; card.classList.add('is-nav'); card.innerHTML = navCardHtml(); }
-  if (!n.fitted && n.route) {
-    n.fitted = true;
-    const me = navFrom();
-    setTimeout(() => mapMod.fitTo([me, n.dest.pos]), 200);
-  }
-}
-
-// =====================================================================
 // Router & events
 // =====================================================================
 let mapMod = null;
@@ -1781,7 +1686,6 @@ async function renderMap() {
       shows: SHOWS.map((s) => ({ s, pos: s.venuePos })),
       nextId: R.mapFood?.one ? null : r.primary?.a?.id || null,
       target: R.mapFood?.one ? { id: R.mapFood.ids[0] } : null,
-      nav: !!R.nav,
       icons: { food: ic('food'), show: ic('show') },
       coordsSrc: (() => { const n = Object.keys(R.meta?.coords || {}).filter((k) => attractionById[k]).length; return n >= 15 ? 'api' : n > 0 ? 'partial' : 'approx'; })(),
     });
@@ -1806,15 +1710,13 @@ async function renderMap() {
     }
     const p = r.primary;
     const shop = R.mapFood?.one ? restaurantById[R.mapFood.ids[0]] : null;
-    const dest = shop ? { name: shop.ja, pos: coordsOf(shop.id), open: `data-open-food="${shop.id}"`, k: 'GO' } : p?.type === 'ride' ? { name: p.a.short, pos: coordsOf(p.a.id), wait: p.wait, open: `data-open="${p.a.id}"` } : p?.type === 'anchor' ? { name: p.anchor.title + (p.anchor.place ? '・' + p.anchor.place : ''), pos: p.anchor.pos, open: `data-anchor-edit="${p.anchor.id}"` } : null;
+    const dest = shop ? { name: shop.ja, pos: coordsOf(shop.id), open: `data-open-food="${shop.id}"`, k: 'GO' } : p?.type === 'ride' ? { name: p.a.short, pos: coordsOf(p.a.id), wait: p.wait, open: `data-open="${p.a.id}"` } : p?.type === 'anchor' || (p?.type === 'free' && p.next) ? (() => { const x = p.anchor || p.next; return { name: x.title + (x.place ? '・' + x.place : ''), pos: x.pos, open: `data-anchor-edit="${x.id}"` }; })() : null;
     const me = position();
-    if (R.nav) return navUpdate();
-    $('#mapcard').classList.remove('is-nav');
     $('#mapcard').hidden = !dest;
     if (dest) {
       $('#mapcard').innerHTML = `<button class="mapdest__b" style="text-align:left" ${dest.open}><div class="mapdest__k">${dest.k || 'NEXT'}</div><div class="mapdest__n">${esc(dest.name)}</div>
         <div class="mapdest__m">${me.lat != null ? `徒歩${walkMin(me, dest.pos)}分` : '現在地未設定'}${dest.wait != null ? ` · 待ち${dest.wait}分` : ''}${mapMod.coordsNote()}</div></button>
-        <button class="btn btn--primary btn--sm" ${navAttr(dest.pos, dest.name)}>${ic('route')}ルート</button>`;
+        <a class="btn btn--primary btn--sm" ${routeAttr(dest.pos)}>${ic('route')}ルート</a>`;
     }
   } catch (e) {
     el.innerHTML = `<div class="note note--bad" style="margin:12px">${ic('alert')}<div>地図を読み込めませんでした（${esc(e.message)}）</div></div>`;
@@ -1827,9 +1729,11 @@ document.addEventListener('click', async (e) => {
   const t = e.target.closest('button, a, [data-open]');
   if (!t) return;
   const d = t.dataset;
-  if (d.nav) {
-    const [lat, lon] = d.nav.split(',').map(Number);
-    return startNav({ name: d.navName || '目的地', pos: { lat, lon } });
+  if (d.route) {
+    // Refresh the start point with the newest GPS fix right before leaving for Google Maps.
+    const [lat, lon] = d.route.split(',').map(Number);
+    t.href = routeUrl({ lat, lon });
+    return;
   }
   if (d.tab) return go(d.tab);
   if (d.tabGo) { closeSheet(); return go(d.tabGo); }
@@ -1923,7 +1827,6 @@ document.addEventListener('click', async (e) => {
     case 'refresh': return fetchLive({ manual: true });
     case 'app-update': return applyUpdate();
     case 'share-open': return openShare();
-    case 'nav-end': return endNav('案内を終了しました');
     case 'food-map': S.mapFilter = 'food'; R.mapFood = { q: S.foodQ, ids: R.foodHits || [] }; save(); return go('map');
     case 'map-food-clear': R.mapFood = null; return renderMap();
     case 'share-start': return startShare();
@@ -2042,8 +1945,6 @@ if (S.gps && navigator.permissions?.query) {
 }
 // Throttled position refresh (see requestFix): checks every 20 s, fetches only when due.
 setInterval(() => { if (S.gps) requestFix(); }, 20e3);
-// While a route is on screen: check every 5 s (a fix is actually taken every ~10 s, see GPS_EVERY).
-setInterval(() => { if (guiding() && S.gps && document.visibilityState === 'visible') requestFix(); }, 5e3);
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
 // ---------- app updates ----------
@@ -2051,13 +1952,13 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
 // (ETag of the app code) when the app comes back to the foreground and every 10 minutes.
 // If there is one: reload right away when it is safe (coming back after a while, nothing open),
 // otherwise show a banner with a one-tap 更新.
-const UPDATE_FILES = ['/js/app.js', '/js/engine.js', '/js/map.js', '/js/walk.js', '/css/app.css'];
+const UPDATE_FILES = ['/js/app.js', '/js/engine.js', '/js/map.js', '/css/app.css'];
 let codeTag = null, hiddenAt = 0;
 async function currentCodeTag() {
   const tags = await Promise.all(UPDATE_FILES.map((u) => fetch(u, { method: 'HEAD', cache: 'no-store' }).then((r) => (r.ok ? r.headers.get('etag') || r.headers.get('last-modified') || '' : '')).catch(() => '')));
   return tags.every((t) => !t) ? null : tags.join('|');
 }
-function safeToReload() { return !R.dragging && !R.nav && $('#sheet').hidden && !R.draft && document.activeElement?.tagName !== 'INPUT'; }
+function safeToReload() { return !R.dragging && $('#sheet').hidden && !R.draft && document.activeElement?.tagName !== 'INPUT'; }
 function applyUpdate() { try { navigator.serviceWorker?.getRegistration().then((r) => r?.update()); } catch { /* ignore */ } location.reload(); }
 async function checkForUpdate({ allowAutoReload = false } = {}) {
   const tag = await currentCodeTag();

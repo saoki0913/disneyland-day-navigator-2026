@@ -525,15 +525,9 @@ body.is-dragging { -webkit-user-select: none; user-select: none; cursor: grabbin
 
 .mk--food.is-target { width: 32px; height: 32px; font-size: 17px; background: var(--red); outline: 3px solid var(--navy); outline-offset: 1px; }
 
-/* ---------- in-app walking guidance ---------- */
-.navcard { display: flex; align-items: center; gap: 10px; width: 100%; }
-.navcard__b { flex: 1; min-width: 0; line-height: 1.3; }
-.navcard__m { font-size: 13px; color: var(--ink); font-weight: 700; }
-.navcard__m b { font-size: 16px; color: #2b7bf3; }
-.navcard__next { display: flex; align-items: center; gap: 4px; margin-top: 2px; font-size: 13px; font-weight: 800; color: var(--red); }
-.navcard__next b { font-size: 15px; }
-.mk--dest { width: 34px; height: 34px; background: #2b7bf3; color: #fff; border: 3px solid #fff; font-size: 17px; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
-.mapdest:has(.navcard) { height: auto; min-height: 56px; padding: 8px 8px 8px 12px; bottom: 22px; }
-.mapdest.is-nav { height: auto; min-height: 56px; padding: 8px 8px 8px 12px; bottom: 22px; }
-.navcard__next { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mapwrap:has(.mapdest.is-nav) .mapfab { bottom: 132px; }
+
+/* free time: where to go next */
+.nextstop { border-top: 1px solid var(--line); padding-top: 8px; }
+.nextstop__t { display: flex; flex-direction: column; gap: 1px; line-height: 1.35; }
+.nextstop__t b { font-size: 16px; }
+.nextstop__t small { font-size: 12.5px; color: var(--muted); font-weight: 700; display: flex; align-items: center; gap: 3px; }
