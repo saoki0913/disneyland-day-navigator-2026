@@ -22,15 +22,16 @@ on:
 permissions:
   contents: read
 
-# Avoid old builds overwriting newer releases. Keep preview and production separate.
+# Isolate each verified commit: late older workflow_run events must never cancel a newer deploy.
+# Older commits are independently rejected by the up-to-date SHA check below.
 concurrency:
-  group: dl-navi-1031-${{ github.event_name == 'workflow_dispatch' && inputs.target || 'production' }}
-  cancel-in-progress: true
+  group: dl-navi-1031-${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.target || 'manual' }}
+  cancel-in-progress: false
 
 jobs:
   deploy:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/claude/vibrant-dijkstra-lbpi65') ||
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
