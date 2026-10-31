@@ -1,7 +1,7 @@
 name: Verify Disneyland Navi
 on:
   push:
-    branches: ['claude/vibrant-dijkstra-lbpi65']
+    branches: ['main']
   workflow_dispatch:
 jobs:
   verify:
