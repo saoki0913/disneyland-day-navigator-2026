@@ -26,7 +26,7 @@ API トークンを使う場合の最小権限：`Account › Cloudflare Pages �
 
 ## GitHub push → Cloudflare Pages 自動デプロイ（無料・既存サービス分離）
 
-- GitHub の本番ブランチ `main` への **push** で `.github/workflows/verify.yml` が起動し、単体テスト86件とモバイルE2E52件を実行します。
+- GitHub の本番ブランチ `main` への **push** で `.github/workflows/verify.yml` が起動し、単体テスト86件とモバイルE2E53件を実行します。
 - **検証が成功した最新コミットのみ** `.github/workflows/deploy-pages.yml` が起動して、本番 `https://dl-navi-1031.pages.dev` にデプロイします。失敗したテストや古いコミットは公開されません。GitHub Actions の `workflow_dispatch` からプレビュー/本番を手動選択することもできます。
 - Cloudflare と GitHub のネイティブ Git 連携は使いません（Cloudflare Git installation が 8000011 で失敗するため）。代わりに公式サポートの `wrangler pages deploy public --project-name dl-navi-1031 --branch main` を使います。
 - **初回に1回だけ必要**：Cloudflare ダッシュボードの API Tokens で、対象アカウントの `Account › Cloudflare Pages › Edit` のみを許可したトークンを発行し、この GitHub リポジトリの `Settings › Secrets and variables › Actions › New repository secret` に **`CLOUDFLARE_API_TOKEN`** として保存します。Cloudflare のアカウントIDはワークフローで既存の対象アカウントに固定しているため、Secret は不要です。トークンを git、チャット、ログに貼らないでください。
@@ -46,6 +46,8 @@ API トークンを使う場合の最小権限：`Account › Cloudflare Pages �
 **プランの編集（2026-10-31 追加）**
 - プランは「順番」として保存。「乗った」では**次の1件だけ**を現在地といまの待ち時間で選び直し（次のごはん/ショーまでの乗り物から。鍵で固定したものは動かさない）、それ以降の順番はそのまま。
 - もっと良い順番（歩き＋待ちが合計15分以上短い、または間に合わなかった予定が間に合う）が見つかったときは、勝手に変えずに提案カード（`−18分 ↑ホーンテッドマンション [反映] [×]`）を出す。反映すると動いた行に ↑↓ バッジ。×で同じ提案は出さない。
+- 提案カードをタップすると変更後プレビュー（動く行を緑で強調、元の時刻に取り消し線→新しい時刻、歩き・待ちの合計の変化）。そこで「反映」／「このまま」。
+- ごはんのお店は全30店（食事・カフェ・軽食・スイーツに分けて近い順）から選べる。選んだ店をタップするとメニュー（料理ごとの写真＝Wikimedia Commons、作者・ライセンス表示。見つからない料理は絵文字タイル）と公式メニューへのリンク。
 - 説明文は出さない：タイムライン先頭は「⟳ 作成時刻」（＝作り直しボタン）と「📍 現在地」（タップでGPS／エリア選択）だけ。≡ と鍵の使い方は初回だけアニメーションで示す。
 - 並べ替え：≡ をドラッグ（乗り物・ごはん・ショー）。ごはんは置いた位置で時刻が決まる。ショーは開演時刻固定で、間に合わない順番なら警告だけ出す（勝手に並べ替えない）。
 - 一時休止：プランの乗り物が休止になったら（待ち時間の自動更新で検知）、その乗り物だけを外して前後を詰める（「再開待ち」に表示）。再開したら元の位置に自動で戻す。ほかの順番は変えない。
@@ -108,7 +110,7 @@ API トークンを使う場合の最小権限：`Account › Cloudflare Pages �
 ```bash
 npm test                               # 76 unit tests（エンジン・API正規化・写真選定）
 npx wrangler pages dev public --port 8788 &
-node tests/e2e.mjs http://127.0.0.1:8788   # 52 browser E2E steps（iPhoneサイズ）
+node tests/e2e.mjs http://127.0.0.1:8788   # 53 browser E2E steps（iPhoneサイズ）
 ```
 
 ## コスト

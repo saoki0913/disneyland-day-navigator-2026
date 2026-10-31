@@ -293,10 +293,11 @@ async function fetchMeta() {
   } catch { /* fallback coords stay in use */ }
 }
 async function fetchPhotos() {
-  if (Object.keys(R.photos).length > 20) return;
-  const sets = await Promise.allSettled(['rides', 'food', 'shows'].map((set) => fetch('/api/photos?set=' + set).then((r) => r.json())));
+  // cached set is complete enough (incl. the dish photos added later) → no refetch
+  if (Object.keys(R.photos).length > 20 && Object.keys(R.photos).some((k) => k.startsWith('menu_') || k === '_menuChecked')) return;
+  const sets = await Promise.allSettled(['rides', 'food', 'food2', 'shows', 'menu'].map((set) => fetch('/api/photos?set=' + set).then((r) => r.json())));
   const merged = { ...R.photos };
-  for (const s2 of sets) if (s2.status === 'fulfilled' && s2.value?.ok) Object.assign(merged, s2.value.photos);
+  for (const s2 of sets) if (s2.status === 'fulfilled' && s2.value?.ok) { Object.assign(merged, s2.value.photos); if (s2.value.set === 'menu') merged._menuChecked = { source: 'none' }; }
   if (Object.keys(merged).length) {
     R.photos = merged;
     localStorage.setItem(KEY + ':photos', JSON.stringify({ at: Date.now(), data: merged }));
@@ -442,6 +443,21 @@ document.addEventListener('error', (e) => {
 }, true);
 const rideImg = (a) => imgFor(a.id, { name: a.en, color: landById[a.land]?.color });
 const foodImg = (r) => imgFor('food_' + r.id, { name: r.en, color: '#2e6b4f' });
+// Every place to eat, grouped (meals first) — any of them can be chosen for any meal.
+const KIND_JA = { meal: '食事', cafe: 'カフェ', snack: '軽食', sweets: 'スイーツ' };
+const KIND_ORDER = ['meal', 'cafe', 'snack', 'sweets'];
+function shopGroups(firstKind = 'meal', from = null) {
+  const order = [firstKind, ...KIND_ORDER.filter((k) => k !== firstKind)];
+  return order.map((k) => ({ k, label: KIND_JA[k], list: RESTAURANTS.filter((r) => r.kind === k)
+    .map((r) => ({ r, walk: walkMin(from, coordsOf(r.id)) })).sort((x, y) => x.walk - y.walk || x.r.ja.localeCompare(y.r.ja, 'ja')) }))
+    .filter((g) => g.list.length);
+}
+// Dish photo (Wikimedia Commons) or an emoji tile when none was found.
+function dishImg(r, i) {
+  const p = R.photos?.[`menu_${r.id}_${i}`];
+  return p?.src ? `<img class="dish__img" src="${esc(p.src)}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'dish__img dish__img--none',textContent:'${r.emoji || ''}'}))">`
+    : `<span class="dish__img dish__img--none" aria-hidden="true">${esc(r.emoji || '')}</span>`;
+}
 const showImgKey = (id) => (id === 'fantasmic' ? 'fantasmic' : id === 'fireworks' ? 'fireworks' : 'cavalcade');
 const showImg = (s) => imgFor(showImgKey(s.id), { name: s.en, color: '#5b3f78' });
 
@@ -988,15 +1004,55 @@ function applySuggest() {
   renderAll();
   toast(sg.gain >= 1 ? `−${sg.gain}分` : '並べ替えました', 'ok', { label: '元に戻す', fn: () => restoreEdit(sn) });
 }
+// Both layouts of a suggestion (now vs proposed), for the card and the preview sheet.
+function suggestLayouts(sg) {
+  const c = ctx({ order: null, orderReason: null });
+  const lay = (seq) => planFromOrder(c, seq).items.filter((i) => SEQ_TYPES.includes(i.type) && !i.over);
+  const cur = lay(sg.from), nxt = lay(sg.seq);
+  const sum = (items, f) => items.reduce((t, i) => t + (f(i) || 0), 0);
+  return {
+    cur, nxt,
+    walk: [sum(cur, (i) => i.walk), sum(nxt, (i) => i.walk)],
+    wait: [sum(cur, (i) => i.type === 'ride' && i.wait), sum(nxt, (i) => i.type === 'ride' && i.wait)],
+    startOf: Object.fromEntries(cur.map((i) => [i.id, i.type === 'ride' ? i.start : i.anchor.start])),
+  };
+}
 function suggestCard() {
   const sg = R.suggest; if (!sg) return '';
-  const cur = sg.from.filter((x) => !S.done[x]), nxt = sg.seq.filter((x) => !S.done[x]);
-  const first = nxt.find((id, i) => cur[i] !== id);
+  const L = suggestLayouts(sg);
+  const curIds = L.cur.map((i) => i.id);
+  // the item that jumps furthest forward is what the suggestion is "about"
+  const first = L.nxt.map((i, k) => ({ i, d: curIds.indexOf(i.id) - k + (i.type === 'ride' ? 0.5 : 0) })).filter((x) => x.d > 0.5).sort((x, y) => y.d - x.d)[0]?.i;
+  const t0 = first && L.startOf[first.id], t1 = first && (first.type === 'ride' ? first.start : first.anchor.start);
   const gain = sg.gain >= 1 ? `<b class="num">−${sg.gain}</b><small>分</small>` : ic('check');
-  return `<div class="card sugg" role="status"><span class="sugg__gain">${ic('refresh')}${gain}</span>
-    <span class="sugg__seq"><span class="mv mv--up">↑</span><span class="sugg__chip">${esc(itemLabel(first))}</span></span>
-    <button class="btn btn--sm btn--primary" data-act="suggest-apply" aria-label="${sg.gain >= 1 ? sg.gain + '分短い' : '間に合う'}順番にする">反映</button>
+  return `<div class="card sugg" role="status"><button class="sugg__open" data-act="suggest-preview" aria-label="変更後のプランを見る">
+    <span class="sugg__gain">${ic('refresh')}${gain}</span>
+    <span class="sugg__seq">${first ? `<span class="mv mv--up">↑</span><span class="sugg__chip">${esc(itemLabel(first.id))}</span>${t0 != null ? `<span class="sugg__t num"><s>${clock(t0)}</s>${ic('chev')}${clock(t1)}</span>` : ''}` : ''}</span>
+    <span class="sugg__go">${ic('chev')}</span></button>
     <button class="alert__x" data-act="suggest-off" aria-label="今の順番のまま">${ic('x')}</button></div>`;
+}
+// Preview: the proposed timeline, with what moves and how the times change.
+function openSuggestPreview() {
+  const sg = R.suggest; if (!sg) return;
+  const L = suggestLayouts(sg);
+  const curIds = L.cur.map((i) => i.id);
+  const row = (it, k) => {
+    const j = curIds.indexOf(it.id);
+    const mvk = j < 0 ? 'new' : j > k ? 'up' : k - j >= 2 ? 'down' : '';
+    const t = it.type === 'ride' ? it.start : it.anchor.start;
+    const t0 = L.startOf[it.id];
+    const changed = t0 != null && Math.abs(t0 - t) >= 5;
+    return `<li class="pv__row ${mvk ? 'is-moved' : ''} pv__row--${it.type}"><span class="pv__t num">${changed ? `<s>${clock(t0)}</s>` : ''}<b>${clock(t)}</b></span>
+      <span class="pv__n">${mvk === 'up' ? '<span class="mv mv--up">↑</span>' : mvk === 'down' ? '<span class="mv mv--down">↓</span>' : ''}${esc(itemLabel(it.id))}</span>
+      ${it.type === 'ride' ? `<span class="pv__m">${ic('walk')}${it.walk} ${ic('clock')}${it.wait}</span>` : '<span class="pv__m"></span>'}</li>`;
+  };
+  openSheet(`<div class="sheet__content">
+    <div class="pv__head"><span class="sugg__gain">${ic('refresh')}${sg.gain >= 1 ? `<b class="num">−${sg.gain}</b><small>分</small>` : ic('check')}</span>
+      <span class="pv__stat">${ic('walk')}<s class="num">${L.walk[0]}</s>${ic('chev')}<b class="num">${L.walk[1]}</b>分</span>
+      <span class="pv__stat">${ic('clock')}<s class="num">${L.wait[0]}</s>${ic('chev')}<b class="num">${L.wait[1]}</b>分</span></div>
+    <ol class="pv">${L.nxt.map(row).join('')}</ol>
+    <div class="btnrow"><button class="btn" data-act="suggest-off" data-close>このまま</button><button class="btn btn--primary" data-act="suggest-apply" data-close>反映</button></div>
+  </div>`);
 }
 const planSeq = () => S.planSnap?.seq || (S.planSnap?.items ? S.planSnap.items.filter((i) => SEQ_TYPES.includes(i.type)).map((i) => i.id) : []);
 // Recalculate times only — keeps the order exactly (乗った, edits, meal/show settings).
@@ -1431,10 +1487,10 @@ function openPlanBuilder(focus) {
           const [t0, t1] = MEAL_RANGE[m.id];
           const times = []; for (let t = t0; t <= t1; t += 15) times.push(t);
           if (!times.includes(at)) times.push(at), times.sort((x, y) => x - y);
-          const opts = RESTAURANTS.filter((r) => (m.id === 'snack' ? r.kind !== 'meal' || r.id === rest : r.kind === 'meal' || r.kind === 'cafe'));
+          const groups = shopGroups(m.id === 'snack' ? 'sweets' : 'meal');
           return `<div class="mealrow"><div class="mealrow__h"><b>${MEAL_JA[m.id]}</b><span class="toggle"><input type="checkbox" data-b-meal-on="${m.id}" ${on ? 'checked' : ''} aria-label="${MEAL_JA[m.id]}"><i></i></span></div>
             ${on ? `<div class="mealrow__ctl">
-              <select data-b-meal-rest="${m.id}" aria-label="${MEAL_JA[m.id]}のお店">${opts.map((r) => `<option value="${r.id}" ${r.id === rest ? 'selected' : ''}>${esc(r.ja)}</option>`).join('')}</select>
+              <select data-b-meal-rest="${m.id}" aria-label="${MEAL_JA[m.id]}のお店">${groups.map((g) => `<optgroup label="${g.label}">${g.list.map(({ r }) => `<option value="${r.id}" ${r.id === rest ? 'selected' : ''}>${esc(r.ja)}</option>`).join('')}</optgroup>`).join('')}</select>
               <select data-b-meal-at="${m.id}" aria-label="${MEAL_JA[m.id]}の時間" class="num">${times.map((t) => `<option value="${t}" ${t === at ? 'selected' : ''}>${clock(t)}</option>`).join('')}</select>
               <select data-b-meal-dur="${m.id}" aria-label="${MEAL_JA[m.id]}にかける時間" class="num">${durs.map((t) => `<option value="${t}" ${t === dur ? 'selected' : ''}>${t}分</option>`).join('')}</select>
             </div>` : ''}</div>`;
@@ -1690,14 +1746,14 @@ function openFood(id) {
       <div><div class="kicker">${esc(landById[r.land]?.en)} · ${esc(r.style)}</div><h2 class="sheet__title" id="sheetTitle">${jw(r.ja)}</h2><div class="next__en">${esc(r.en)}</div></div>
       <div class="tags"><span class="tag">${ic('walk')}徒歩${walk}分</span>${r.mobile === 'yes' ? '<span class="tag tag--live">モバイルオーダー可</span>' : r.mobile === 'no' ? '<span class="tag">テーブル席</span>' : '<span class="tag">モバイルオーダー要確認</span>'}<span class="tag">${esc(r.hours)}</span></div>
       <p class="para">${esc(r.desc)}</p>
-      <ul class="menu">${r.menu.map((m) => `<li><span>${esc(m.name)}<br><small class="muted">${esc(m.en)}</small></span><span>${esc(m.price)}</span></li>`).join('')}</ul>
+      <ul class="menu menu--dish">${r.menu.map((m, i) => { const p = R.photos?.[`menu_${r.id}_${i}`]; return `<li>${dishImg(r, i)}<span class="dish__b"><b>${esc(m.name)}</b><small class="muted">${esc(m.en)}</small>${p?.src ? `<a class="dish__cr" href="${esc(p.page)}" target="_blank" rel="noopener">${esc([p.author, p.license].filter(Boolean).join(' · ') || 'Wikimedia Commons')}</a>` : ''}</span><span class="dish__p">${esc(m.price)}</span></li>`; }).join('')}</ul>
       ${r.halloween.length ? `<div class="box"><b>ハロウィン限定（報道ベース）</b>${r.halloween.map((h) => `${esc(h.name)}<span class="muted">（${esc(h.note)}）</span>`).join('<br>')}</div>` : ''}
       <div class="btnrow">
         <a class="btn" ${routeAttr(pos)}>${ic('route')}ルート</a>
         <button class="btn" data-food-map="${r.id}">${ic('pin')}地図で見る</button>
       </div>
       <div class="btnrow">
-        <a class="btn btn--navy" href="${esc(r.menuUrl)}" target="_blank" rel="noopener">公式メニュー</a>
+        <a class="btn btn--navy" href="${esc(r.menuUrl)}" target="_blank" rel="noopener">${ic('food')}公式メニュー（写真・価格）</a>
       </div>
     </div>`);
 }
@@ -1734,8 +1790,8 @@ function openAnchorEdit(id) {
   if (id.startsWith('show:')) return openShow(id.slice(5));
   const mealId = id.slice(5);
   const { base, ov, at, rest, dur } = mealCfg(mealId);
-  const opts = RESTAURANTS.filter((r) => (mealId === 'snack' ? true : r.kind === 'meal' || r.kind === 'cafe'));
   const c = ctx();
+  const groups = shopGroups(mealId === 'snack' ? 'sweets' : 'meal', c.pos);
   openSheet(`<div class="sheet__content">
     <div><div class="kicker">Meal</div><h2 class="sheet__title" id="sheetTitle">${esc(base.ja)}</h2></div>
     <div class="stepper">
@@ -1745,8 +1801,9 @@ function openAnchorEdit(id) {
     </div>
     <div class="field__h" style="margin:0"><b>食事にかける時間</b><span class="num">${dur}分</span></div>
     <div class="times" style="margin-top:0">${[20, 30, 45, 60, 75, 90, 120].map((t) => `<button class="time ${t === dur ? 'is-active' : ''}" data-meal-dur="${mealId}" data-v="${t}">${t}分</button>`).join('')}</div>
-    <div class="restgrid">${opts.map((r) => `<button class="rest ${r.id === rest ? 'is-active' : ''}" data-meal-rest="${mealId}" data-rest="${r.id}">
-      <span class="rest__n">${jw(r.ja)}</span><span class="rest__s">徒歩${walkMin(c.pos, coordsOf(r.id))}分${r.mobile === 'yes' ? ' · MO' : ''}</span></button>`).join('')}</div>
+    <button class="btn btn--sm restcur" data-open-food="${rest}">${restaurantById[rest] ? dishImg(restaurantById[rest], 0) : ''}<span>${esc(restaurantById[rest]?.ja || '')}</span>${ic('chev')}</button>
+    ${groups.map((g) => `<div class="restgrp"><div class="restgrp__h">${g.label}</div><div class="restgrid">${g.list.map(({ r, walk }) => `<button class="rest ${r.id === rest ? 'is-active' : ''}" data-meal-rest="${mealId}" data-rest="${r.id}">
+      <span class="rest__n">${jw(r.ja)}</span><span class="rest__s">${ic('walk')}${walk}分${r.mobile === 'yes' ? ' · MO' : ''}</span></button>`).join('')}</div></div>`).join('')}
     <div class="btnrow"><button class="btn" data-meal-off="${mealId}">${ov.off ? '予定に戻す' : '今日は省略'}</button><button class="btn" data-meal-reset="${mealId}">初期設定</button></div>
     <button class="btn btn--navy" data-close>完了</button>
   </div>`, { keepScroll: true });
@@ -2183,6 +2240,7 @@ document.addEventListener('click', async (e) => {
     case 'gps-stop': return stopGPS();
     case 'pick-land': return openLandPicker();
     case 'suggest-apply': return applySuggest();
+    case 'suggest-preview': return openSuggestPreview();
     case 'suggest-off': S.suggestOff = R.suggest?.sig; R.suggest = null; save(); return renderAll();
     case 'sim-set': { const m = parseHHMM($('#simAt').value); S.sim = { base: m, setAt: Date.now() }; buildPlan('テスト時刻'); closeSheet(); renderAll(); return toast(`${hhmm(m)} として表示中`, 'ok'); }
     case 'sim-off': S.sim = null; buildPlan('テスト時刻'); closeSheet(); renderAll(); return toast('現在時刻に戻しました');

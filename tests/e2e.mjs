@@ -491,8 +491,14 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.equal(await page.locator('#view-plan .sugg').count(), 1, 'suggestion card');
     assert.match(await page.textContent('#view-plan .sugg__gain'), /−\d+/);
     assert.equal(await page.evaluate(() => window.__dlnavi.S.planSnap.seq.join()), before, 'not applied on its own');
+    assert.match(await page.textContent('#view-plan .sugg__t'), /\d+:\d{2}\s*\d+:\d{2}/, 'old → new time of the ride that moves');
     await page.screenshot({ path: `${SHOTS}/03-plan-suggest.png` });
-    await page.click('#view-plan [data-act="suggest-apply"]'); await page.waitForTimeout(200);
+    await page.click('#view-plan .sugg__open'); await page.waitForTimeout(250);
+    assert.ok(await page.locator('#sheet .pv__row').count() >= 3, 'preview timeline');
+    assert.ok(await page.locator('#sheet .pv__row.is-moved').count() >= 1, 'moved rows highlighted');
+    assert.equal(await page.evaluate(() => window.__dlnavi.S.planSnap.seq.join()), before, 'preview changes nothing');
+    await page.screenshot({ path: `${SHOTS}/03-plan-suggest-preview.png` });
+    await page.click('#sheet [data-act="suggest-apply"]'); await page.waitForTimeout(250);
     assert.notEqual(await page.evaluate(() => window.__dlnavi.S.planSnap.seq.join()), before);
     assert.ok(await page.locator('#view-plan .mv').count() >= 1, 'moved rows marked');
     assert.equal(await page.locator('#view-plan .sugg').count(), 0);
@@ -506,6 +512,23 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.click('.tl__item--now [data-act="pick-land"]'); await page.waitForTimeout(200);
     await page.click('#sheet [data-land="frontier"]'); await page.waitForTimeout(250);
     assert.match(await page.textContent('.tl__item--now [data-act="pick-land"]'), /フロンティア/);
+  });
+  await step('Meals: every shop can be chosen for dinner (grouped), incl. Golden Horseshoe', async () => {
+    await tab(page, 'plan');
+    await page.click('.tl--plan [data-anchor-edit="meal:dinner"]'); await page.waitForTimeout(250);
+    assert.equal(await page.locator('#sheet [data-rest="goldenhorseshoe"]').count(), 1, 'Golden Horseshoe');
+    assert.equal(await page.locator('#sheet [data-rest="bluebayou"]').count(), 1, 'Blue Bayou');
+    assert.ok(await page.locator('#sheet .restgrp').count() >= 3, 'grouped by kind');
+    assert.ok(await page.locator('#sheet [data-rest]').count() >= 25, 'every shop');
+    await page.screenshot({ path: `${SHOTS}/14b-dinner-shops.png`, fullPage: true });
+    await page.click('#sheet [data-rest="goldenhorseshoe"]'); await page.waitForTimeout(250);
+    assert.equal(await page.locator('#sheet [data-rest="goldenhorseshoe"].is-active').count(), 1);
+    await page.click('#sheet .restcur'); await page.waitForTimeout(250);
+    assert.match(await page.textContent('#sheetTitle'), /ゴールデン/);
+    assert.ok(await page.locator('#sheet .menu--dish .dish__img').count() >= 2, 'each dish has a picture (or tile)');
+    assert.match(await page.textContent('#sheet'), /公式メニュー/);
+    await page.screenshot({ path: `${SHOTS}/06b-food-menu.png`, fullPage: true });
+    await page.click('.sheet__backdrop', { position: { x: 10, y: 10 } }); await page.waitForTimeout(200);
   });
   await step('Pause: a planned ride that goes down leaves the plan (rest closes up) and returns to its place on reopening', async () => {
     await tab(page, 'plan');

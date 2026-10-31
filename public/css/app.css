@@ -598,3 +598,41 @@ body.is-dragging { -webkit-user-select: none; user-select: none; cursor: grabbin
 @media (prefers-reduced-motion: reduce) { .mv, .tl--coach .tl__grip, .tl--coach .tl__lock, .tl__upd.is-busy .ico { animation: none; } }
 .tl__time .mv { display: flex; width: 22px; margin: 4px 0 0 auto; }
 .sugg__chip { max-width: 100%; }
+
+/* ---- suggestion card opens a preview ---- */
+.sugg { padding: 0 6px 0 0; }
+.sugg__open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 8px 4px 8px 10px; background: none; border: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.sugg__t { flex: none; display: inline-flex; align-items: center; gap: 1px; font-size: 13px; font-weight: 700; color: var(--good); }
+.sugg__t s { color: var(--muted); font-weight: 600; }
+.sugg__t .ico, .sugg__go .ico { width: 12px; height: 12px; }
+.sugg__go { flex: none; margin-left: auto; color: var(--good); }
+.pv__head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.pv__head .sugg__gain b { font-size: 26px; }
+.pv__stat { display: inline-flex; align-items: center; gap: 2px; font-size: 13px; font-weight: 700; color: var(--mid); }
+.pv__stat s { color: var(--muted); }
+.pv__stat .ico { width: 14px; height: 14px; }
+.pv { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 52vh; overflow: auto; }
+.pv__row { display: grid; grid-template-columns: 64px 1fr auto; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; background: var(--card); border: 1px solid var(--line); font-size: 13.5px; }
+.pv__row--meal, .pv__row--show { background: var(--mustard-l); }
+.pv__row.is-moved { border-color: var(--good); box-shadow: inset 3px 0 0 var(--good); }
+.pv__t { display: flex; flex-direction: column; line-height: 1.1; text-align: right; }
+.pv__t s { font-size: 11px; color: var(--muted); }
+.pv__t b { font-size: 15px; color: var(--red); }
+.pv__n { font-weight: 800; display: flex; align-items: center; gap: 4px; min-width: 0; }
+.pv__m { display: inline-flex; align-items: center; gap: 2px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.pv__m .ico { width: 12px; height: 12px; }
+
+/* ---- menu with dish photos ---- */
+.menu--dish li { align-items: center; justify-content: flex-start; }
+.dish__img { flex: none; width: 72px; height: 72px; border-radius: 8px; object-fit: cover; background: var(--mustard-l); }
+.dish__img--none { display: inline-flex; align-items: center; justify-content: center; font-size: 30px; }
+.dish__b { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; line-height: 1.35; }
+.dish__cr { font-size: 10.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dish__p { flex: none; font-family: var(--num); font-size: 13px; max-width: 34%; text-align: right; }
+/* ---- meal: every shop, grouped ---- */
+.restgrp { display: flex; flex-direction: column; gap: 4px; }
+.restgrp__h { font-size: 12px; font-weight: 800; color: var(--muted); }
+.rest__s .ico { width: 11px; height: 11px; vertical-align: -1px; }
+.restcur { justify-content: flex-start; gap: 8px; text-align: left; }
+.restcur .dish__img { width: 32px; height: 32px; font-size: 18px; border-radius: 6px; }
+.restcur span:not(.dish__img) { flex: 1; min-width: 0; font-weight: 800; }
