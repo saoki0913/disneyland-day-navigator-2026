@@ -73,10 +73,23 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.match(await page.textContent('#sheet'), /ThemeParks\.wiki/);
     await page.click('.sheet__close'); await page.waitForTimeout(100);
   });
-  await step('12. DOWN must-ride is flagged with reason (and not recommended now)', async () => {
-    const notes = await page.textContent('#view-home');
-    assert.match(notes, /レジスタンスの台頭：一時休止中/);
+  await step('12. DOWN must-ride is flagged once as a snackbar (not a lingering card) and not recommended now', async () => {
+    const seen = await page.evaluate(() => [...window.__dlnavi.R.noteSeen].join(','));
+    assert.match(seen, /rise:/);
+    assert.equal(await page.locator('#view-home .note').count(), 0, 'no lingering notice cards on home');
     assert.doesNotMatch(await page.textContent('.next__title'), /レジスタンス/);
+  });
+  await step('Home: next action first, then a slim progress band that expands on tap', async () => {
+    const order = await page.$$eval('#view-home > *', (els) => els.map((e) => e.className));
+    assert.match(order[0], /next/, 'next action on top');
+    assert.match(order[1], /pband/, 'progress right below');
+    assert.ok((await page.locator('.pband').boundingBox()).height <= 56, 'slim band');
+    assert.equal(await page.locator('.pband__body').count(), 0);
+    await page.click('.pband__h'); await page.waitForTimeout(150);
+    assert.ok(await page.locator('.pband__body .mini__i').count() >= 3, 'upcoming list');
+    await page.screenshot({ path: `${SHOTS}/01b-home-progress-open.png`, fullPage: true });
+    await page.click('.pband__h'); await page.waitForTimeout(100);
+    assert.equal(await page.locator('#view-home .locrow').count(), 0, 'location row moved to settings');
   });
   await step('3/4. Plan builder: every pace keeps both Star Wars rides', async () => {
     await tab(page, 'plan');
@@ -322,6 +335,62 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.click('[data-b-show-pick="fantasmic"][data-time="22:30"]');
     await page.click('[data-act="plan-apply"]'); await page.waitForTimeout(200);
   });
+  await step('Plan editing: remove, add back (best slot), drag dinner earlier', async () => {
+    await tab(page, 'plan');
+    const rides = () => page.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride));
+    await page.click('[data-act="plan-edit-order"]'); await page.waitForTimeout(150);
+    const before = await rides();
+    const victim = before.find((x) => x !== 'rise' && x !== 'falcon');
+    await page.click(`[data-rm="${victim}"]`); await page.waitForTimeout(200);
+    assert.ok(!(await rides()).includes(victim), 'removed');
+    assert.match(await page.textContent('#toast'), /外しました/);
+    await page.click('[data-act="plan-edit-done"]'); await page.waitForTimeout(100);
+    await page.click('[data-act="plan-add"]'); await page.waitForTimeout(200);
+    await page.screenshot({ path: `${SHOTS}/03-plan-add.png` });
+    await page.click(`#sheet [data-add="${victim}"]`); await page.waitForTimeout(300);
+    assert.ok((await rides()).includes(victim), 'added back');
+    assert.match(await page.textContent('#toast'), /追加しました/);
+    // drag dinner up above the ride before it → dinner gets earlier
+    const dinnerT = async () => page.textContent('.tl--plan > li[data-drag="meal:dinner"] .tl__time');
+    const toMin = (t) => { const [h, m] = t.trim().split(':').map(Number); return h * 60 + m; };
+    const t0 = toMin(await dinnerT());
+    const drags = await page.$$eval('.tl--plan > li[data-drag]', (els) => els.map((e) => e.dataset.drag));
+    const di = drags.indexOf('meal:dinner');
+    const above = drags[di - 2] || drags[0];
+    await page.waitForTimeout(5600); // let the toast (with its button) go away
+    await page.evaluate(() => { const r = document.querySelector('.tl--plan > li[data-drag="meal:dinner"]').getBoundingClientRect(); scrollBy(0, r.top - 380); });
+    const g = await page.locator('[data-grip="meal:dinner"]').boundingBox();
+    const tgt = await page.locator(`.tl--plan > li[data-drag="${above}"]`).boundingBox();
+    await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(g.x + g.width / 2, tgt.y + 5, { steps: 12 });
+    await page.mouse.up(); await page.waitForTimeout(300);
+    const t1 = toMin(await dinnerT());
+    assert.ok(t1 < t0, `dinner earlier ${t0} → ${t1} ${drags.join()} toast=${await page.textContent("#toast")}`);
+    await page.screenshot({ path: `${SHOTS}/03-plan-edit.png`, fullPage: true });
+    await page.click('#toastAct'); await page.waitForTimeout(250); // undo
+    assert.equal(toMin(await dinnerT()), t0, 'undo restores dinner time');
+  });
+  await step('Plan editing: "次に行く" from a ride sheet; meal duration is adjustable', async () => {
+    await tab(page, 'explore');
+    await page.click('[data-xtab="rides"]'); await page.waitForTimeout(150);
+    await page.click('#view-explore [data-open="haunted"]'); await page.waitForTimeout(200);
+    await page.click('#sheet [data-add="haunted"][data-add-how="next"]'); await page.waitForTimeout(300);
+    await tab(page, 'home');
+    assert.match(await page.textContent('.next__title'), /ホーンテッド/);
+    await tab(page, 'plan');
+    await page.locator('.tl__item--meal [data-anchor-edit]').first().click(); await page.waitForTimeout(200);
+    await page.click('[data-meal-dur][data-v="90"]'); await page.waitForTimeout(150);
+    assert.equal(await page.locator('[data-meal-dur][data-v="90"].is-active').count(), 1);
+    await page.click('.sheet .btn--navy[data-close]'); await page.waitForTimeout(150);
+    const meal = await page.locator('.tl__item--meal .tl__meta').first().textContent();
+    const m = meal.match(/(\d+):(\d+)–(\d+):(\d+)/);
+    assert.ok(m, meal);
+    assert.equal((+m[3] * 60 + +m[4]) - (+m[1] * 60 + +m[2]), 90, 'meal lasts 90 min');
+    await page.locator('.tl__item--meal [data-anchor-edit]').first().click(); await page.waitForTimeout(200);
+    await page.click('[data-meal-reset]'); await page.waitForTimeout(150);
+    await page.locator('.replan [data-act="replan"]').click(); await page.waitForTimeout(600); // back to おすすめ順
+  });
   await step('Meal can be changed visually (±15 min stepper + restaurant cards)', async () => {
     await tab(page, 'plan');
     await page.locator('.tl__item--meal [data-anchor-edit]').first().click(); await page.waitForTimeout(200);
@@ -554,9 +623,12 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
       };
       navigator.geolocation.watchPosition = () => { throw new Error('continuous tracking must not be used'); };
     });
-    await page.click('[data-act="pick-land"]'); await page.waitForTimeout(150);
+    await page.click('#settingsBtn'); await page.waitForTimeout(150);
+    await page.click('#sheet [data-act="pick-land"]'); await page.waitForTimeout(150);
     await page.click('[data-act="gps-start"]'); await page.waitForTimeout(800);
-    assert.match(await page.textContent('.locrow'), /GPS/);
+    await page.click('#settingsBtn'); await page.waitForTimeout(150);
+    assert.match(await page.textContent('#sheet .locrow'), /GPS/);
+    await page.click('.sheet__close'); await page.waitForTimeout(100);
     assert.match(await page.textContent('#toast'), /現在地を取得/);
     await tab(page, 'map'); await page.waitForTimeout(1200);
     assert.equal(await page.locator('.mk--me').count(), 1);
@@ -611,12 +683,15 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
       navigator.geolocation.getCurrentPosition = (ok, err) => { setTimeout(() => err({ code: 1, message: 'denied' }), 50); };
       navigator.geolocation.watchPosition = () => { throw new Error('continuous tracking must not be used'); };
     });
-    await page.click('[data-act="pick-land"]'); await page.waitForTimeout(150);
+    await page.click('#settingsBtn'); await page.waitForTimeout(150);
+    await page.click('#sheet [data-act="pick-land"]'); await page.waitForTimeout(150);
     await page.click('[data-act="gps-start"]'); await page.waitForTimeout(400);
-    assert.match(await page.textContent('.locrow'), /許可されていません/);
-    await page.click('[data-act="pick-land"]'); await page.waitForTimeout(200);
+    await page.click('#settingsBtn'); await page.waitForTimeout(150);
+    assert.match(await page.textContent('#sheet .locrow'), /許可されていません/);
+    await page.click('#sheet [data-act="pick-land"]'); await page.waitForTimeout(200);
     await page.click('[data-land="tomorrow"]'); await page.waitForTimeout(200);
-    assert.match(await page.textContent('.locrow'), /トゥモローランド/);
+    await page.click('#settingsBtn'); await page.waitForTimeout(150);
+    assert.match(await page.textContent('#sheet .locrow'), /トゥモローランド/);
     await page.screenshot({ path: `${SHOTS}/10-gps-denied-land.png` });
   });
   await step('No uncaught JS errors (GPS denied)', async () => assert.deepEqual(errors, []));

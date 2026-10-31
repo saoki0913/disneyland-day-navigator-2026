@@ -229,3 +229,10 @@ test('DOWN ride: kept out of the timeline as 再開待ち, not reported as missi
   assert.deepEqual(sim2.waiting, []);
 });
 
+
+test('buildAnchors: meal duration override (食事にかける時間)', () => {
+  const a = buildAnchors('balance', { mealOverrides: { dinner: { dur: 120, at: 17 * 60 } } });
+  const d = a.find((x) => x.id === 'meal:dinner');
+  assert.equal(d.start, 17 * 60);
+  assert.equal(d.end - d.start, 120);
+});
