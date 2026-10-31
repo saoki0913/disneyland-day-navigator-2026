@@ -217,12 +217,42 @@ async function fetchLive({ manual = false } = {}) {
     R.live = j; R.liveReceivedAt = Date.now(); R.liveStatus = j.stale ? 'stale' : 'ok'; R.liveError = j.stale ? (j.errors || []).join(' / ') : null;
     localStorage.setItem(KEY + ':live', JSON.stringify({ at: R.liveReceivedAt, data: j }));
     if (manual) toast(j.stale ? '最新取得に失敗：前回の値を表示中' : `待ち時間を更新しました（${j.sourceLabel}）`, j.stale ? 'error' : 'ok');
+    if (!j.stale) syncPaused();
+    R.livePrimed = true;
   } catch (e) {
     R.liveStatus = 'error';
     R.liveError = e.name === 'AbortError' ? 'タイムアウト' : e.message;
     if (manual) toast('待ち時間を取得できませんでした。推定値で案内します', 'error');
   }
   renderAll();
+}
+// Pauses only: a ride in the plan that goes down leaves the timeline (the rest closes up), and when it
+// reopens it returns to its original place. Nothing else in the plan is reordered.
+const BOOT_AT = Date.now();
+function syncPaused() {
+  if (!S.planSnap?.items) return;
+  if (R.dragging) { R.pausedPending = true; return; }
+  const c = ctx();
+  if (c.now < c.openMin || c.now >= c.closeMin) return;
+  const seq = planSeq();
+  const down = seq.filter((id) => attractionById[id] && !S.done[id] && !availability(attractionById[id], c).ok);
+  const was = (S.planSnap.waiting || []).filter((id) => !S.done[id]);
+  const paused = down.filter((id) => !was.includes(id));
+  const back = was.filter((id) => !down.includes(id) && seq.includes(id));
+  if (!paused.length && !back.length) return;
+  // first live data after opening the app: the plan was just made without it — adjust quietly
+  const quiet = !R.livePrimed && S.planSnap.at >= BOOT_AT;
+  R.livePrimed = true;
+  layoutPlan(seq, back.length ? '再開' : '休止');
+  if (quiet) return;
+  const names = (ids) => ids.map((id) => attractionById[id].short).join('・');
+  const parts = [];
+  if (paused.length) parts.push(`${names(paused)} が一時休止 → プランから外して前後を詰めました`);
+  if (back.length) parts.push(`${names(back)} が再開 → 元の位置に戻しました`);
+  R.replanned = { at: Date.now(), text: `${clock(nowMin())} ${parts.join(' / ')}` };
+  R.flash = { at: Date.now(), ids: new Set(back) };
+  if (paused.length) paused.forEach((id) => R.noteSeen.add(`${id}:tmp`)); // already announced here
+  toast(parts.join(' / '), back.length ? 'ok' : 'warn');
 }
 function recordHistory(j) {
   const m = Math.round(nowMin());
@@ -987,7 +1017,7 @@ function renderPlan() {
   if (sim.missingMust.length) html += `<div class="note note--bad">${ic('alert')}<div><div class="note__t">${sim.missingMust.map((id) => esc(attractionById[id].short)).join('・')} が入りきらない</div><div class="note__s">休止中なら再開後に最優先で案内</div></div></div>`;
   if (conflicts.length) html += `<div class="note note--bad">${ic('alert')}<div><div class="note__t">ごはんとショーの時間が重なっています</div></div></div>`;
   if (S.planTime) html += `<div class="replan__custom">${ic('clock')}<span>開始時刻を指定中</span><button class="linkbtn" data-act="plan-time-auto">現在時刻に戻す</button></div>`;
-  if (reopened.length) html += `<div class="alert" role="alert"><div class="alert__body"><div class="alert__t">${reopened.map((id) => esc(attractionById[id].short)).join('・')} 再開</div><div class="alert__s">更新するとプランに入ります</div></div><button class="btn btn--sm btn--primary" data-act="replan">更新</button></div>`;
+  if (reopened.length) html += `<div class="alert" role="alert"><div class="alert__body"><div class="alert__t">${reopened.map((id) => esc(attractionById[id].short)).join('・')} 再開</div><div class="alert__s">元の位置に戻します</div></div><button class="btn btn--sm btn--primary" data-act="sync-paused">戻す</button></div>`;
   const edit = R.planEdit;
   const rm = (id, name) => `<button class="tl__rm" data-rm="${id}" aria-label="${esc(name)} をプランから外す">${ic('x')}</button>`;
   html += `<ol class="tl tl--plan ${edit ? 'tl--edit' : ''}">
@@ -1023,11 +1053,11 @@ function renderPlan() {
   // Rides that are temporarily down: out of the timeline until they reopen (then they come back automatically).
   if (sim.waiting?.length) {
     const must = mustMap();
-    html += `<div class="sec"><h2><span class="sec__en">PAUSED</span>再開待ち</h2><span class="sec__sub">再開したら更新でプランに戻ります</span></div>
+    html += `<div class="sec"><h2><span class="sec__en">PAUSED</span>再開待ち</h2><span class="sec__sub">再開したら自動で元の位置に戻ります</span></div>
       <div class="card rows waitlist">${sim.waiting.map((id) => {
         const a = attractionById[id];
         return `<button class="row" type="button" data-open="${id}"><span class="row__body"><span class="row__name">${jw(a.short)}${must[id] ? '<span class="tag tag--must">絶対</span>' : ''}</span>
-          <span class="row__meta">${liveMap()[id]?.status === 'OPERATING' ? '<span class="tag tag--live">再開しました</span><span>更新でプランに入ります</span>' : `<span class="tag tag--bad">一時休止</span>${must[id] ? '<span>再開したら最優先で案内</span>' : '<span>再開を待っています</span>'}`}</span></span><span class="row__chev">${ic('chev')}</span></button>`;
+          <span class="row__meta">${liveMap()[id]?.status === 'OPERATING' ? '<span class="tag tag--live">再開しました</span><span>元の位置に戻します</span>' : `<span class="tag tag--bad">一時休止</span>${must[id] ? '<span>再開したら最優先で案内</span>' : '<span>再開を待っています</span>'}`}</span></span><span class="row__chev">${ic('chev')}</span></button>`;
       }).join('')}</div>`;
   }
 
@@ -1159,6 +1189,7 @@ function dragEnd(e) {
   d.li.style.transform = '';
   document.body.classList.remove('is-dragging');
   R.dragging = false;
+  if (R.pausedPending) { R.pausedPending = false; setTimeout(() => { syncPaused(); renderAll(); }, 0); }
   const ids = d.rows.map((r) => r.dataset.drag);
   if (e?.type === 'pointerup' && d.to !== d.from) {
     const rest = ids.filter((id) => id !== d.id);
@@ -2065,6 +2096,7 @@ document.addEventListener('click', async (e) => {
     case 'plan-edit-shows': R.draft = null; return openPlanBuilder('shows');
     case 'plan-apply': return applyPlanDraft();
     case 'plan-add': return openAddSheet();
+    case 'sync-paused': syncPaused(); return renderAll();
     case 'plan-edit-order': R.planEdit = true; return renderPlan();
     case 'plan-edit-done': R.planEdit = false; return renderPlan();
     case 'prog-toggle': R.progOpen = !R.progOpen; return renderHome();
