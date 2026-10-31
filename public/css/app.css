@@ -434,3 +434,12 @@ details.more p { margin: 4px 0 0; font-size: 13.5px; }
   .stat__v { font-size: 24px; }
   .actionbar__main { font-size: 15px; }
 }
+
+/* Manual start time for resuming a Disneyland plan mid-visit. */
+.plan-start { padding: 14px; }
+.plan-start__label { display: block; font-weight: 700; margin: 6px 0 10px; }
+.plan-start__row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.plan-start__row input[type="time"] { flex: 1 1 120px; min-width: 0; min-height: 42px; padding: 8px 10px; font: inherit; color: inherit; background: #fff; border: 1px solid #bbb; border-radius: 10px; }
+.plan-start__row .btn { flex: 1 1 auto; }
+.plan-start__bottom { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-top: 10px; font-size: 12px; }
+.plan-start__hint { color: #6b6b6b; font-size: 12px; line-height: 1.5; margin-top: 7px; }
