@@ -179,6 +179,28 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.match(await page.textContent('.replan__res'), /作り直しました/);
     await page.screenshot({ path: `${SHOTS}/03-plan-replan.png`, fullPage: true });
   });
+  await step('Lock: a locked ride keeps its place when the plan is re-optimised (更新)', async () => {
+    await tab(page, 'plan');
+    const ids = await page.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride));
+    const target = ids[ids.length - 1];
+    const seqIdx = () => page.evaluate((t) => { const s = window.__dlnavi.S; return s.planSnap.seq.filter((x) => !s.done[x]).indexOf(t); }, target);
+    // move it to the top, lock it there, then 更新
+    await page.evaluate((t) => { const r = document.querySelector(`.tl--plan > li[data-ride="${t}"]`).getBoundingClientRect(); scrollBy(0, r.top - 400); }, target);
+    const g = await page.locator(`[data-grip="${target}"]`).boundingBox();
+    const top = await page.locator('.tl--plan > li[data-drag]').first().boundingBox();
+    await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2); await page.mouse.down();
+    for (let i = 1; i <= 10; i++) await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2 + ((top.y + 4) - (g.y + g.height / 2)) * (i / 10));
+    await page.mouse.up(); await page.waitForTimeout(300);
+    const idx = await seqIdx();
+    await page.click(`[data-lock="${target}"]`); await page.waitForTimeout(150);
+    assert.match(await page.textContent('#toast'), /固定しました/);
+    assert.equal(await page.locator(`[data-lock="${target}"].is-on`).count(), 1);
+    await page.click('.replan [data-act="replan"]'); await page.waitForTimeout(600);
+    assert.equal(await seqIdx(), idx, 'locked ride stays put after 更新');
+    await page.screenshot({ path: `${SHOTS}/03-plan-lock.png`, fullPage: true });
+    await page.click(`[data-lock="${target}"]`); await page.waitForTimeout(150);
+    await page.click('.replan [data-act="replan"]'); await page.waitForTimeout(600);
+  });
   await step('Plan stays put on its own; changes only on 更新', async () => {
     await tab(page, 'plan');
     const snapOf = () => page.$$eval('.tl--plan > li', (els) => els.map((e) => e.querySelector('.tl__time')?.textContent + (e.dataset.ride || '')).join('|'));
@@ -200,12 +222,14 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     const ids0 = await page.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride));
     await page.click(`.tl--plan [data-done="${first}"]`); await page.waitForTimeout(300);
     const now = await page.evaluate(() => window.__dlnavi.S.doneMin);
-    assert.match(await page.textContent('.tl__item--now'), /完了 → ここからプランを更新/);
+    assert.match(await page.textContent('.tl__item--now'), /完了 → 順番はそのまま、時刻を更新/);
+    const ids1 = await page.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride));
+    assert.deepEqual(ids1, ids0.filter((x) => x !== first), '乗った keeps the order of the rest');
     const t0 = await page.textContent('.tl__item--now .tl__time');
     const t1 = await page.textContent('.tl--plan > li[data-ride] .tl__time');
     const toMin = (x) => { const [h, m] = x.split(':').map(Number); return h * 60 + m; };
     assert.ok(Math.abs(toMin(t0) - Math.floor(Object.values(now)[0])) <= 1, 'plan starts at the check-in time');
-    assert.ok(toMin(t1) >= toMin(t0) && toMin(t1) - toMin(t0) <= 30, 'next ride starts right after (walk only)');
+    assert.ok(toMin(t1) >= toMin(t0), 'next ride is after the check-in time');
     assert.notEqual(await page.getAttribute('.tl--plan > li[data-ride]', 'data-ride'), first);
     assert.ok(ids0.length >= 2);
     await page.screenshot({ path: `${SHOTS}/03-plan-after-done.png` });
@@ -254,7 +278,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     const cur = await page.getAttribute('#actionbar [data-skip]', 'data-skip');
     await page.click('#actionbar [data-skip]');
     await page.waitForTimeout(250);
-    assert.match(await page.textContent('#toast'), /あとまわし/);
+    assert.match(await page.textContent('#toast'), /あとまわし|後ろ/);
     assert.notEqual(await page.getAttribute('#actionbar [data-skip]', 'data-skip') ?? 'anchor', cur);
     await page.screenshot({ path: `${SHOTS}/02-home-after-skip.png` });
   });

@@ -236,3 +236,59 @@ test('buildAnchors: meal duration override (食事にかける時間)', () => {
   assert.equal(d.start, 17 * 60);
   assert.equal(d.end - d.start, 120);
 });
+
+// ---------- fixed-sequence plan (乗った keeps the order) + locks ----------
+import { planFromOrder, syncSequence, applyLocks } from '../public/js/engine.js';
+const seqOf = (sim) => [...sim.items.filter((i) => ['ride', 'meal', 'show'].includes(i.type)).map((i) => i.id)];
+test('planFromOrder: a snapshot of the recommended plan reproduces its order', () => {
+  const c = base({ now: 480 });
+  const seq = seqOf(simulateDay(c));
+  const r = planFromOrder(c, seq);
+  assert.deepEqual(seqOf(r), seq);
+  assert.deepEqual(r.late, []);
+});
+test('planFromOrder: marking the first ride done keeps the rest of the order (times move)', () => {
+  const c = base({ now: 480 });
+  const seq = seqOf(simulateDay(c));
+  const first = seq.find((id) => !id.includes(':'));
+  const r = planFromOrder({ ...c, now: 540, done: { [first]: 1 } }, seq);
+  assert.deepEqual(seqOf(r), seq.filter((id) => id !== first));
+});
+test('planFromOrder: order is kept even when a show becomes late — flagged, not reordered', () => {
+  const c = base({ now: 1200 });
+  const order = ['rise', 'falcon', 'space', 'indy', 'show:fantasmic'];
+  const r = planFromOrder(c, order);
+  assert.deepEqual(seqOf(r), order);
+  assert.ok(r.late.includes('show:fantasmic') || r.items.some((i) => i.over));
+});
+test('planFromOrder: meals start on arrival but not before their time; duration respected', () => {
+  const c = { ...base({ now: 600 }), anchors: buildAnchors('balance', { mealOverrides: { lunch: { at: 12 * 60, dur: 90 } } }) };
+  const r = planFromOrder(c, ['meal:lunch']);
+  const m = r.items.find((i) => i.id === 'meal:lunch');
+  assert.equal(m.start, 12 * 60);
+  assert.equal(m.end - m.start, 90);
+});
+test('applyLocks: locked rides keep their place when the plan is re-optimised', () => {
+  const prev = ['a1', 'rise', 'meal:lunch', 'falcon', 'space'].map((x) => (x === 'a1' ? 'pirates' : x));
+  const fresh = ['falcon', 'space', 'meal:lunch', 'rise', 'pirates'];
+  const out = applyLocks(fresh, prev, { space: true });
+  assert.equal(out.indexOf('space'), prev.indexOf('space'));
+  assert.equal(out.length, fresh.length);
+});
+test('syncSequence: turned-off meal drops out, turned-on show is inserted by time', () => {
+  const anchors = buildAnchors('balance', { mealOverrides: { snack: { off: true } } });
+  const seq = ['rise', 'meal:lunch', 'meal:snack', 'falcon'];
+  const out = syncSequence(seq, anchors, { rise: 480, 'meal:lunch': 690, falcon: 800 });
+  assert.ok(!out.includes('meal:snack'));
+  for (const a of anchors) assert.ok(out.includes(a.id));
+});
+import { fitShows } from '../public/js/engine.js';
+test('fitShows: a re-optimised plan with a locked ride first moves a would-be-missed show earlier', () => {
+  const c = base({ now: 600 });
+  const seq = ['haunted', 'falcon', 'indy', 'space', 'thunder', 'show:cavalcade', 'meal:dinner'];
+  const before = planFromOrder(c, seq);
+  const out = fitShows(c, seq);
+  const after = planFromOrder(c, out);
+  assert.ok(after.late.length <= before.late.length);
+  assert.ok(!after.late.includes('show:cavalcade'));
+});

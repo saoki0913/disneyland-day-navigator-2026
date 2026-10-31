@@ -162,6 +162,9 @@ body.has-actionbar main { padding-bottom: calc(var(--tabh, 60px) + 90px); }
 .cdrow .ico { color: var(--red); flex: none; }
 
 /* plan: free editing */
+.tl__lock { width: 32px; height: 40px; flex: none; display: grid; place-items: center; border-radius: 8px; color: var(--line); font-size: 17px; }
+.tl__lock.is-on { color: #fff; background: var(--navy); }
+.tl__item--late .tl__card { border-color: var(--red); border-style: dashed; }
 .tl__rm { width: 40px; height: 40px; flex: none; display: grid; place-items: center; border-radius: 50%; border: var(--bw) solid var(--red); color: var(--red); background: var(--card); font-size: 18px; }
 .addbtn { border-style: dashed; margin-top: -4px; }
 .inplan { flex: 1; align-self: center; font-size: 13px; display: inline-flex; align-items: center; gap: 4px; }
