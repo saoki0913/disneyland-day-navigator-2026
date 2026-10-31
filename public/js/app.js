@@ -334,26 +334,44 @@ function renderStatus() {
   pill.className = 'pill';
   const age = liveAgeMin();
   if (R.liveStatus === 'loading') { pill.classList.add('is-loading'); txt.textContent = '更新中…'; }
-  else if (liveIsFresh()) { pill.classList.add('is-live'); txt.textContent = `LIVE ${age < 1 ? 'たった今' : Math.round(age) + '分前'}`; }
-  else if (R.live?.ok) { pill.classList.add('is-stale'); txt.textContent = `古いデータ ${Math.round(age)}分前`; }
-  else if (R.liveStatus === 'error') { pill.classList.add('is-error'); txt.textContent = '取得失敗・推定'; }
-  else { txt.textContent = '推定値'; }
+  else if (liveIsFresh()) { pill.classList.add('is-live'); txt.textContent = `LIVE ${age < 1 ? 'いま' : Math.round(age) + '分前'}`; }
+  else if (R.live?.ok) { pill.classList.add('is-stale'); txt.textContent = `${Math.round(age)}分前`; }
+  else if (R.liveStatus === 'error') { pill.classList.add('is-error'); txt.textContent = '取得失敗'; }
+  else { txt.textContent = '推定'; }
 
   const b = $('#banner');
   const phase = dayPhase();
   const msgs = [];
-  if (phase === 'sim') msgs.push(`🧪 時刻シミュレーション中（${clock(nowMin())}）。設定から解除できます。`);
-  if (phase === 'before') msgs.push('📅 まだ旅行当日ではありません。当日の朝として表示しています。');
-  if (phase === 'after') msgs.push('🎃 10/31の営業は終了しました。楽しい一日をありがとう！');
-  if (R.liveStatus === 'error' && !R.live?.ok) msgs.push('⚠️ 待ち時間を取得できませんでした。表示中の待ち時間は「推定」です。公式アプリの値を手入力することもできます。');
-  else if (R.live?.ok && !liveIsFresh()) msgs.push(`⚠️ 待ち時間データが古くなっています（${Math.round(age)}分前）。推定値に切り替えて案内中。右上から再取得できます。`);
+  if (phase === 'sim') msgs.push(`🧪 テスト時刻 ${clock(nowMin())}`);
+  if (phase === 'before') msgs.push('📅 当日の朝としてプレビュー中');
+  if (phase === 'after') msgs.push('🎃 10/31の営業は終了しました');
+  if (R.liveStatus === 'error' && !R.live?.ok) msgs.push('⚠️ 待ち時間を取得できず → 推定値で案内中');
+  else if (R.live?.ok && !liveIsFresh()) msgs.push(`⚠️ 待ち時間が古い（${Math.round(age)}分前）→ 推定値で案内中`);
   b.hidden = !msgs.length;
   b.className = 'banner' + (msgs.some((m) => m.startsWith('⚠️')) ? ' is-error' : '');
-  b.innerHTML = msgs.map(esc).join('<br>');
+  b.innerHTML = msgs.map((m) => `<span>${esc(m)}</span>`).join('') + (msgs.some((m) => m.startsWith('⚠️')) ? '<button class="btn btn--sm btn--gold" data-act="refresh" style="margin-left:auto">↻ 再取得</button>' : '');
 }
 function renderClock() {
   const m = nowMin();
   $('#clock').textContent = m >= 24 * 60 ? '--:--' : clock(m);
+}
+
+// Reason keys → icon chips (visual instead of sentences)
+const RCHIP = {
+  must: ['★', '必須', 'must'], dip: ['📉', 'いつもより空き', 'good'], later: ['🔥', 'あとで混む', 'hot'], short: ['⏱', '待ち短め', 'good'],
+  near: ['📍', 'すぐ近く', 'good'], pop: ['👑', '大人気', ''], fit: ['✅', '次の予定に間に合う', ''], bump: ['↪', '休憩を後ろへ', 'warn'],
+  soft: ['⚡', '場所取り短め', 'warn'], close: ['🌙', '閉園前に並べばOK', 'warn'],
+};
+const rchips = (reasons) => `<div class="rchips">${(reasons || []).map((x) => {
+  const [i, t, k] = RCHIP[x.k] || ['•', x.t, ''];
+  return `<span class="rchip ${k ? 'rchip--' + k : ''}" title="${esc(x.t)}"><i>${i}</i>${esc(t)}</span>`;
+}).join('')}</div>`;
+
+// Mini time bar: now → walk → wait → ride → spare → next fixed plan
+function miniBar(start, parts, endLabel, endTime) {
+  const total = parts.reduce((s, p) => s + Math.max(0, p.m), 0) || 1;
+  return `<div class="minitl"><div class="minitl__bar">${parts.filter((p) => p.m > 0).map((p) => `<div class="minitl__seg minitl__seg--${p.k}" style="flex:${p.m} 1 0">${p.m / total > 0.14 ? esc(p.t) : ''}</div>`).join('')}</div>
+    <div class="minitl__labels"><span>いま ${clock(start)}</span><span>${endLabel} ${clock(endTime)}</span></div></div>`;
 }
 
 // =====================================================================
@@ -364,77 +382,72 @@ function renderHome() {
   const c = ctx();
   const h = hours();
   const r = recommend(c);
-  const plan = PLANS[S.plan];
   const done = doneRides();
   const sim = simulateDay(c);
   const plannedTotal = done.length + sim.rides;
   const pos = position();
   let html = '';
 
-  // Pre-open guidance
   if (c.now < h.open) {
-    const until = h.open - c.now;
-    html += `<div class="countdown"><div><div class="countdown__k">BEFORE OPENING</div><div class="countdown__n">開園 ${clock(h.open)}（${h.src === 'api' ? '公式スケジュール' : '予定'}）</div>
-      <div style="font-size:12.5px;color:#d9d1bd;margin-top:4px">ホテルから入口まで徒歩15〜20分程度（目安）。手荷物検査と入場列があるので、開園30〜45分前の到着がおすすめ。</div></div>
-      <div class="countdown__v">${fmtDur(until)}<small>あと</small></div></div>`;
+    html += `<div class="countdown"><div><div class="countdown__k">BEFORE OPENING</div><div class="countdown__n">開園 ${clock(h.open)}</div>
+      <div class="flow" style="margin-top:8px;color:var(--paper)">
+        <div class="flow__step"><div class="flow__icon">🏨</div><div class="flow__s" style="color:#d9d6e8">ホテル</div></div>
+        <div class="flow__step"><div class="flow__icon">🚶</div><div class="flow__s" style="color:#d9d6e8">15〜20分</div></div>
+        <div class="flow__step"><div class="flow__icon">🛂</div><div class="flow__s" style="color:#d9d6e8">検査・入場</div></div>
+        <div class="flow__step"><div class="flow__icon">🏰</div><div class="flow__s" style="color:#d9d6e8">${clock(h.open - 40)}着</div></div></div></div>
+      <div class="countdown__v">${fmtDur(h.open - c.now)}<small>あと</small></div></div>`;
   }
   if (c.now >= h.close || dayPhase() === 'after') {
-    html += `<div class="card card--pad" style="text-align:center"><div style="font-size:40px">🎃🏰✨</div><h2 style="margin:6px 0;color:var(--navy)">おつかれさまでした！</h2>
-      <p class="para">今日の体験：<b>${done.length}</b> アトラクション</p>
-      <div class="donelist" style="justify-content:center">${done.map((id) => `<span class="tag tag--gold">${esc(attractionById[id].short)}</span>`).join('')}</div></div>`;
+    html += `<div class="card card--pad" style="text-align:center"><div style="font-size:44px">🎃🏰✨</div><h2 style="margin:6px 0;color:var(--navy)">おつかれさま！</h2>
+      <div class="progress__count">${done.length}<small> 施設</small></div>
+      <div class="donelist" style="justify-content:center;margin-top:10px">${done.map((id) => `<span class="donechip">✓ ${esc(attractionById[id].short)}</span>`).join('')}</div></div>`;
     el.innerHTML = html + footer();
     return;
   }
 
-  // Progress
-  html += `<div class="card progress ticket" style="--notch:50%">
-    <div><div class="progress__label">TODAY · PLAN ${plan.label}</div><div class="progress__count">${done.length}<small> / ${Math.max(plannedTotal, done.length)} 施設</small></div></div>
-    <div class="musts">${['rise', 'falcon'].map((id) => `<span class="must ${S.done[id] ? 'is-done' : ''}">${S.done[id] ? '✓' : '★'} ${esc(attractionById[id].short)}</span>`).join('')}</div>
+  const live = liveMap();
+  html += `<div class="card progress">
+    <div><div class="progress__label">きょうの進み具合 · ${PLANS[S.plan].ja}</div><div class="progress__count">${done.length}<small> / ${Math.max(plannedTotal, done.length)}</small></div></div>
+    <div class="musts">${['rise', 'falcon'].map((id) => { const down = !S.done[id] && live[id] && live[id].status !== 'OPERATING' && c.now >= h.open; return `<span class="must ${S.done[id] ? 'is-done' : down ? 'is-down' : ''}">${S.done[id] ? '✓' : down ? '🚧' : '★'} ${id === 'rise' ? 'レジスタンス' : 'ファルコン'}</span>`; }).join('')}</div>
     <div class="progress__bar"><i style="width:${Math.min(100, (done.length / Math.max(1, plannedTotal)) * 100)}%"></i></div>
   </div>`;
 
-  // Must-ride notes
   for (const n of r.notes) {
-    html += `<div class="note ${n.temporary ? '' : 'note--bad'}"><span class="note__icon">⚠️</span><div><b>${esc(n.text)}</b><br>${
-      n.fit ? '必須なので予定からは外していません。この予定の後（閉園までに列に並べばOK）で案内します。プランタブで時間を確認してください。'
-        : n.temporary ? '必須なので予定からは外していません。再開したら最優先で案内します（待ち時間は自動更新）。その間は下の候補へ。' : '本日は体験できない可能性があります。キャストに再開予定を確認してください。'}</div></div>`;
+    const [name, why] = n.text.split('：');
+    html += `<div class="note ${n.temporary ? '' : 'note--bad'}"><span class="note__icon">${n.fit ? '⏳' : '🚧'}</span><div><div class="note__t">${esc(name)}：${esc(why)}</div>
+      <div class="note__s">${n.fit ? '★ 必須なので後で必ず案内します' : n.temporary ? '★ 必須なので再開したらすぐ案内します' : 'キャストに再開予定を確認'}</div></div></div>`;
   }
   if (sim.missingMust.length && !r.notes.length) {
-    html += `<div class="note"><span class="note__icon">⚠️</span><div>このままだと <b>${sim.missingMust.map((id) => attractionById[id].short).join('・')}</b> が今日の予定に入りきりません。食事やショーの時間を見直すか、次のおすすめを優先してください。</div></div>`;
+    html += `<div class="note note--bad"><span class="note__icon">⚠️</span><div><div class="note__t">${sim.missingMust.map((id) => esc(attractionById[id].short)).join('・')} が入りきらない</div><div class="note__s">食事・ショーの時間を見直してください</div></div></div>`;
   }
 
-  html += `<div class="h-section"><h2>Next Stop</h2><span class="sub">${esc(pos.label)}</span></div>`;
   html += renderNextCard(r, c);
 
-  // Alternatives
   if (r.alts.length) {
-    html += `<div class="h-section" id="alts"><h2>ほかの候補</h2><span class="sub">判断基準ごとのベスト</span></div><div class="alts">`;
+    const icon = { wait: '⏱', walk: '📍', pop: '👑', score: '✨' };
+    html += `<div class="h-section" id="alts"><h2>ほかの候補</h2></div><div class="alts">`;
     for (const a of r.alts) {
       html += `<button class="alt" type="button" data-open="${a.a.id}">
         <div class="alt__img">${rideImg(a.a)}</div>
-        <div><div class="alt__label">${esc(a.label)}</div><div class="alt__name">${esc(a.a.short)}</div>
-          <div class="alt__meta">徒歩${a.walk}分（目安）· 終了見込み ${clock(a.finish)}</div></div>
+        <div><span class="alt__label">${icon[a.key] || '•'} ${esc(a.label)}</span><div class="alt__name">${esc(a.a.short)}</div>
+          <div class="alt__meta">🚶${a.walk}分 · 〜${clock(a.finish)}</div></div>
         <div class="alt__wait"><b>${a.wait}<small>分</small></b><div>${kindTag(a.kind)}</div></div>
       </button>`;
     }
     html += `</div>`;
   }
 
-  // Upcoming fixed
-  const ups = c.anchors.filter((x) => !x.done && x.end > c.now).slice(0, 3);
+  const ups = c.anchors.filter((x) => !x.done && x.end > c.now).slice(0, 4);
   if (ups.length) {
-    html += `<div class="h-section"><h2>このあとの予定</h2><button class="linkbtn" data-tab-go="plan">プラン全体 →</button></div><div class="card">`;
-    html += ups.map((x, i) => `<div class="after" style="border:0;border-radius:0;${i ? 'border-top:1px dashed var(--line-2)' : ''};background:transparent">
-      <span class="after__time">${clock(x.start)}</span><span style="font-size:20px">${x.emoji}</span>
-      <div style="flex:1"><b>${esc(x.title)}</b>${x.place ? `<div style="font-size:12px;color:var(--muted)">${esc(x.place)}${x.claim ? ` · ${clock(x.start - x.claim)}から場所取り` : ''}</div>` : ''}</div>
-      <span class="tag tag--ghost">あと${fmtDur(x.start - c.now)}</span></div>`).join('');
+    html += `<div class="h-section"><h2>このあと</h2><button class="linkbtn" data-tab-go="plan">全部見る →</button></div><div class="card ups">`;
+    html += ups.map((x) => `<button class="up up--${x.kind}" type="button" data-anchor-edit="${x.id}">
+      <span class="up__time">${clock(x.start)}</span><span class="up__icon">${x.emoji}</span>
+      <span><span class="up__name">${esc(x.title)}</span><br><span class="up__sub">${x.kind === 'meal' ? esc(x.place) : `場所取り ${clock(x.start - x.claim)}〜`}</span></span>
+      <span class="up__edit">${x.kind === 'meal' ? '✎ 変更' : 'あと' + fmtDur(x.start - c.now)}</span></button>`).join('');
     html += `</div>`;
   }
 
-  // Location card
   html += renderLocCard(pos);
-
-  // Data status
   html += renderDataCard();
   html += footer();
   el.innerHTML = html;
@@ -447,27 +460,31 @@ function renderNextCard(r, c) {
 
   if (p.type === 'ride') {
     const a = p.a;
-    const finishTo = next ? `<div class="after"><span class="after__time">${clock(next.start)}</span><div><b>${esc(next.title)}</b>${next.place ? `（${esc(next.place)}）` : ''}<br><span style="color:var(--muted)">終了見込み ${clock(p.finish)} → 余裕 ${fmtDur(next.start - next.claim - p.finish - walkMin(coordsOf(a.id), next.pos))}</span></div></div>` : '';
-    const wcls = waitClass(p.wait);
-    const reasons = (p.reasons || []).slice(0, 4);
-    return `<article class="card next ticket">
-      <div class="next__photo">${rideImg(a)}<span class="next__stamp">NEXT STOP</span>${R.photos[a.id] ? `<span class="next__credit">写真: Wikipedia</span>` : ''}</div>
+    const start = Math.max(c.now, c.openMin);
+    const back = next ? walkMin(coordsOf(a.id), next.pos) : 0;
+    const endT = next ? next.start - next.claim : Math.max(p.finish, c.closeMin);
+    const slack = next ? Math.max(0, endT - p.finish - back) : 0;
+    const bar = miniBar(start, [
+      { k: 'walk', m: p.walk, t: '🚶' + p.walk }, { k: 'wait', m: p.wait, t: '⏳' + p.wait }, { k: 'ride', m: a.dur, t: '🎢' }, { k: 'slack', m: slack + back, t: next ? '余裕' : '' },
+    ], next ? `${next.emoji} ${next.title}` : '閉園', next ? next.start : c.closeMin);
+    return `<article class="card next">
+      <div class="next__photo">${rideImg(a)}<span class="next__stamp">NEXT!</span>${R.photos[a.id] ? `<span class="next__credit">写真: Wikipedia</span>` : ''}</div>
       <div class="next__body">
-        <div><div class="next__kicker">${esc(landById[a.land]?.en || '')}${a.must ? ' · MUST RIDE' : ''}</div>
+        <div><div class="next__kicker">${esc(landById[a.land]?.ja || '')}</div>
           <h1 class="next__title">次は${esc(a.short)}へ！</h1><div class="next__en">${esc(a.en)}</div></div>
         <div class="stats">
-          <div class="stat"><div class="stat__k">待ち時間</div><div class="stat__v ${wcls}">${p.wait}<small>分</small></div><div class="stat__src">${kindTag(p.kind)}</div></div>
-          <div class="stat"><div class="stat__k">徒歩</div><div class="stat__v">${p.walk}<small>分</small></div><div class="stat__src"><span class="tag tag--ghost">目安</span></div></div>
-          <div class="stat"><div class="stat__k">終了見込み</div><div class="stat__v">${clock(p.finish)}</div><div class="stat__src"><span class="tag tag--ghost">乗車${a.dur}分込</span></div></div>
+          <div class="stat"><div class="stat__k">⏳ 待ち</div><div class="stat__v ${waitClass(p.wait)}">${p.wait}<small>分</small></div><div class="stat__src">${kindTag(p.kind)}</div></div>
+          <div class="stat"><div class="stat__k">🚶 徒歩</div><div class="stat__v">${p.walk}<small>分</small></div><div class="stat__src"><span class="tag tag--ghost">目安</span></div></div>
+          <div class="stat"><div class="stat__k">🏁 終わり</div><div class="stat__v">${clock(p.finish)}</div><div class="stat__src"><span class="tag tag--ghost">見込み</span></div></div>
         </div>
-        <ul class="reasons">${reasons.map((x) => `<li class="${x.k === 'must' ? 'is-must' : ''}">${esc(x.t)}</li>`).join('')}</ul>
-        ${finishTo}
-        <button class="btn btn--primary" data-done="${a.id}">✓ 乗り終わった</button>
+        ${rchips(p.reasons)}
+        ${bar}
+        <button class="btn btn--primary" data-done="${a.id}">✓ 乗り終わった！</button>
         <div class="btnrow btnrow--2">
-          <a class="btn btn--ghost" href="${routeUrl(coordsOf(a.id))}" target="_blank" rel="noopener">🧭 ルートを見る</a>
+          <a class="btn btn--ghost" href="${routeUrl(coordsOf(a.id))}" target="_blank" rel="noopener">🧭 ルート</a>
           <button class="btn btn--ghost" data-skip="${a.id}">↻ 別の候補</button>
         </div>
-        <button class="linkbtn" data-open="${a.id}">${esc(a.short)} の詳細・写真・待ち時間を手入力 →</button>
+        <button class="linkbtn" data-open="${a.id}">ℹ️ くわしく・写真</button>
       </div></article>`;
   }
 
@@ -476,126 +493,129 @@ function renderNextCard(r, c) {
     const isShow = x.kind === 'show';
     const s = isShow ? showById[x.show] : null;
     const rest = x.restaurant ? restaurantById[x.restaurant] : null;
-    const title = isShow ? `${x.title}の場所取りへ` : `${x.title}の時間：${x.place}`;
-    const img = isShow ? imgFor(x.show === 'fantasmic' ? 'fantasmic' : x.show === 'fireworks' ? 'fireworks' : 'castle', { name: s.en, emoji: s.emoji, color: '#5b3f78' }) : foodImg(rest);
-    const reasons = isShow
-      ? [s.viewing, `場所取り目安 ${clock(x.start - x.claim)}〜／開演 ${clock(x.start)}`]
-      : [`プランで確保した${x.title}（${clock(x.start)}〜${clock(x.end)}）`, rest.mobile === 'yes' ? 'モバイルオーダー対応（事前情報）：向かいながら公式アプリで注文すると待ちが短い' : rest.mobile === 'no' ? 'テーブルサービス：予約の有無を確認' : 'モバイルオーダーの可否は公式アプリで確認'];
-    return `<article class="card next ticket">
+    const title = isShow ? `${x.title}へ！` : `${x.title}：${x.place}`;
+    const img = isShow ? imgFor(x.show === 'fantasmic' ? 'fantasmic' : x.show === 'fireworks' ? 'fireworks' : 'cavalcade', { name: s.en, emoji: s.emoji, color: '#5b3f78' }) : foodImg(rest);
+    const chips = isShow
+      ? [['📍', s.venue.split('（')[0], ''], ['⏰', `${clock(x.start - x.claim)}〜場所取り`, 'warn']]
+      : [['🍽', `${fmtDur(x.end - x.start)}確保`, 'good'], rest.mobile === 'yes' ? ['📱', 'モバイルオーダー可', 'good'] : rest.mobile === 'no' ? ['🪑', 'テーブル席', ''] : ['📱', 'MO要確認', '']];
+    return `<article class="card next">
       <div class="next__photo">${img}<span class="next__stamp">${isShow ? 'SHOWTIME' : 'MEAL TIME'}</span></div>
       <div class="next__body">
         <div><div class="next__kicker">${isShow ? 'SHOW' : 'DINING'} · ${clock(x.start)}</div><h1 class="next__title">${esc(title)}</h1>${rest ? `<div class="next__en">${esc(rest.en)}</div>` : ''}</div>
         <div class="stats">
-          <div class="stat"><div class="stat__k">${isShow ? '開演' : '開始'}</div><div class="stat__v">${clock(x.start)}</div></div>
-          <div class="stat"><div class="stat__k">徒歩</div><div class="stat__v">${p.walk}<small>分</small></div><div class="stat__src"><span class="tag tag--ghost">目安</span></div></div>
-          <div class="stat"><div class="stat__k">${isShow ? '場所取り' : '所要'}</div><div class="stat__v">${isShow ? clock(x.start - x.claim) : fmtDur(x.end - x.start)}</div></div>
+          <div class="stat"><div class="stat__k">${isShow ? '🎆 開演' : '🍽 開始'}</div><div class="stat__v">${clock(x.start)}</div></div>
+          <div class="stat"><div class="stat__k">🚶 徒歩</div><div class="stat__v">${p.walk}<small>分</small></div><div class="stat__src"><span class="tag tag--ghost">目安</span></div></div>
+          <div class="stat"><div class="stat__k">${isShow ? '⏰ 場所取り' : '⌛ 所要'}</div><div class="stat__v">${isShow ? clock(x.start - x.claim) : x.end - x.start + '<small>分</small>'}</div></div>
         </div>
-        <ul class="reasons">${reasons.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>
-        <button class="btn btn--primary" data-done="${x.id}">✓ ${isShow ? '観た' : '食べ終わった'}</button>
+        <div class="rchips">${chips.map(([i, t, k]) => `<span class="rchip ${k ? 'rchip--' + k : ''}"><i>${i}</i>${esc(t)}</span>`).join('')}</div>
+        <button class="btn btn--primary" data-done="${x.id}">✓ ${isShow ? '観た！' : '食べ終わった！'}</button>
         <div class="btnrow btnrow--2">
-          <a class="btn btn--ghost" href="${routeUrl(x.pos)}" target="_blank" rel="noopener">🧭 ルートを見る</a>
-          <button class="btn btn--ghost" data-anchor-edit="${x.id}">✎ 時間・お店を変更</button>
+          <a class="btn btn--ghost" href="${routeUrl(x.pos)}" target="_blank" rel="noopener">🧭 ルート</a>
+          <button class="btn btn--ghost" data-anchor-edit="${x.id}">✎ ${isShow ? '回を変える' : '時間・お店'}</button>
         </div>
-        ${rest ? `<button class="linkbtn" data-open-food="${rest.id}">${esc(rest.ja)} のメニュー・料金 →</button>` : `<button class="linkbtn" data-tab-go="shows">ショーの詳細・時刻 →</button>`}
+        ${rest ? `<button class="linkbtn" data-open-food="${rest.id}">🍴 メニュー・料金</button>` : ''}
       </div></article>`;
   }
 
-  // free time
   const nearSnacks = RESTAURANTS.filter((x) => x.kind === 'sweets' || x.kind === 'snack')
-    .map((x) => ({ x, w: walkMin(c.pos, coordsOf(x.id)) })).sort((a, b) => a.w - b.w).slice(0, 3);
-  return `<article class="card next ticket">
-    <div class="next__photo">${imgFor('castle', { name: 'Sleeping Beauty Castle', emoji: '🏰', color: '#5b3f78' })}<span class="next__stamp">FREE TIME</span></div>
+    .map((x) => ({ x, w: walkMin(c.pos, coordsOf(x.id)) })).sort((a, b) => a.w - b.w).slice(0, 4);
+  return `<article class="card next">
+    <div class="next__photo">${imgFor('castle', { name: 'Free Time', emoji: '🏰', color: '#5b3f78' })}<span class="next__stamp">FREE TIME</span></div>
     <div class="next__body">
-      <div><div class="next__kicker">BREAK · 散策・写真・お土産</div><h1 class="next__title">${next ? `${esc(next.title)}まで${fmtDur(p.minutes)}。寄り道タイム` : '自由時間'}</h1></div>
-      <ul class="reasons"><li>この時間で間に合うアトラクションはありません（待ち時間＋移動を考慮）</li>${next ? `<li>${clock(r.leaveBy)}ごろに${esc(next.place || next.title)}へ移動開始</li>` : ''}</ul>
-      <div class="box"><b>近くのおやつ</b><br>${nearSnacks.map((n) => `<button class="linkbtn" data-open-food="${n.x.id}">${n.x.emoji} ${esc(n.x.ja)}（徒歩${n.w}分）</button>`).join('<br>')}</div>
-      <div class="box"><b>🎃 ハロウィン限定ポップコーン</b><br>${POPCORN.map((p2) => `${p2.emoji} ${esc(p2.ja)}：${esc(p2.where)}`).join('<br>')}</div>
+      <div><div class="next__kicker">おやつ・写真・お土産</div><h1 class="next__title">${next ? `${esc(next.title)}まで ${fmtDur(p.minutes)}` : '自由時間'}</h1></div>
+      ${next ? `<div class="rchips"><span class="rchip rchip--warn"><i>🚶</i>${clock(r.leaveBy)}に移動開始</span><span class="rchip"><i>🎢</i>今から乗れる施設なし</span></div>` : ''}
+      <div class="restgrid">${nearSnacks.map((n) => `<button class="rest" data-open-food="${n.x.id}"><span class="rest__e">${n.x.emoji}</span><span class="rest__n">${esc(n.x.ja)}</span><span class="rest__s">🚶${n.w}分</span></button>`).join('')}</div>
+      <div class="rchips">${POPCORN.map((x) => `<span class="rchip rchip--hot"><i>${x.emoji}</i>${esc(x.ja)}バケット</span>`).join('')}</div>
     </div></article>`;
 }
 
 function renderLocCard(pos) {
   const on = S.gps && R.gpsPos;
-  const icon = pos.src === 'gps' ? '📍' : pos.src === 'outside' ? '🚶' : pos.src === 'none' ? '？' : '📌';
+  const icon = pos.src === 'gps' ? '📍' : pos.src === 'outside' ? '🚶' : pos.src === 'none' ? '❔' : '📌';
   return `<div class="card loc">
     <div class="loc__icon ${pos.src === 'gps' ? '' : 'is-off'}">${icon}</div>
-    <div><div class="loc__title">${pos.src === 'gps' ? '現在地：GPS使用中' : pos.src === 'outside' ? '現在地：パークの外' : '現在地：' + (pos.src === 'none' ? '未設定' : '推定')}</div>
-      <div class="loc__sub">${esc(pos.label)}${pos.weak ? '・精度が低いため距離は目安です' : ''}${R.gpsErr ? `<br><span style="color:var(--bad)">${esc(R.gpsErr)}</span>` : ''}</div></div>
+    <div><div class="loc__title">${pos.src === 'gps' ? 'GPS使用中' : pos.src === 'outside' ? 'パークの外にいます' : pos.src === 'none' ? '現在地：未設定' : '現在地：推定'}</div>
+      <div class="loc__sub">${esc(pos.label)}${pos.weak ? ' · 精度低め' : ''}${R.gpsErr ? `<br><span style="color:var(--bad)">${esc(R.gpsErr)}</span>` : ''}</div></div>
     <div class="loc__actions">
       ${on ? `<button class="btn btn--ghost btn--sm" data-act="gps-stop">GPSを止める</button>` : `<button class="btn btn--navy btn--sm" data-act="gps-start">📍 現在地を使う</button>`}
-      <button class="btn btn--ghost btn--sm" data-act="pick-land">エリアを選ぶ</button>
+      <button class="btn btn--ghost btn--sm" data-act="pick-land">🗺 エリアを選ぶ</button>
     </div></div>`;
 }
 
 function renderDataCard() {
   const l = R.live;
   let main;
-  if (R.liveStatus === 'loading') main = '待ち時間を更新しています…';
-  else if (l?.ok) {
-    const t = new Date(l.fetchedAt);
-    const tt = new Intl.DateTimeFormat('ja-JP', { timeZone: TRIP.tz, hour: 'numeric', minute: '2-digit' }).format(t);
-    main = `<b>${esc(l.sourceLabel)}</b> · ${tt}取得（${Math.round(liveAgeMin())}分前）${l.stale ? '・<span style="color:var(--bad)">最新取得に失敗</span>' : ''}`;
-  } else if (R.liveStatus === 'error') main = `<span style="color:var(--bad)">取得失敗：${esc(R.liveError || '')}</span> → 推定値で案内中`;
-  else main = 'まだ取得していません（推定値）';
-  return `<div class="card datastat"><div>⏱ 待ち時間：${main}<br><span style="font-size:11px">自動更新 3分ごと（画面表示中）· LIVE＝外部提供値 / 推定＝過去傾向からの計画用の値</span></div>
+  if (R.liveStatus === 'loading') main = '⏳ 更新中…';
+  else if (l?.ok) main = `${liveIsFresh() ? '🟢' : '🟡'} ${esc(l.sourceLabel)} · ${Math.round(liveAgeMin())}分前${l.stale ? ' · 最新取得失敗' : ''}`;
+  else if (R.liveStatus === 'error') main = '🔴 取得失敗 → 推定値';
+  else main = '⚪ 推定値';
+  return `<div class="card datastat"><div>${main}<br><span style="font-size:11px;color:var(--muted)">${kindTag('live')} 外部提供　${kindTag('manual')} 入力　${kindTag('est')} 推定</span></div>
     <button class="btn btn--gold btn--sm ${R.liveStatus === 'loading' ? 'is-busy' : ''}" data-act="refresh" ${R.liveStatus === 'loading' ? 'disabled' : ''}>↻ 更新</button></div>`;
 }
 
 function footer() {
-  return `<p class="footer">個人用の非公式ナビです（Disney公式ではありません）。<br>待ち時間：ThemeParks.wiki / Queue-Times.com 提供データ · 写真：Wikipedia<br>ショー時刻・営業状況は当日の公式アプリでも確認してください。</p>`;
+  return `<p class="footer">非公式の個人用ナビ · 待ち時間 ThemeParks.wiki / Queue-Times.com · 写真 Wikipedia</p>`;
 }
 
 // =====================================================================
 // PLAN
 // =====================================================================
+const PLAN_EMOJI = { relax: '☕', balance: '🎡', rides: '🎢' };
 function renderPlan() {
   const el = $('#view-plan');
   const c = ctx();
   const sim = simulateDay(c);
   const done = doneRides();
   const conflicts = anchorConflicts(c.anchors);
-  let html = `<div class="h-section"><h2>プランを選ぶ</h2><span class="sub">いつでも切替OK</span></div><div class="plans">`;
+  let html = `<div class="plans">`;
   for (const p of Object.values(PLANS)) {
-    html += `<button class="plancard ${S.plan === p.id ? 'is-active' : ''}" data-plan="${p.id}" type="button"><span class="plancard__l">${p.label}</span><span class="plancard__n">${p.ja}</span><span class="plancard__t">${esc(p.tagline)}</span></button>`;
+    html += `<button class="plancard ${S.plan === p.id ? 'is-active' : ''}" data-plan="${p.id}" type="button"><span class="plancard__emoji">${PLAN_EMOJI[p.id]}</span><span class="plancard__n">${p.ja}</span><span class="plancard__l">PLAN ${p.label}</span></button>`;
   }
-  html += `</div><div class="note note--info"><span class="note__icon">📝</span><div>${esc(PLANS[S.plan].note)}</div></div>`;
-
+  html += `</div>`;
   const meals = c.anchors.filter((a) => a.kind === 'meal').length;
   const shows = c.anchors.filter((a) => a.kind === 'show').length;
-  html += `<div class="card summary"><div><b>${done.length + sim.rides}</b><span>アトラクション</span></div><div><b>${2 - sim.missingMust.length}/2</b><span>SW必須</span></div><div><b>${meals}</b><span>食事・休憩</span></div><div><b>${shows}</b><span>ショー</span></div></div>`;
-  if (sim.missingMust.length) html += `<div class="note note--bad"><span class="note__icon">⚠️</span><div>${sim.missingMust.map((id) => esc(attractionById[id].short)).join('・')} が予定に入りきっていません。休止中の場合は再開後に最優先で案内します。</div></div>`;
-  if (conflicts.length) html += `<div class="note note--bad"><span class="note__icon">⚠️</span><div>食事とショーの時間が重なっています。ショータブか食事の「変更」から時間を調整してください。</div></div>`;
+  html += `<div class="meters">
+    <div class="meter-box"><b>🎢 ${done.length + sim.rides}</b><span>乗り物</span></div>
+    <div class="meter-box"><b>★ ${2 - sim.missingMust.length}/2</b><span>SW必須</span></div>
+    <div class="meter-box"><b>🍽 ${meals}</b><span>食事・休憩</span></div>
+    <div class="meter-box"><b>🎆 ${shows}</b><span>ショー</span></div></div>`;
+  if (sim.missingMust.length) html += `<div class="note note--bad"><span class="note__icon">⚠️</span><div><div class="note__t">${sim.missingMust.map((id) => esc(attractionById[id].short)).join('・')} が入りきらない</div><div class="note__s">休止中なら再開後に最優先で案内</div></div></div>`;
+  if (conflicts.length) html += `<div class="note note--bad"><span class="note__icon">⚠️</span><div><div class="note__t">食事とショーが重なっています</div><div class="note__s">✎ から時間を調整</div></div></div>`;
 
   html += `<button class="btn btn--navy ${R.liveStatus === 'loading' ? 'is-busy' : ''}" data-act="replan" ${R.liveStatus === 'loading' ? 'disabled' : ''}>↻ 最新の待ち時間で組み直す</button>`;
 
   if (done.length) {
-    html += `<div class="h-section"><h2>体験済み</h2><span class="sub">タップで取り消し</span></div><div class="donelist">${done.map((id) => `<button class="tag tag--gold" style="border:0;padding:7px 10px;font-size:12.5px" data-done="${id}">✓ ${esc(attractionById[id].short)}</button>`).join('')}</div>`;
+    html += `<div class="h-section"><h2>✓ 体験済み</h2><span class="sub">タップで取り消し</span></div><div class="donelist">${done.map((id) => `<button class="donechip" data-done="${id}">✓ ${esc(attractionById[id].short)}</button>`).join('')}</div>`;
   }
 
-  html += `<div class="h-section"><h2>これからの予定</h2><span class="sub">${clock(Math.max(c.now, c.openMin))}〜 自動計算</span></div><ol class="tl">`;
+  html += `<div class="h-section"><h2>これからの予定</h2><span class="sub">${clock(Math.max(c.now, c.openMin))}〜 自動</span></div><ol class="tl">`;
   for (const it of sim.items) {
     if (it.type === 'free' && it.end - it.start < 10) continue;
     if (it.type === 'ride') {
       const a = it.a;
-      html += `<li class="tl__item ${a.must ? 'tl__item--must' : ''}"><span class="tl__time">${clock(it.start)}</span><span class="tl__dot"></span>
-        <div class="tl__card"><div class="tl__head"><button class="tl__name linkbtn" style="text-decoration:none;color:var(--navy);text-align:left;font-size:14.5px" data-open="${a.id}">${a.must ? '★ ' : ''}${esc(a.short)}</button>
+      html += `<li class="tl__item ${a.must ? 'tl__item--must' : ''}"><span class="tl__time">${clock(it.start)}</span><span class="tl__dot">${a.must ? '★' : '🎢'}</span>
+        <div class="tl__card"><div class="tl__head"><button class="tl__name" data-open="${a.id}">${esc(a.short)}</button>
           <button class="check" data-done="${a.id}">✓ 乗った</button></div>
-          <div class="tl__meta">${kindTag(it.waitKind)} 待ち${it.wait}分 · 徒歩${it.walk}分 · 〜${clock(it.end)}</div></div></li>`;
+          <div class="tl__meta">${kindTag(it.waitKind)} ⏳${it.wait}分 · 🚶${it.walk}分 · 🏁${clock(it.end)}</div></div></li>`;
     } else if (it.type === 'meal' || it.type === 'show') {
       const x = it.anchor;
-      html += `<li class="tl__item tl__item--${it.type}"><span class="tl__time">${clock(x.start)}</span><span class="tl__dot"></span>
-        <div class="tl__card"><div class="tl__head"><div class="tl__name">${x.emoji} ${esc(x.title)}${x.shifted ? ' <span class="tag tag--warn">時間をずらしました</span>' : ''}</div><button class="check" data-done="${x.id}">✓ ${it.type === 'show' ? '観た' : '済'}</button></div>
-          <div class="tl__meta">${x.place ? esc(x.place) + ' · ' : ''}${clock(x.start)}〜${clock(x.end)}${x.claim ? ` · <b style="color:var(--red-d)">${clock(x.start - x.claim)}から場所取り</b>` : ''}
-          <button class="linkbtn" data-anchor-edit="${x.id}">変更</button></div></div></li>`;
+      html += `<li class="tl__item tl__item--${it.type}"><span class="tl__time">${clock(x.start)}</span><span class="tl__dot">${x.emoji}</span>
+        <div class="tl__card"><div class="tl__head"><div class="tl__name">${esc(x.title)}${x.shifted ? ' <span class="tag tag--warn">↪ ずらしました</span>' : ''}</div><button class="check" data-done="${x.id}">✓ ${it.type === 'show' ? '観た' : '済'}</button></div>
+          <div class="tl__meta">${x.place && it.type === 'meal' ? '🍴 ' + esc(x.place) + ' · ' : ''}${clock(x.start)}〜${clock(x.end)}${x.claim ? ` · <b style="color:var(--red-d)">⏰${clock(x.start - x.claim)}〜場所取り</b>` : ''}
+          <button class="tag tag--gold" data-anchor-edit="${x.id}">✎ 変更</button></div></div></li>`;
+    } else if (it.type === 'dropped') {
+      const x = it.anchor;
+      html += `<li class="tl__item tl__item--dropped"><span class="tl__time">${clock(it.start)}</span><span class="tl__dot">${x.emoji}</span>
+        <div class="tl__card"><div class="tl__name" style="text-decoration:line-through">${esc(x.title)}</div><div class="tl__meta">★ 必須を優先して見送り</div></div></li>`;
     } else {
-      html += `<li class="tl__item tl__item--free"><span class="tl__time">${clock(it.start)}</span><span class="tl__dot"></span>
-        <div class="tl__card"><div class="tl__name" style="color:var(--muted)">☕ 散策・写真・お土産（${fmtDur(it.end - it.start)}）</div></div></li>`;
+      html += `<li class="tl__item tl__item--free"><span class="tl__time">${clock(it.start)}</span><span class="tl__dot">☕</span>
+        <div class="tl__card">📸 散策・お土産 ${fmtDur(it.end - it.start)}</div></li>`;
     }
   }
   html += `</ol>`;
-  // past anchors already done
   const doneAnchors = c.anchors.filter((a) => a.done);
-  if (doneAnchors.length) html += `<div class="donelist">${doneAnchors.map((a) => `<button class="tag tag--ghost" style="padding:6px 9px" data-done="${a.id}">✓ ${esc(a.title)}（取り消す）</button>`).join('')}</div>`;
-  html += `<p class="footer">予定は「今の時刻・現在地・待ち時間・体験済み」から毎回自動で組み直されます。<br>LIVE以外の待ち時間は過去傾向からの推定です。</p>`;
+  if (doneAnchors.length) html += `<div class="donelist">${doneAnchors.map((a) => `<button class="donechip" style="background:var(--paper)" data-done="${a.id}">✓ ${esc(a.title)} ↺</button>`).join('')}</div>`;
+  html += `<p class="footer">時刻・現在地・待ち時間・体験済みから毎回自動で組み直し</p>`;
   el.innerHTML = html;
   R.lastPlanIds = sim.items.map((i) => i.id).join(',');
 }
@@ -689,9 +709,8 @@ function renderShows() {
   let html = '';
   if (an[0]) {
     const x = an[0];
-    const claimIn = x.start - x.claim - c.now;
     html += `<div class="countdown"><div><div class="countdown__k">NEXT SHOW</div><div class="countdown__n">${x.emoji} ${esc(x.title)} ${clock(x.start)}</div>
-      <div style="font-size:12.5px;color:#d9d1bd;margin-top:3px">${claimIn > 0 ? `場所取り開始 ${clock(x.start - x.claim)}（あと${fmtDur(claimIn)}）` : '場所取りの時間です'}</div></div>
+      <div style="font-size:12.5px;color:var(--mustard);margin-top:3px;font-weight:800">⏰ ${clock(x.start - x.claim)}〜場所取り</div></div>
       <div class="countdown__v">${fmtDur(x.start - c.now)}<small>開演まで</small></div></div>`;
   }
   const sp = S.prefs.shows;
@@ -699,37 +718,36 @@ function renderShows() {
   if (on('fireworks') && on('fantasmic')) {
     const fw = c.anchors.find((a) => a.show === 'fireworks'), fm = c.anchors.find((a) => a.show === 'fantasmic');
     if (fw && fm) {
-      const order = fw.start < fm.start;
-      html += `<div class="card card--pad"><div class="h-section" style="margin:0 0 8px"><h2>夜の動線（花火＋ファンタズミック）</h2></div>
-        <ol style="margin:0;padding-left:20px;font-size:14px;line-height:1.8">${order
-          ? `<li><b>${clock(fw.start - fw.claim)}</b> アメリカ河沿い（カリブの海賊〜ホーンテッドマンション前）へ</li><li><b>${clock(fw.start)}</b> 花火「ハロウィン・スクリームズ」を空で鑑賞</li><li>その場に残ってファンタズミックの場所を確保</li><li><b>${clock(fm.start)}</b> ファンタズミック！（〜${clock(fm.end)}）</li>`
-          : `<li><b>${clock(fm.start - fm.claim)}</b> アメリカ河沿いで場所取り</li><li><b>${clock(fm.start)}</b> ファンタズミック！</li><li>そのまま空を見上げて <b>${clock(fw.start)}</b> の花火</li>`}</ol>
-        <p style="font-size:12px;color:var(--muted);margin:8px 0 0">お城の映像まで見たい場合は花火をハブ（お城前）で見て、22:30回のファンタズミックへ移動（徒歩約8〜10分＋混雑）。花火は「一部の夜のみ」実施のため、当日の公式アプリで実施を確認してください。</p></div>`;
+      const steps = fw.start < fm.start
+        ? [['🌊', clock(fw.start - fw.claim), '川沿いへ'], ['🎆', clock(fw.start), '花火'], ['🧍', clock(fw.end), 'そのまま待つ'], ['🐉', clock(fm.start), 'ファンタズミック']]
+        : [['🌊', clock(fm.start - fm.claim), '川沿いへ'], ['🐉', clock(fm.start), 'ファンタズミック'], ['🧍', clock(fm.end), 'そのまま'], ['🎆', clock(fw.start), '花火']];
+      html += `<div class="card card--pad"><div class="h-section" style="margin:0 0 10px"><h2>🌙 夜の動線</h2><span class="sub">移動ほぼゼロ</span></div>
+        <div class="flow">${steps.map(([i, t, s]) => `<div class="flow__step"><div class="flow__icon">${i}</div><div class="flow__t">${t}</div><div class="flow__s">${s}</div></div>`).join('')}</div>
+        <details class="more" style="margin-top:8px"><summary>お城の映像も見たいときは？</summary><p>花火をお城前（ハブ）で見て、22:30回のファンタズミックへ移動（徒歩8〜10分＋混雑）。花火は「一部の夜のみ」なので当日の公式アプリで実施を確認。</p></details></div>`;
     }
   }
   for (const s of SHOWS) {
     const st = showTimesFor(s.id);
     const pick = c.anchors.find((a) => a.show === s.id);
-    const srcTag = st.src === 'api' ? '<span class="tag tag--live">APIの公式時刻</span>' : st.src === 'manual' ? '<span class="tag tag--manual">手入力</span>' : '<span class="tag tag--warn">事前情報・要確認</span>';
+    const srcTag = st.src === 'api' ? '<span class="tag tag--live">API公式</span>' : st.src === 'manual' ? '<span class="tag tag--manual">手入力</span>' : '<span class="tag tag--warn">要確認</span>';
     const apiStatus = R.live?.shows?.[s.id]?.status;
     html += `<article class="card show">
       <div class="show__head"><div class="show__img">${imgFor(s.id === 'fantasmic' ? 'fantasmic' : s.id === 'fireworks' ? 'fireworks' : 'cavalcade', { name: s.en, emoji: s.emoji, color: '#5b3f78' })}</div>
-        <div class="show__body"><div class="show__name">${s.emoji} ${esc(s.ja)}</div><div class="item__en">${esc(s.en)}</div>
+        <div class="show__body"><div class="show__name">${s.emoji} ${esc(s.short)}</div>
           <div class="times">${st.times.map((t) => `<button class="time ${pick && hhmm(pick.start) === t ? 'is-active' : ''} ${parseHHMM(t) + s.dur < c.now ? 'is-past' : ''}" data-pick-show="${s.id}" data-time="${t}">${t}</button>`).join('')}</div>
-          <div class="item__meta">${srcTag}${apiStatus && apiStatus !== 'OPERATING' ? `<span class="tag tag--bad">${esc(STATUS_JA[apiStatus] || apiStatus)}</span>` : ''}<button class="linkbtn" data-edit-times="${s.id}">時刻を修正</button></div></div></div>
+          <div class="item__meta">${srcTag}${apiStatus && apiStatus !== 'OPERATING' ? `<span class="tag tag--bad">${esc(STATUS_JA[apiStatus] || apiStatus)}</span>` : ''}<button class="linkbtn" data-edit-times="${s.id}">✎ 時刻修正</button></div></div></div>
       <div class="show__foot">
         <label class="switch">プランに入れる<input type="checkbox" data-show-toggle="${s.id}" ${on(s.id) ? 'checked' : ''}></label>
-        <div><b>📍 ${esc(s.venue)}</b></div>
-        <div>${esc(s.viewing)}</div>
-        <div style="color:var(--muted)">${esc(s.desc)}</div>
-        ${pick ? `<div class="after"><span class="after__time">${clock(pick.start - pick.claim)}</span><div>場所取り開始の目安（開演${pick.claim}分前）</div></div>` : ''}
+        <div class="show__row"><span>📍</span><span>${esc(s.venue)}</span></div>
+        ${pick ? `<div class="show__row"><span>⏰</span><span>${clock(pick.start - pick.claim)}〜 場所取り（開演${pick.claim}分前）</span></div>` : ''}
+        <details class="more"><summary>どんなショー？ どこで観る？</summary><p>${esc(s.desc)}</p><p>${esc(s.viewing)}</p></details>
       </div></article>`;
   }
   const others = R.live?.otherShows || [];
   if (others.length) {
-    html += `<div class="h-section"><h2>その他のショー</h2><span class="sub">APIから取得</span></div><div class="card card--pad" style="font-size:13px;line-height:1.8">${others.slice(0, 12).map((o) => `<div><b>${esc(o.name)}</b>：${o.times.filter((t) => !t.date || t.date === TRIP.date).map((t) => hhmm(t.start)).join(' / ') || '—'}</div>`).join('')}</div>`;
+    html += `<div class="h-section"><h2>その他のショー</h2><span class="sub">API</span></div><div class="card card--pad" style="font-size:13px;line-height:1.9">${others.slice(0, 12).map((o) => `<div><b>${esc(o.name)}</b> ${o.times.filter((t) => !t.date || t.date === TRIP.date).map((t) => `<span class="tag">${hhmm(t.start)}</span>`).join(' ') || '—'}</div>`).join('')}</div>`;
   }
-  html += `<p class="footer">時刻の出典：ThemeParks.wikiのショー時刻（取得できた場合）／事前情報（Fantasmic! 21:00・22:30、花火 21:30、カヴァルケード 13:30・14:45）。</p>`;
+  html += `<p class="footer">${'<span class="tag tag--live">API公式</span>'} ThemeParks.wiki経由の当日時刻 · ${'<span class="tag tag--warn">要確認</span>'} 事前情報</p>`;
   el.innerHTML = html;
 }
 
@@ -801,21 +819,28 @@ function openFood(id) {
     </div>`);
 }
 
+function mealCfg(mealId) {
+  const base = PLANS[S.plan].meals.find((m) => m.id === mealId);
+  const ov = S.prefs.mealOverrides[mealId] || {};
+  return { base, ov, at: ov.at ?? base.at, rest: ov.restaurant || base.restaurant };
+}
 function openAnchorEdit(id) {
   if (id.startsWith('show:')) { closeSheet(); go('shows'); return; }
   const mealId = id.slice(5);
-  const plan = PLANS[S.plan];
-  const base = plan.meals.find((m) => m.id === mealId);
-  const ov = S.prefs.mealOverrides[mealId] || {};
-  const cur = ov.restaurant || base.restaurant;
-  const at = ov.at ?? base.at;
-  const opts = RESTAURANTS.filter((r) => mealId === 'snack' ? true : r.kind === 'meal' || r.kind === 'cafe');
-  openSheet(`<div class="sheet__content" style="padding-top:28px">
-    <h2 class="sheet__title" id="sheetTitle">${esc(base.ja)}の設定</h2>
-    <div class="formrow"><label>時間 <input type="time" id="mealAt" value="${hhmm(at).padStart(5, '0')}" step="300"></label><span style="color:var(--muted);font-size:13px">（${base.dur}分確保）</span></div>
-    <div class="formrow"><label>お店 <select id="mealRest">${opts.map((r) => `<option value="${r.id}" ${r.id === cur ? 'selected' : ''}>${r.emoji} ${esc(r.ja)}</option>`).join('')}</select></label></div>
-    <div class="btnrow btnrow--2"><button class="btn btn--primary" data-meal-save="${mealId}">保存して組み直す</button><button class="btn btn--ghost" data-meal-off="${mealId}">${ov.off ? '予定に戻す' : '今日は省略'}</button></div>
-    <button class="linkbtn" data-meal-reset="${mealId}">プランの初期設定に戻す</button>
+  const { base, ov, at, rest } = mealCfg(mealId);
+  const opts = RESTAURANTS.filter((r) => (mealId === 'snack' ? true : r.kind === 'meal' || r.kind === 'cafe'));
+  const c = ctx();
+  openSheet(`<div class="sheet__content" style="padding-top:30px">
+    <h2 class="sheet__title" id="sheetTitle">🍽 ${esc(base.ja)}</h2>
+    <div class="stepper">
+      <button data-meal-step="${mealId}" data-delta="-15">−15分</button>
+      <div class="stepper__v">${clock(at)}<small>${base.dur}分確保</small></div>
+      <button data-meal-step="${mealId}" data-delta="15">＋15分</button>
+    </div>
+    <div class="restgrid">${opts.map((r) => `<button class="rest ${r.id === rest ? 'is-active' : ''}" data-meal-rest="${mealId}" data-rest="${r.id}">
+      <span class="rest__e">${r.emoji}</span><span class="rest__n">${esc(r.ja)}</span><span class="rest__s">🚶${walkMin(c.pos, coordsOf(r.id))}分${r.mobile === 'yes' ? ' · 📱MO' : ''}</span></button>`).join('')}</div>
+    <div class="btnrow btnrow--2"><button class="btn btn--ghost" data-meal-off="${mealId}">${ov.off ? '↩ 予定に戻す' : '🚫 今日は省略'}</button><button class="btn btn--ghost" data-meal-reset="${mealId}">↺ 初期設定</button></div>
+    <button class="btn btn--navy" data-close>✓ 完了</button>
   </div>`);
 }
 
@@ -944,6 +969,18 @@ document.addEventListener('click', async (e) => {
     return toast(`手入力：${attractionById[d.manualSave].short} ${Math.round(v)}分（30分有効）`, 'ok');
   }
   if (d.manualClear) { delete S.manual[d.manualClear]; save(); closeSheet(); renderAll(); return toast('手入力を消去しました'); }
+  if (d.mealStep) {
+    const { at } = mealCfg(d.mealStep);
+    const v = Math.min(21 * 60, Math.max(8 * 60, at + Number(d.delta)));
+    S.prefs.mealOverrides[d.mealStep] = { ...(S.prefs.mealOverrides[d.mealStep] || {}), at: v }; save(); renderView();
+    openAnchorEdit('meal:' + d.mealStep);
+    return toast(`${clock(v)} に変更`, 'ok');
+  }
+  if (d.mealRest) {
+    S.prefs.mealOverrides[d.mealRest] = { ...(S.prefs.mealOverrides[d.mealRest] || {}), restaurant: d.rest }; save(); renderView();
+    openAnchorEdit('meal:' + d.mealRest);
+    return toast(`${restaurantById[d.rest].emoji} ${restaurantById[d.rest].ja} に変更`, 'ok');
+  }
   if (d.mealSave) {
     const at = parseHHMM($('#mealAt').value); const rest = $('#mealRest').value;
     S.prefs.mealOverrides[d.mealSave] = { ...(S.prefs.mealOverrides[d.mealSave] || {}), at, restaurant: rest }; save(); closeSheet(); renderAll();

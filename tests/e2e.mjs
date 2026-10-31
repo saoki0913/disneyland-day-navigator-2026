@@ -163,7 +163,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
   });
   await step('Shows: times from API, toggle off removes from plan, pick 21:00 Fantasmic', async () => {
     await tab(page, 'shows');
-    assert.match(await page.textContent('#view-shows'), /APIの公式時刻/);
+    assert.match(await page.textContent('#view-shows'), /API公式/);
     await page.screenshot({ path: `${SHOTS}/08-shows.png`, fullPage: true });
     await page.uncheck('[data-show-toggle="cavalcade"]'); await page.waitForTimeout(200);
     await page.click('[data-pick-show="fantasmic"][data-time="21:00"]'); await page.waitForTimeout(200);
@@ -176,12 +176,16 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.check('[data-show-toggle="cavalcade"]');
     await page.click('[data-pick-show="fantasmic"][data-time="22:30"]');
   });
-  await step('Meal can be changed (time + restaurant)', async () => {
+  await step('Meal can be changed visually (±15 min stepper + restaurant cards)', async () => {
     await tab(page, 'plan');
     await page.locator('.tl__item--meal [data-anchor-edit]').first().click(); await page.waitForTimeout(200);
-    await page.fill('#mealAt', '12:15');
-    await page.selectOption('#mealRest', 'ronto');
-    await page.click('[data-meal-save]'); await page.waitForTimeout(200);
+    const before = await page.textContent('.stepper__v');
+    await page.click('[data-meal-step][data-delta="15"]'); await page.waitForTimeout(150);
+    assert.notEqual(await page.textContent('.stepper__v'), before);
+    await page.click('[data-rest="ronto"]'); await page.waitForTimeout(150);
+    assert.equal(await page.locator('.rest.is-active[data-rest="ronto"]').count(), 1);
+    await page.screenshot({ path: `${SHOTS}/14-meal-editor.png` });
+    await page.click('.sheet .btn--navy[data-close]'); await page.waitForTimeout(150);
     assert.match(await page.textContent('.tl'), /ロント・ロースターズ/);
   });
   await step('Map renders markers and next-destination card', async () => {
@@ -199,7 +203,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
   const { ctx, page, errors } = await newCtx({ liveMode: 'fail', photos: 'fail' });
   await step('6. API failure → error banner, 推定 labels, still recommends', async () => {
     await page.waitForTimeout(500);
-    assert.match(await page.textContent('#banner'), /取得できませんでした/);
+    assert.match(await page.textContent('#banner'), /取得できず/);
     assert.match(await page.textContent('#livePillText'), /取得失敗/);
     assert.ok(await page.locator('.next .tag--est').count() >= 1);
     assert.equal(await page.locator('.next .tag--live').count(), 0, 'no LIVE label when not live');
