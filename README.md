@@ -6,14 +6,12 @@
 ## デプロイ（Cloudflare Pages・独立URL）
 
 既存の Workers（mogup-api / career-compass-web-* / usa-trip-disney-day-1031）、ルート、DNS、
-アカウント共通の workers.dev サブドメインには一切触れません。新規の Pages プロジェクト
-`dl-navi-1031` を作り、`https://dl-navi-1031.pages.dev` で公開します（名前が使用済みの場合は
-`dl-navi-1031-xxxx.pages.dev` のように割り当てられます）。
+アカウント共通の workers.dev サブドメインには一切触れません。すでに作成・公開済みの Pages プロジェクト
+`dl-navi-1031` を使い、`https://dl-navi-1031.pages.dev` で公開します。他の Pages/Workers にはデプロイしません。
 
 ```bash
 npm ci
 npx wrangler login                    # または CLOUDFLARE_API_TOKEN を設定
-npx wrangler pages project create dl-navi-1031 --production-branch main   # 初回のみ
 npm run deploy:preview                # まずプレビューURLで確認（https://preview.dl-navi-1031.pages.dev）
 npm run deploy                        # 本番
 ```
@@ -25,6 +23,16 @@ API トークンを使う場合の最小権限：`Account › Cloudflare Pages �
 - `https://<URL>/api/live` → `"ok":true, "source":"themeparks.wiki"` と各施設の待ち時間
 - `https://<URL>/api/meta` → 座標（coords）と10/31の営業時間（schedule）
 - `https://<URL>/api/photos` → 写真URL
+
+## GitHub push → Cloudflare Pages 自動デプロイ（無料・既存サービス分離）
+
+- GitHub のデフォルトブランチ `claude/vibrant-dijkstra-lbpi65` への **push** で `.github/workflows/verify.yml` が起動し、単体テスト60件とモバイルE2E29件を実行します。
+- **検証が成功した最新コミットのみ** `.github/workflows/deploy-pages.yml` が起動して、本番 `https://dl-navi-1031.pages.dev` にデプロイします。失敗したテストや古いコミットは公開されません。GitHub Actions の `workflow_dispatch` からプレビュー/本番を手動選択することもできます。
+- Cloudflare と GitHub のネイティブ Git 連携は使いません（Cloudflare Git installation が 8000011 で失敗するため）。代わりに公式サポートの `wrangler pages deploy public --project-name dl-navi-1031 --branch main` を使います。
+- **初回に1回だけ必要**：Cloudflare ダッシュボードの API Tokens で、対象アカウントの `Account › Cloudflare Pages › Edit` のみを許可したトークンを発行し、この GitHub リポジトリの `Settings › Secrets and variables › Actions › New repository secret` に **`CLOUDFLARE_API_TOKEN`** として保存します。Cloudflare のアカウントIDはワークフローで既存の対象アカウントに固定しているため、Secret は不要です。トークンを git、チャット、ログに貼らないでください。
+- Secret 未設定の場合、自動デプロイのジョブが明確なエラーで失敗し、現在公開中のアプリはそのまま動きます。
+- 本番デプロイは **既存の `dl-navi-1031` Pages** だけです。`mogup-api`、`career-compass-web-production`、`career-compass-web-staging`、`usa-trip-disney-day-1031`、他の Pages、DNS、ルート、カスタムドメイン、他サービスの環境変数・シークレット・課金設定には触れません。
+- このリポジトリは公開設定で、GitHub Actions の通常の `ubuntu-latest` ランナーは無料。Cloudflare Pages も Free 枠内で運用します（月500ビルドが上限、Functionsはアカウント共通のWorkers無料枠を使用）。有料枠の有効化やプラン変更を行う設定はありません。Free枠を超えた際の実行可否はCloudflareの制限に従います。
 
 ## 画面と使い方
 

@@ -1,60 +1,125 @@
 name: Deploy Disneyland Navi to Cloudflare Pages
+
+# Automatic production deploy only after the separate 60-unit/29-mobile-E2E verification succeeds.
+# Scope: this repo -> existing dl-navi-1031 Pages project ONLY. No Workers/DNS/domain writes.
 on:
+  workflow_run:
+    workflows: ["Verify Disneyland Navi"]
+    types: [completed]
+    branches:
+      - claude/vibrant-dijkstra-lbpi65
   workflow_dispatch:
     inputs:
       target:
-        description: "Deploy preview first, then production after verification"
+        description: "Manually deploy preview or production"
         required: true
         default: preview
         type: choice
         options:
           - preview
           - production
+
 permissions:
   contents: read
+
+# Isolate each verified commit: late older workflow_run events must never cancel a newer deploy.
+# Older commits are independently rejected by the up-to-date SHA check below.
 concurrency:
-  group: dl-navi-1031-deploy
+  group: dl-navi-1031-${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.target || 'manual' }}
   cancel-in-progress: false
+
 jobs:
   deploy:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/claude/vibrant-dijkstra-lbpi65') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'claude/vibrant-dijkstra-lbpi65' &&
+       github.event.workflow_run.head_repository.full_name == 'saoki0913/disneyland-day-navigator-2026')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out the exact tested commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+
+      - name: Prevent an old push from replacing a newer release
+        id: fresh
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            latest="$(git ls-remote https://github.com/saoki0913/disneyland-day-navigator-2026.git refs/heads/claude/vibrant-dijkstra-lbpi65 | cut -f1)"
+            tested="$(git rev-parse HEAD)"
+            if [ -z "$latest" ]; then
+              echo "::error::Cannot determine latest branch commit; declining to deploy."
+              exit 1
+            fi
+            if [ "$latest" != "$tested" ]; then
+              echo "Newer commit exists; skipping outdated deployment ($tested)."
+              echo "deploy=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "deploy=true" >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-node@v4
+        if: steps.fresh.outputs.deploy == 'true'
         with:
           node-version: '22'
-          cache: 'npm'
-      - run: npm ci
-      - name: Run 60 unit tests
-        run: npm test
-      - name: Check that Pages-only token is configured
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.fresh.outputs.deploy == 'true'
+        run: npm ci
+
+      - name: Recheck 60 unit tests and compile Pages Functions
+        if: steps.fresh.outputs.deploy == 'true'
+        run: |
+          npm test
+          npx wrangler pages functions build --outdir /tmp/dl-navi-functions
+
+      - name: Check dedicated Cloudflare Pages credential
+        if: steps.fresh.outputs.deploy == 'true'
         env:
           CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           if [ -z "$CF_TOKEN" ]; then
-            echo "Missing repository secret CLOUDFLARE_API_TOKEN. Configure a token scoped to Account / Cloudflare Pages / Edit."
+            echo "::error::One-time setup required: add repository Actions secret CLOUDFLARE_API_TOKEN (Cloudflare Account / Cloudflare Pages / Edit, this account only)."
+            echo "Do not paste the token in a commit, logs, or this chat."
             exit 1
           fi
-      - name: Deploy only dl-navi-1031
+
+      - name: Deploy ONLY to existing dl-navi-1031 Pages
+        if: steps.fresh.outputs.deploy == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: 97d97fcd567c4df4ab03b360f4cfe61d
+          TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'production' }}
         run: |
-          if [ "${{ inputs.target }}" = "production" ]; then
-            BRANCH=main
+          if [ "$TARGET" = "production" ]; then
+            BRANCH="main"
+          elif [ "$TARGET" = "preview" ]; then
+            BRANCH="preview"
           else
-            BRANCH=preview
+            echo "::error::Unexpected target: $TARGET"
+            exit 1
           fi
           npx wrangler pages deploy public --project-name dl-navi-1031 --branch "$BRANCH"
-      - name: Smoke test deployed URL
+
+      - name: Check publicly served app and health API
+        if: steps.fresh.outputs.deploy == 'true'
+        env:
+          TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'production' }}
         run: |
-          if [ "${{ inputs.target }}" = "production" ]; then
+          if [ "$TARGET" = "production" ]; then
             BASE=https://dl-navi-1031.pages.dev
           else
             BASE=https://preview.dl-navi-1031.pages.dev
           fi
-          echo "Checking $BASE"
+          echo "Verify $BASE"
           curl --fail --silent --show-error --retry 8 --retry-delay 3 --retry-all-errors "$BASE/" -o /dev/null
           curl --fail --silent --show-error --retry 8 --retry-delay 3 --retry-all-errors "$BASE/api/health"
           echo
