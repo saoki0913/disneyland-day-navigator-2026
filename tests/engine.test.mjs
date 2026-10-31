@@ -292,3 +292,14 @@ test('fitShows: a re-optimised plan with a locked ride first moves a would-be-mi
   assert.ok(after.late.length <= before.late.length);
   assert.ok(!after.late.includes('show:cavalcade'));
 });
+
+test('extra attractions (e.g. Pooh) are matched from live names, not auto-planned, but plan fine when added', async () => {
+  const { matchId } = await import('../lib/server.js');
+  assert.equal(matchId('The Many Adventures of Winnie the Pooh', ATTRACTIONS), 'pooh');
+  const c = base({ now: 600 });
+  assert.ok(!simulateDay(c).items.some((i) => i.id === 'pooh'), 'not auto-planned');
+  const r = planFromOrder(c, ['pooh', 'rise']);
+  assert.equal(r.items.find((i) => i.type === 'ride').id, 'pooh');
+  const sim2 = simulateDay({ ...c, order: ['pooh'] });
+  assert.ok(sim2.items.some((i) => i.id === 'pooh'), 'planned once the user adds it');
+});

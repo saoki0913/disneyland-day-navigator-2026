@@ -257,6 +257,8 @@ export function recommend(ctx) {
   const cands = [];
   for (const a of ATTRACTIONS) {
     if (ctx.done?.[a.id] || ctx.excluded?.[a.id]) continue;
+    // minor extras are only planned on request (added to the plan, must, or chosen as the next stop)
+    if (a.extra && !mustOf(ctx)[a.id] && !(ctx.order || []).includes(a.id) && ctx.pin?.id !== a.id) continue;
     const av = availability(a, c2);
     if (!av.ok) { result.blocked.push({ a, reason: av.reason, temporary: av.temporary }); continue; }
     const p = posOf(a);
