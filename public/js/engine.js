@@ -137,23 +137,42 @@ export function anchorConflicts(anchors) {
   return res;
 }
 
+// ---------- plan conditions ----------
+// ctx.must: { rideId: true } — rides the user marked "絶対乗る" (default: both Star Wars rides).
+// ctx.cond: { maxWait, walk:'low'|'normal'|'any' } — user conditions layered on top of the pace preset.
+export const DEFAULT_MUST = { rise: true, falcon: true };
+export const mustOf = (ctx) => ctx.must || DEFAULT_MUST;
+export const isMust = (a, ctx) => !!mustOf(ctx)[a.id];
+const WALK_W = { low: 1.8, normal: 1, any: 0.5 };
+export function effectivePlan(ctx) {
+  const base = PLANS[ctx.planId] || PLANS.balance;
+  const c = ctx.cond || {};
+  return {
+    ...base,
+    maxWait: c.maxWait ?? base.maxWait,
+    walkWeight: base.walkWeight * (WALK_W[c.walk] ?? 1),
+    waitWeight: base.waitWeight * (c.maxWait != null && c.maxWait <= 30 ? 1.5 : 1),
+  };
+}
+
 // ---------- scoring ----------
 function scoreRide(a, c, plan, ctx) {
   const pref = PRIORITY[a.id] ?? 0;
   let s = a.pop * 8 + pref;
   const reasons = [];
-  if (a.must) {
+  const must = isMust(a, ctx);
+  if (must) {
     s += 40;
     // urgency grows as the day runs out
     const left = ctx.closeMin - ctx.now;
     if (left < 6 * 60) s += 25;
     if (left < 3 * 60) s += 40;
-    reasons.push({ k: 'must', t: '必須のスター・ウォーズ' });
+    reasons.push({ k: 'must', t: '絶対乗る' });
   }
   const typical = estimateWait(a, ctx.now);
   s -= c.wait * plan.waitWeight;
   s -= c.walk * plan.walkWeight;
-  if (!a.must && c.wait > plan.maxWait) s -= (c.wait - plan.maxWait) * 1.5;
+  if (!must && c.wait > plan.maxWait) s -= (c.wait - plan.maxWait) * 1.5;
   if (c.kind !== 'est' && c.wait <= typical * 0.75 && typical - c.wait >= 10) {
     s += Math.min(25, (typical - c.wait) * 0.6);
     reasons.push({ k: 'dip', t: `いつもより空いている（通常${typical}分前後）` });
@@ -166,7 +185,7 @@ function scoreRide(a, c, plan, ctx) {
   }
   if (c.wait <= 20) reasons.push({ k: 'short', t: `待ち時間が短い（${c.wait}分）` });
   if (c.walk <= 4) reasons.push({ k: 'near', t: `すぐ近く（徒歩${c.walk}分目安）` });
-  if (!a.must && a.pop >= 5) reasons.push({ k: 'pop', t: '人気No.1クラス' });
+  if (!must && a.pop >= 5) reasons.push({ k: 'pop', t: '人気No.1クラス' });
   return { score: s, reasons };
 }
 
@@ -176,7 +195,7 @@ function scoreRide(a, c, plan, ctx) {
  *        anchors, coords:{id:pos}, excluded:{id:true} }
  */
 export function recommend(ctx) {
-  const plan = PLANS[ctx.planId] || PLANS.balance;
+  const plan = effectivePlan(ctx);
   const now = Math.max(ctx.now, ctx.openMin);
   const c2 = { ...ctx, now, preopen: ctx.now < ctx.openMin };
   const pos = ctx.pos;
@@ -227,12 +246,12 @@ export function recommend(ctx) {
         : now + walk <= ctx.closeMin - 2;
       // Soft deadline for must-rides: shorter spot-claiming for shows, or a meal up to 30 min later.
       const softDl = next ? (next.kind === 'show' ? next.start - 5 : next.start + 30) : -1;
-      if (a.must && k > 0 && ok) {
+      if (isMust(a, ctx) && k > 0 && ok) {
         bumps = upcoming.slice(0, k).map((x) => x.id);
-      } else if (a.must && next && !next.flex && finish + backToAnchor <= softDl) {
+      } else if (isMust(a, ctx) && next && !next.flex && finish + backToAnchor <= softDl) {
         c.soft = next.kind === 'show' ? 'claim' : 'meal';
       } else {
-        if (a.must) result.blocked.push({ a, reason: next ? `${next.title}（${hhmm(next.start)}）までに間に合わない` : '閉園までに間に合わない', temporary: true, fit: true });
+        if (isMust(a, ctx)) result.blocked.push({ a, reason: next ? `${next.title}（${hhmm(next.start)}）までに間に合わない` : '閉園までに間に合わない', temporary: true, fit: true });
         continue;
       }
     }
@@ -252,7 +271,7 @@ export function recommend(ctx) {
   const targetReached = doneCount >= plan.targetRides;
 
   // An optional block (snack / cavalcade) yields to a pending must-ride that can only fit by bumping it.
-  if (anchorDue && next?.flex && cands.some((c) => c.a.must && c.bumps)) anchorDue = false;
+  if (anchorDue && next?.flex && cands.some((c) => isMust(c.a, ctx) && c.bumps)) anchorDue = false;
   if (anchorDue && next) {
     result.mode = 'anchor';
     result.primary = { type: 'anchor', anchor: next, walk: result.walkToNext };
@@ -260,7 +279,7 @@ export function recommend(ctx) {
 
   cands.sort((x, y) => y.score - x.score);
   let pool = cands;
-  if (targetReached) pool = cands.filter((c) => c.a.must || c.wait <= 25);
+  if (targetReached) pool = cands.filter((c) => isMust(c.a, ctx) || c.wait <= 25);
 
   // A destination the user explicitly chose (e.g. from a "再開しました" alert) goes first.
   const pinned = ctx.pin && ctx.pin.until > ctx.now ? cands.find((c) => c.a.id === ctx.pin.id) : null;
@@ -292,7 +311,7 @@ export function recommend(ctx) {
   pick('人気度優先', 'pop', byPop);
 
   // must-ride status notes
-  for (const id of ['rise', 'falcon']) {
+  for (const id of Object.keys(mustOf(ctx))) {
     if (ctx.done?.[id]) continue;
     const b = result.blocked.find((x) => x.a.id === id);
     if (b) result.notes.push({ id, text: `${attractionById[id].short}：${b.reason}`, temporary: b.temporary, fit: !!b.fit });
@@ -320,7 +339,7 @@ export function simulateDay(ctx) {
     if (!p) break;
     if (p.type === 'ride') {
       const start = now + p.walk;
-      items.push({ type: 'ride', id: p.a.id, a: p.a, walk: p.walk, start, wait: p.wait, waitKind: p.kind, end: p.finish, must: !!p.a.must, reasons: p.reasons });
+      items.push({ type: 'ride', id: p.a.id, a: p.a, walk: p.walk, start, wait: p.wait, waitKind: p.kind, end: p.finish, must: isMust(p.a, ctx), reasons: p.reasons });
       done[p.a.id] = true;
       if (p.bumps) {
         const here = (ctx.coords?.[p.a.id]) || p.a.pos;
@@ -371,7 +390,7 @@ export function simulateDay(ctx) {
     items.push({ type: a.kind, id: a.id, anchor: a, start: a.start, end: a.end });
   }
   items.sort((x, y) => x.start - y.start);
-  const missingMust = ['rise', 'falcon'].filter((id) => !done[id]);
+  const missingMust = Object.keys(mustOf(ctx)).filter((id) => !done[id] && !ctx.excluded?.[id]);
   return { items, missingMust, rides: items.filter((i) => i.type === 'ride').length };
 }
 
