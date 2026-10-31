@@ -2,7 +2,7 @@ import {
   TRIP, LANDS, landById, ATTRACTIONS, attractionById, RESTAURANTS, restaurantById, POPCORN, SHOWS, showById, PLANS, PRIORITY,
 } from './data.js';
 import {
-  recommend, simulateDay, buildAnchors, anchorConflicts, crowdRatio, walkMin, distanceM, hhmm, parseHHMM, estimateWait, availability, DEFAULT_MUST,
+  recommend, simulateDay, planFromOrder, bestInsert, buildAnchors, anchorConflicts, crowdRatio, walkMin, distanceM, hhmm, parseHHMM, estimateWait, availability, DEFAULT_MUST,
 } from './engine.js';
 
 // =====================================================================
@@ -25,6 +25,7 @@ const defaults = {
   lastDone: null,      // { id, at }
   sim: null,           // { base: minutes, setAt: ms } — time simulation for testing
   pin: null,           // { id, until } destination chosen from an alert
+  order: null,         // null = おまかせ (engine re-optimises) / [ids] = the user's own plan order
   a2hsDismissed: false,
   exploreTab: 'rides', exploreFilter: 'all', exploreSort: 'reco', foodFilter: 'all',
   mapFilter: 'rides',
@@ -52,6 +53,8 @@ const R = {
   lastPlanIds: null,
   hist: {},            // { rideId: [[min, wait|null], ...] } today's observed waits (this device)
   alerts: [],          // [{ id, type:'reopen'|'drop', from, to, at }]
+  noteSeen: new Set(), // notices already shown once as a snackbar
+  progOpen: false, planEdit: false, addMode: 'best',
 };
 try {
   const c = JSON.parse(localStorage.getItem(KEY + ':live') || 'null');
@@ -293,6 +296,60 @@ function ctx(extra = {}) {
   };
 }
 
+// ---------- plan: おまかせ (auto, re-optimised live) or the user's own order ----------
+const PLAN_TYPES = ['ride', 'meal', 'show'];
+function planOf(c = ctx()) { return S.order ? planFromOrder(c, S.order) : simulateDay(c); }
+function orderFromPlan(sim) { return sim.items.filter((i) => PLAN_TYPES.includes(i.type)).map((i) => i.id); }
+// First edit turns the current auto plan into an editable list.
+function ensureOrder() { if (!S.order) S.order = orderFromPlan(simulateDay(ctx())); return S.order; }
+const snapshot = () => ({ order: S.order ? [...S.order] : null, prefs: structuredClone(S.prefs), pin: S.pin });
+function restore(sn) { S.order = sn.order; S.prefs = sn.prefs; S.pin = sn.pin; save(); renderAll(); }
+const itemName = (id) => attractionById[id]?.short || (id.startsWith('meal:') ? (PLANS[S.plan].meals.find((m) => 'meal:' + m.id === id)?.ja || 'ごはん') : showById[id.slice(5)]?.short || id);
+const isOpenItem = (i) => PLAN_TYPES.includes(i.type) && !i.blocked && !i.over && i.anchor?.late !== 'miss';
+// Next action: in manual mode it is simply the first open item of the user's plan.
+function homeReco(c) {
+  const r = recommend(c);
+  if (!S.order) return r;
+  const plan = planFromOrder(c, S.order);
+  const open = plan.items.filter(isOpenItem);
+  const first = open[0];
+  if (!first) return { ...r, plan };
+  const nx = open[1];
+  const next = nx && { id: nx.id, title: nx.a ? nx.a.short : nx.anchor.title, start: nx.start, claim: nx.type === 'show' ? nx.start - nx.claimFrom : 0, pos: nx.a ? coordsOf(nx.a.id) : nx.anchor.pos };
+  const primary = first.type === 'ride'
+    ? { type: 'ride', a: first.a, walk: first.walk, wait: first.wait, kind: first.waitKind, finish: first.end, reasons: [{ k: 'mine', t: 'あなたのプランの順番' }, ...(first.wait <= 20 ? [{ k: 'short', t: '' }] : [])] }
+    : { type: 'anchor', anchor: first.anchor, walk: first.walk };
+  return { ...r, primary, next, alts: r.alts.filter((x) => x.a.id !== first.id), plan };
+}
+function addToPlan(id, mode = 'best') {
+  const sn = snapshot();
+  ensureOrder();
+  if (id.startsWith('meal:')) { const m = id.slice(5); S.prefs.mealOverrides[m] = { ...(S.prefs.mealOverrides[m] || {}), off: false }; }
+  if (id.startsWith('show:')) { const x = id.slice(5); S.prefs.shows[x] = { ...(S.prefs.shows[x] || {}), on: true }; }
+  let o = S.order.filter((x) => x !== id && !S.done[x]);
+  o = mode === 'next' ? [id, ...o] : bestInsert(ctx(), o, id);
+  S.order = o; delete S.excluded[id];
+  save(); renderAll();
+  toast(mode === 'next' ? `${itemName(id)} を次の行き先にしました` : `${itemName(id)} を${o.indexOf(id) + 1}番目に追加`, 'ok', { label: '元に戻す', fn: () => restore(sn) });
+}
+function removeFromPlan(id) {
+  const sn = snapshot();
+  ensureOrder();
+  S.order = S.order.filter((x) => x !== id);
+  if (id.startsWith('meal:')) { const m = id.slice(5); S.prefs.mealOverrides[m] = { ...(S.prefs.mealOverrides[m] || {}), off: true }; }
+  if (id.startsWith('show:')) { const x = id.slice(5); S.prefs.shows[x] = { ...(S.prefs.shows[x] || {}), on: false }; }
+  save(); renderAll();
+  toast(`${itemName(id)} をプランから外しました`, '', { label: '元に戻す', fn: () => restore(sn) });
+}
+function moveInPlan(id, dir) {
+  ensureOrder();
+  const vis = S.order.filter((x) => !S.done[x]);
+  const i = vis.indexOf(id), j = i + dir;
+  if (i < 0 || j < 0 || j >= vis.length) return;
+  [vis[i], vis[j]] = [vis[j], vis[i]];
+  S.order = vis; save(); renderAll();
+}
+
 
 // =====================================================================
 // Icons (simple line icons instead of emoji)
@@ -317,6 +374,9 @@ const IC = {
   edit: '<path d="M4 20h4L19 9l-4-4L4 16Z"/>',
   sliders: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
   ride: '<path d="M3 19c2.5-8 5.5-13 9-13s6.5 5 9 13M3 19h18"/>',
+  up: '<path d="m6 15 6-6 6 6"/>',
+  down: '<path d="m6 9 6 6 6-6"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
 };
 const ic = (k) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${IC[k] || ''}</svg>`;
 
@@ -412,6 +472,11 @@ function openUndoConfirm(id) {
   </div>`);
 }
 function skipFor(id, minutes = 20) {
+  if (S.order) {
+    const sn = snapshot();
+    moveInPlan(id, 1);
+    return toast(`${attractionById[id]?.short || itemName(id)} を1つ後ろにしました`, '', { label: '戻す', fn: () => restore(sn) });
+  }
   S.skip[id] = nowMin() + minutes; save(); renderAll();
   toast(`${attractionById[id]?.short} を${minutes}分間あとまわし`, '', { label: '戻す', fn: () => { delete S.skip[id]; save(); renderAll(); } });
 }
@@ -451,7 +516,7 @@ function renderClock() {
 const RTAG = {
   must: ['絶対乗る', 'must'], dip: ['いつもより空き', 'live'], later: ['あとで混む', 'warn'], short: ['待ち短め', 'live'],
   near: ['すぐ近く', 'live'], pop: ['大人気', ''], fit: ['次の予定に間に合う', ''], bump: ['休憩を後ろへ', 'warn'],
-  soft: ['場所取り短め', 'warn'], close: ['閉園前に並べばOK', 'warn'], pin: ['あなたが選択', 'must'],
+  soft: ['場所取り短め', 'warn'], close: ['閉園前に並べばOK', 'warn'], pin: ['あなたが選択', 'must'], mine: ['あなたのプラン', 'must'],
 };
 const rtags = (reasons, max = 3) => `<div class="tags">${(reasons || []).slice(0, max).map((x) => {
   const [t, k] = RTAG[x.k] || [x.t, ''];
@@ -544,17 +609,9 @@ function renderHome() {
   const el = $('#view-home');
   const c = ctx();
   const h = hours();
-  const r = recommend(c);
   const done = doneRides();
-  const sim = simulateDay(c);
-  const plannedTotal = done.length + sim.rides;
   let html = '';
 
-  if (c.now < h.open) {
-    html += `<div class="countdown"><div><div class="countdown__k">BEFORE OPENING</div><div class="countdown__n">開園 <span class="num">${clock(h.open)}</span></div>
-      <div style="font-size:12.5px;opacity:.85">入口に <span class="num">${clock(h.open - 40)}</span> 着が目安</div></div>
-      <div class="countdown__v">${fmtDur(h.open - c.now)}<small>開園まで</small></div></div>`;
-  }
   if (c.now >= h.close || dayPhase() === 'after') {
     html += `<div class="card card--pad" style="text-align:center"><div class="kicker">See you again</div><h2 style="margin:4px 0">おつかれさま！</h2>
       <div class="prog__n" style="font-size:40px">${done.length}<small> 施設</small></div>
@@ -563,47 +620,24 @@ function renderHome() {
     renderActionBar(null);
     return;
   }
+  const r = homeReco(c);
+  const sim = r.plan || simulateDay(c);
 
-  // progress + must rides
-  const live = liveMap();
-  const musts = Object.keys(mustMap()).filter((id) => attractionById[id]);
-  html += `<div class="card"><div class="prog">
-      <div><div class="prog__n">${done.length}<small>/${Math.max(plannedTotal, done.length)}</small></div><div class="prog__k">乗った数</div></div>
-      <div class="prog__bar"><i style="width:${Math.min(100, (done.length / Math.max(1, plannedTotal)) * 100)}%"></i></div>
-      <button class="btn btn--sm" data-tab-go="plan">プラン${ic('chev')}</button></div>
-    ${musts.length ? `<div class="musts">${musts.map((id) => {
-      const down = !S.done[id] && live[id] && live[id].status !== 'OPERATING' && c.now >= h.open;
-      return `<span class="must ${S.done[id] ? 'is-done' : down ? 'is-down' : ''}">${S.done[id] ? ic('check') : ic('star')}${esc(attractionById[id].short)}${down ? '（休止）' : ''}</span>`;
-    }).join('')}</div>` : ''}</div>`;
-
-  for (const n of r.notes) {
-    const [name, why] = n.text.split('：');
-    html += `<div class="note ${n.temporary ? '' : 'note--bad'}">${ic('alert')}<div><div class="note__t">${esc(name)}：${esc(why)}</div>
-      <div class="note__s">${n.fit ? '絶対乗るので、あとで必ず案内' : n.temporary ? '再開したらすぐ案内' : 'キャストに再開予定を確認'}</div></div></div>`;
+  // 1) next action
+  html += renderNextCard(r, c);
+  // 2) progress: a slim band, tap to expand
+  html += progressBand(c, sim, done);
+  if (c.now < h.open) {
+    html += `<div class="card cdrow">${ic('clock')}<span>開園 <b class="num">${clock(h.open)}</b> まで <b>${fmtDur(h.open - c.now)}</b> · 入口に <span class="num">${clock(h.open - 40)}</span> 着が目安</span></div>`;
   }
-  if (sim.missingMust.length && !r.notes.length) {
-    html += `<div class="note note--bad">${ic('alert')}<div><div class="note__t">${sim.missingMust.map((id) => esc(attractionById[id].short)).join('・')} が入りきらない</div><div class="note__s">プランの条件を見直してください</div></div></div>`;
-  }
+  // 3) only actionable alerts stay on screen (reopened / suddenly shorter)
   for (const al of activeAlerts()) {
     const a = attractionById[al.id];
     html += `<div class="alert" role="alert"><div class="alert__body"><div class="alert__t">${esc(a.short)} ${al.type === 'reopen' ? '再開' : '空いてきた'}</div>
         <div class="alert__s">${al.type === 'reopen' ? `いま 待ち <span class="num">${al.to ?? '?'}</span>分` : `<s>${al.from}分</s> → <b class="num">${al.to}</b>分`}</div></div>
       <button class="btn btn--sm btn--primary" data-pin="${al.id}">行く</button><button class="alert__x" data-dismiss-alert="${al.id}" aria-label="閉じる">${ic('x')}</button></div>`;
   }
-
-  html += renderNextCard(r, c);
-
-  const ups = c.anchors.filter((x) => !x.done && x.end > c.now).slice(0, 3);
-  if (ups.length) {
-    html += `<div class="sec"><h2><span class="sec__en">NEXT UP</span>このあと</h2></div><div class="card rows">`;
-    html += ups.map((x) => `<button class="row" type="button" data-anchor-edit="${x.id}">
-      <span class="row__time">${clock(x.start)}</span>
-      <span class="row__body"><span class="row__name">${jw(x.title)}</span>
-        <span class="row__meta">${x.kind === 'meal' ? `${ic('food')}${esc(x.place)}` : `${ic('clock')}場所取り <span class="num">${clock(x.start - x.claim)}</span>〜`}</span></span>
-      <span class="row__chev">${ic('chev')}</span></button>`).join('');
-    html += `</div>`;
-  }
-
+  // 4) other options
   if (r.alts.length) {
     const lbl = { wait: '待ち短い', walk: '近い', pop: '人気', score: '時間があれば' };
     html += `<div class="sec" id="alts"><h2><span class="sec__en">OTHERS</span>ほかの候補</h2></div><div class="card rows">`;
@@ -614,11 +648,46 @@ function renderHome() {
         <span class="row__wait"><b class="${waitClass(a.wait)}">${a.wait}</b><small>分</small><br>${kindTag(a.kind)}</span></button>`).join('');
     html += `</div>`;
   }
-
-  html += renderLocRow(position());
   html += footer();
   el.innerHTML = html;
   renderActionBar(r);
+  noteToasts(r, sim);
+}
+
+// Progress band: one slim line (done / planned + next fixed item); tap opens the detail inline.
+function progressBand(c, sim, done) {
+  const total = Math.max(done.length + sim.rides, done.length);
+  const pct = Math.min(100, (done.length / Math.max(1, total)) * 100);
+  const open = sim.items.filter(isOpenItem);
+  const fixed = open.find((i) => i.type !== 'ride');
+  const live = liveMap();
+  const musts = Object.keys(mustMap()).filter((id) => attractionById[id]);
+  const nm = (i) => (i.a ? i.a.short : i.anchor.title + (i.type === 'meal' && i.anchor.place ? `（${i.anchor.place.split('・')[0]}）` : ''));
+  return `<div class="card pband ${R.progOpen ? 'is-open' : ''}">
+    <button class="pband__h" type="button" data-act="prog-toggle" aria-expanded="${!!R.progOpen}">
+      <span class="prog__n">${done.length}<small>/${total}</small></span>
+      <span class="pband__bar"><i style="width:${pct}%"></i></span>
+      <span class="pband__s">${fixed ? `<span class="num">${clock(fixed.start)}</span> ${esc(fixed.anchor.title)}` : `残り${Math.max(0, total - done.length)}`}</span>
+      <span class="pband__chev">${ic('chev')}</span></button>
+    ${R.progOpen ? `<div class="pband__body">
+      ${musts.length ? `<div class="musts">${musts.map((id) => {
+        const down = !S.done[id] && live[id] && live[id].status !== 'OPERATING' && c.now >= c.openMin;
+        return `<span class="must ${S.done[id] ? 'is-done' : down ? 'is-down' : ''}">${S.done[id] ? ic('check') : ic('star')}${esc(attractionById[id].short)}${down ? '（休止）' : ''}</span>`;
+      }).join('')}</div>` : ''}
+      <ol class="mini">${open.slice(0, 6).map((i) => `<li class="mini__i mini__i--${i.type}"><span class="num">${clock(i.start)}</span><span class="mini__n">${esc(nm(i))}</span>${i.type === 'ride' ? `<span class="mini__w">待ち${i.wait}分</span>` : ''}</li>`).join('') || '<li class="mini__i">予定はもうありません</li>'}</ol>
+      <button class="btn btn--sm btn--block" data-tab-go="plan">${ic('edit')}プランを見る・編集</button>
+    </div>` : ''}
+  </div>`;
+}
+
+// Non-actionable notices (休止中・入りきらない) appear once as a snackbar instead of staying on screen.
+function noteToasts(r, sim) {
+  const msgs = r.notes.map((n) => [`${n.id}:${n.fit ? 'fit' : n.temporary ? 'tmp' : 'off'}`, `${n.text}${n.fit ? '（あとで案内）' : n.temporary ? '（再開したら案内）' : ''}`]);
+  if (sim.missingMust.length && !r.notes.length) msgs.push(['miss:' + sim.missingMust.join(), `${sim.missingMust.map((id) => attractionById[id].short).join('・')} がプランに入りきらない`]);
+  const fresh = msgs.filter(([k]) => !R.noteSeen.has(k)).map(([k, m]) => (R.noteSeen.add(k), m));
+  if (!fresh.length) return;
+  const show = () => ($('#toast').classList.contains('is-on') ? setTimeout(show, 1500) : toast(fresh.join(' / '), 'warn', { label: 'プラン', fn: () => go('plan') }));
+  setTimeout(show, 500);
 }
 const isStandalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
 
@@ -713,8 +782,8 @@ function renderNextCard(r, c) {
 function renderLocRow(pos) {
   const t = pos.src === 'gps' ? 'GPS' : pos.src === 'outside' ? 'パークの外' : pos.src === 'none' ? '未設定' : '推定';
   const sub = pos.src === 'land' ? landById[S.land]?.ja : pos.src === 'last' ? pos.label.replace(/^最後に体験した「(.+)」付近と仮定$/, '$1 付近') : pos.src === 'entrance' ? '入口' : pos.src === 'gps' && pos.weak ? '精度低め' : '';
-  return `<div class="card locrow">${ic('pin')}<div class="locrow__t">現在地 <b>${t}</b>${sub ? ` · ${esc(sub)}` : ''}${R.gpsErr ? `<br><span style="color:var(--red)">${esc(R.gpsErr)}</span>` : ''}</div>
-    <button class="btn btn--sm" data-act="pick-land">変更</button></div>`;
+  return `<div class="setrow locrow"><span class="setrow__ico">${ic('pin')}</span><div class="setrow__b"><div class="setrow__t">現在地 <b>${t}</b>${sub ? ` · ${esc(sub)}` : ''}</div>${R.gpsErr ? `<div class="setrow__s" style="color:var(--red)">${esc(R.gpsErr)}</div>` : ''}</div>
+    <button class="btn btn--sm" data-act="pick-land">エリア</button></div>`;
 }
 function footer() {
   return `<p class="footer">非公式の個人用ナビ · 待ち時間 ThemeParks.wiki / Queue-Times.com</p>`;
@@ -741,9 +810,11 @@ const WALK_JA = { low: '少なめ', normal: 'ふつう', any: '気にしない' 
 function renderPlan() {
   const el = $('#view-plan');
   const c = ctx();
-  const sim = simulateDay(c);
+  const sim = planOf(c);
+  const manual = !!S.order;
+  const edit = R.planEdit;
   const done = doneRides();
-  const conflicts = anchorConflicts(c.anchors);
+  const conflicts = manual ? [] : anchorConflicts(c.anchors);
   const D = { plan: S.plan, cond: S.cond, must: mustMap(), prefs: S.prefs };
   const mustIds = Object.keys(mustMap()).filter((id) => attractionById[id]);
   let html = `<div class="card condsum">
@@ -752,26 +823,34 @@ function renderPlan() {
   html += `<div class="kpis">
     <div class="card kpi"><b>${done.length + sim.rides}</b><span>乗り物</span></div>
     <div class="card kpi"><b>${mustIds.length - sim.missingMust.length}/${mustIds.length}</b><span>絶対乗る</span></div>
-    <div class="card kpi"><b>${c.anchors.length}</b><span>ごはん・ショー</span></div></div>`;
-  if (sim.missingMust.length) html += `<div class="note note--bad">${ic('alert')}<div><div class="note__t">${sim.missingMust.map((id) => esc(attractionById[id].short)).join('・')} が入りきらない</div><div class="note__s">休止中なら再開後に最優先で案内</div></div></div>`;
+    <div class="card kpi"><b>${sim.items.filter((i) => i.type === 'meal' || i.type === 'show').length}</b><span>ごはん・ショー</span></div></div>`;
+  if (sim.missingMust.length) html += `<div class="note note--bad">${ic('alert')}<div><div class="note__t">${sim.missingMust.map((id) => esc(attractionById[id].short)).join('・')} が入りきらない</div><div class="note__s">${manual ? '「追加」から入れられます' : '休止中なら再開後に最優先で案内'}</div></div></div>`;
   if (conflicts.length) html += `<div class="note note--bad">${ic('alert')}<div><div class="note__t">ごはんとショーの時間が重なっています</div></div></div>`;
 
-  html += `<div class="sec"><h2><span class="sec__en">TIMELINE</span>これから</h2>
-    <button class="btn btn--sm ${R.liveStatus === 'loading' ? 'is-busy' : ''}" data-act="replan" ${R.liveStatus === 'loading' ? 'disabled' : ''}>${ic('refresh')}組み直す</button></div><ol class="tl">`;
+  html += `<div class="sec"><h2><span class="sec__en">TIMELINE</span>これから</h2><span class="sec__btns">
+    ${edit ? `<button class="btn btn--sm btn--primary" data-act="plan-edit-done">${ic('check')}完了</button>`
+      : `<button class="btn btn--sm" data-act="plan-edit-order">${ic('edit')}編集</button><button class="btn btn--sm ${R.liveStatus === 'loading' ? 'is-busy' : ''}" data-act="replan" ${R.liveStatus === 'loading' ? 'disabled' : ''}>${ic('refresh')}${manual ? '更新' : '組み直す'}</button>`}</span></div>
+    <div class="planmode ${manual ? 'is-manual' : ''}">${manual
+      ? `${ic('edit')}<span>あなたの順番で時刻を計算中</span><button class="linkbtn" data-act="plan-auto">おまかせに戻す</button>`
+      : `${ic('refresh')}<span>おまかせ：待ち時間と歩く距離で自動で並べています${edit ? '（動かすとあなたの順番に切り替わります）' : ''}</span>`}</div>
+    <ol class="tl ${edit ? 'tl--edit' : ''}">`;
+  const ctl = (id) => `<span class="tl__ctl"><button data-mv="${id}" data-d="-1" aria-label="上へ">${ic('up')}</button><button data-mv="${id}" data-d="1" aria-label="下へ">${ic('down')}</button><button class="tl__rm" data-rm="${id}" aria-label="削除">${ic('x')}</button></span>`;
   for (const it of sim.items) {
-    if (it.type === 'free' && it.end - it.start < 10) continue;
+    if (it.type === 'free' && (it.end - it.start < 10 || edit)) continue;
     if (it.type === 'ride') {
       const a = it.a;
-      html += `<li class="tl__item ${it.must ? 'tl__item--must' : ''}"><span class="tl__time">${clock(it.start)}</span>
-        <div class="tl__card"><button class="tl__main" data-open="${a.id}"><span class="tl__name">${jw(a.short)}${it.must ? '<span class="tag tag--must">絶対</span>' : ''}</span>
-          <span class="tl__meta"><span>${ic('clock')}待ち${it.wait}分</span>${kindTag(it.waitKind)}<span>${ic('walk')}${it.walk}分</span><span>〜<span class="num">${clock(it.end)}</span></span></span></button>
-          <button class="check" data-done="${a.id}" aria-label="${esc(a.short)} 乗った">${ic('check')}</button></div></li>`;
+      const off = it.blocked || it.over;
+      html += `<li class="tl__item ${it.must ? 'tl__item--must' : ''} ${off ? 'tl__item--off' : ''}"><span class="tl__time">${off ? '—' : clock(it.start)}</span>
+        <div class="tl__card"><button class="tl__main" data-open="${a.id}"><span class="tl__name">${jw(a.short)}${it.must ? '<span class="tag tag--must">絶対</span>' : ''}${it.blocked ? `<span class="tag tag--bad">${esc(it.blocked)}</span>` : ''}${it.over ? '<span class="tag tag--bad">閉園に間に合わない</span>' : ''}</span>
+          ${off ? '' : `<span class="tl__meta"><span>${ic('clock')}待ち${it.wait}分</span>${kindTag(it.waitKind)}<span>${ic('walk')}${it.walk}分</span><span>〜<span class="num">${clock(it.end)}</span></span></span>`}</button>
+          ${edit ? ctl(a.id) : `<button class="check" data-done="${a.id}" aria-label="${esc(a.short)} 乗った">${ic('check')}</button>`}</div></li>`;
     } else if (it.type === 'meal' || it.type === 'show') {
       const x = it.anchor;
+      const lateTag = x.late === 'miss' ? '<span class="tag tag--bad">間に合わない</span>' : x.late === 'short' ? '<span class="tag tag--warn">場所取り短め</span>' : '';
       html += `<li class="tl__item tl__item--${it.type}"><span class="tl__time">${clock(x.start)}</span>
-        <div class="tl__card"><button class="tl__main" data-anchor-edit="${x.id}"><span class="tl__name">${jw(x.title)}${x.shifted ? '<span class="tag tag--warn">時間をずらした</span>' : ''}</span>
-          <span class="tl__meta">${it.type === 'meal' ? `<span>${ic('food')}${esc(x.place)}</span>` : ''}<span><span class="num">${clock(x.start)}–${clock(x.end)}</span></span>${x.claim ? `<span style="color:var(--red)">場所取り <span class="num">${clock(x.start - x.claim)}</span>〜</span>` : ''}</span></button>
-          <button class="check" data-done="${x.id}" aria-label="${esc(x.title)} 完了">${ic('check')}</button></div></li>`;
+        <div class="tl__card"><button class="tl__main" data-anchor-edit="${x.id}"><span class="tl__name">${jw(x.title)}${it.type === 'show' ? '<span class="tag">時刻固定</span>' : ''}${x.shifted && !manual ? '<span class="tag tag--warn">時間をずらした</span>' : ''}${lateTag}</span>
+          <span class="tl__meta">${it.type === 'meal' ? `<span>${ic('food')}${esc(x.place)}</span>` : ''}<span><span class="num">${clock(x.start)}–${clock(x.end)}</span></span>${x.claim && x.late !== 'miss' ? `<span style="color:var(--red)">場所取り <span class="num">${clock(it.claimFrom ?? x.start - x.claim)}</span>〜</span>` : ''}</span></button>
+          ${edit ? ctl(x.id) : `<button class="check" data-done="${x.id}" aria-label="${esc(x.title)} 完了">${ic('check')}</button>`}</div></li>`;
     } else if (it.type === 'dropped') {
       html += `<li class="tl__item tl__item--dropped"><span class="tl__time">${clock(it.start)}</span>
         <div class="tl__card"><div class="tl__main"><span class="tl__name" style="text-decoration:line-through">${esc(it.anchor.title)}</span><span class="tl__meta">絶対乗るものを優先して見送り</span></div></div></li>`;
@@ -779,7 +858,7 @@ function renderPlan() {
       html += `<li class="tl__item tl__item--free"><span class="tl__time">${clock(it.start)}</span><div class="tl__card">自由時間 ${fmtDur(it.end - it.start)}</div></li>`;
     }
   }
-  html += `</ol>`;
+  html += `</ol><button class="btn btn--block addbtn" data-act="plan-add">${ic('plus')}乗り物・ごはん・ショーを追加</button>`;
 
   const doneIds = Object.keys(S.done).sort((a, b) => (S.doneMin[a] ?? 0) - (S.doneMin[b] ?? 0) || S.done[a] - S.done[b]);
   if (doneIds.length) {
@@ -794,6 +873,31 @@ function renderPlan() {
   R.lastPlanIds = sim.items.map((i) => i.id).join(',');
 }
 
+// ---------- add sheet: any ride / meal / show, placed where the route flows best (or as the very next stop) ----------
+function openAddSheet() {
+  const c = ctx();
+  const inPlan = new Set(S.order || orderFromPlan(simulateDay(c)));
+  const rides = ATTRACTIONS.filter((a) => !S.done[a.id] && !inPlan.has(a.id))
+    .sort((a, b) => b.pop - a.pop || (PRIORITY[b.id] || 0) - (PRIORITY[a.id] || 0));
+  const meals = PLANS[S.plan].meals.filter((m) => !inPlan.has('meal:' + m.id) && !S.done['meal:' + m.id]);
+  const shows = SHOWS.filter((x) => !inPlan.has('show:' + x.id) && !S.done['show:' + x.id]);
+  const best = R.addMode !== 'next';
+  openSheet(`<div class="sheet__content">
+    <div><div class="kicker">Add</div><h2 class="sheet__title" id="sheetTitle">プランに追加</h2></div>
+    <div class="seg"><button class="${best ? 'is-active' : ''}" data-add-mode="best">動線のいい位置に</button><button class="${best ? '' : 'is-active'}" data-add-mode="next">次に行く</button></div>
+    ${meals.length || shows.length ? `<div class="card rows">${meals.map((m) => {
+      const mc = mealCfg(m.id);
+      return `<button class="row" type="button" data-add="meal:${m.id}"><span class="row__body"><span class="row__k">ごはん</span><span class="row__name">${esc(m.ja)}</span><span class="row__meta">${ic('food')}${esc(restaurantById[mc.rest]?.ja || '')} · ${mc.dur}分</span></span><span class="row__chev">${ic('plus')}</span></button>`;
+    }).join('')}${shows.map((x) => `<button class="row" type="button" data-add="show:${x.id}"><span class="row__body"><span class="row__k">ショー</span><span class="row__name">${jw(x.short)}</span><span class="row__meta">${ic('clock')}${showTimesFor(x.id).times.join(' / ')}</span></span><span class="row__chev">${ic('plus')}</span></button>`).join('')}</div>` : ''}
+    <div class="card rows">${rides.map((a) => {
+      const w = waitInfo(a);
+      return `<button class="row" type="button" data-add="${a.id}"><span class="row__thumb">${rideImg(a)}</span>
+        <span class="row__body"><span class="row__k">${esc(landById[a.land]?.ja || '')}</span><span class="row__name">${jw(a.short)}</span><span class="row__meta">${ic('walk')}${walkMin(c.pos, coordsOf(a.id))}分</span></span>
+        <span class="row__wait">${w.wait == null ? `<span class="tag tag--bad">${esc(STATUS_JA[w.status] || '休止')}</span>` : `<b class="${waitClass(w.wait)}">${w.wait}</b><small>分</small>`}</span></button>`;
+    }).join('') || '<div class="empty">追加できる乗り物はありません</div>'}</div>
+  </div>`, { keepScroll: true });
+}
+
 // ---------- condition builder (one screen; edits a draft, applied with one button) ----------
 const MEAL_JA = { lunch: 'ランチ', snack: 'おやつ', dinner: 'ディナー' };
 const MEAL_RANGE = { lunch: [10 * 60 + 30, 14 * 60], snack: [13 * 60, 17 * 60 + 30], dinner: [16 * 60 + 30, 20 * 60 + 30] };
@@ -801,10 +905,10 @@ function draftCtx(D) {
   const showTimes = {};
   for (const s of SHOWS) showTimes[s.id] = showTimesFor(s.id).times;
   const anchorsD = buildAnchors(D.plan, { ...D.prefs, showTimes }, S.done);
-  return ctx({ planId: D.plan, cond: D.cond, must: D.must, excluded: D.excluded, anchors: anchorsD });
+  return ctx({ planId: D.plan, cond: D.cond, must: D.must, excluded: D.excluded, anchors: anchorsD, pin: D.first ? { id: D.first, until: hours().close } : S.pin });
 }
 function openPlanBuilder(focus) {
-  if (!R.draft) R.draft = structuredClone({ plan: S.plan, cond: S.cond, must: mustMap(), excluded: S.excluded, prefs: { ...S.prefs, showTimes: undefined } });
+  if (!R.draft) R.draft = structuredClone({ plan: S.plan, cond: S.cond, must: mustMap(), excluded: S.excluded, prefs: { ...S.prefs, showTimes: undefined }, first: '' });
   const D = R.draft;
   const sim = simulateDay(draftCtx(D));
   const mustIds = Object.keys(D.must);
@@ -820,6 +924,8 @@ function openPlanBuilder(focus) {
         <div class="opts">${opt('maxWait', 30, '〜30分', '空いてる所')}${opt('maxWait', 60, '〜60分', 'ふつう')}${opt('maxWait', 90, '〜90分', '人気優先')}</div></div>
       <div class="field"><div class="field__h"><b>動線</b><span>歩く量</span></div>
         <div class="opts">${opt('walk', 'low', '少なめ', '近くを順に')}${opt('walk', 'normal', 'ふつう', '')}${opt('walk', 'any', '気にしない', '遠くてもOK')}</div></div>
+      <div class="field" id="b-first"><div class="field__h"><b>次に行きたいところ</b><span>あれば</span></div>
+        <select data-b-first aria-label="次に行きたいところ"><option value="">おまかせ</option>${rides.filter((a) => !S.done[a.id]).map((a) => `<option value="${a.id}" ${D.first === a.id ? 'selected' : ''}>${esc(a.short)}</option>`).join('')}</select></div>
       <div class="field" id="b-rides"><div class="field__h"><b>乗りたいもの</b><span>タップで切替</span></div>
         <div class="legend"><span><i class="m"></i>絶対乗る</span><span><i></i>おまかせ</span><span><i class="s"></i>乗らない</span></div>
         <div class="ridepick">${rides.map((a) => {
@@ -829,7 +935,8 @@ function openPlanBuilder(focus) {
       <div class="field" id="b-meals"><div class="field__h"><b>ごはん</b><span>お店と時間</span></div>
         ${PLANS[D.plan].meals.map((m) => {
           const ov = D.prefs.mealOverrides[m.id] || {};
-          const at = ov.at ?? m.at, rest = ov.restaurant || m.restaurant, on = !ov.off;
+          const at = ov.at ?? m.at, rest = ov.restaurant || m.restaurant, on = !ov.off, dur = ov.dur ?? m.dur;
+          const durs = [...new Set([20, 30, 45, 60, 75, 90, 120, dur])].sort((x, y) => x - y);
           const [t0, t1] = MEAL_RANGE[m.id];
           const times = []; for (let t = t0; t <= t1; t += 15) times.push(t);
           if (!times.includes(at)) times.push(at), times.sort((x, y) => x - y);
@@ -838,6 +945,7 @@ function openPlanBuilder(focus) {
             ${on ? `<div class="mealrow__ctl">
               <select data-b-meal-rest="${m.id}" aria-label="${MEAL_JA[m.id]}のお店">${opts.map((r) => `<option value="${r.id}" ${r.id === rest ? 'selected' : ''}>${esc(r.ja)}</option>`).join('')}</select>
               <select data-b-meal-at="${m.id}" aria-label="${MEAL_JA[m.id]}の時間" class="num">${times.map((t) => `<option value="${t}" ${t === at ? 'selected' : ''}>${clock(t)}</option>`).join('')}</select>
+              <select data-b-meal-dur="${m.id}" aria-label="${MEAL_JA[m.id]}にかける時間" class="num">${durs.map((t) => `<option value="${t}" ${t === dur ? 'selected' : ''}>${t}分</option>`).join('')}</select>
             </div>` : ''}</div>`;
         }).join('')}</div>
       <div class="field" id="b-shows"><div class="field__h"><b>見たいショー</b><span>回を選ぶ</span></div>
@@ -848,7 +956,7 @@ function openPlanBuilder(focus) {
             ${showOn(s.id) ? `<div class="times">${st.times.map((t) => `<button class="time ${t === pick ? 'is-active' : ''}" data-b-show-pick="${s.id}" data-time="${t}">${t}</button>`).join('')}</div>` : ''}</div>`;
         }).join('')}</div>
     </div></div>
-    <div class="sheet__foot"><button class="btn btn--primary btn--block" data-act="plan-apply">この条件でプランを作る<span class="num" style="font-weight:500;margin-left:6px">乗り物 ${doneRides().length + sim.rides} · 絶対 ${mustIds.length - sim.missingMust.length}/${mustIds.length}</span></button></div>`,
+    <div class="sheet__foot">${S.order ? '<p class="sheet__hint">自分で並べた順番は、おまかせで作り直されます</p>' : ''}<button class="btn btn--primary btn--block" data-act="plan-apply">この条件でプランを作る<span class="num" style="font-weight:500;margin-left:6px">乗り物 ${doneRides().length + sim.rides} · 絶対 ${mustIds.length - sim.missingMust.length}/${mustIds.length}</span></button></div>`,
   { keepScroll: true });
   if (focus) { const f = $('#b-' + focus); if (f) $('.sheet__panel').scrollTop = f.offsetTop - 30; }
 }
@@ -858,6 +966,8 @@ function applyPlanDraft() {
   S.plan = D.plan; S.cond = D.cond; S.must = D.must; S.excluded = D.excluded;
   S.prefs = { ...S.prefs, mealOverrides: D.prefs.mealOverrides, shows: D.prefs.shows };
   for (const id of Object.keys(S.must)) delete S.excluded[id];
+  S.order = null; // conditions → fresh おまかせ plan, which can then be edited
+  if (D.first) { S.pin = { id: D.first, until: hours().close }; delete S.excluded[D.first]; }
   save(); closeSheet(); go('plan');
   toast(`プランを作りました（乗り物 ${doneRides().length + simulateDay(ctx()).rides}）`, 'ok');
 }
@@ -994,6 +1104,7 @@ function openAttraction(id) {
         ${S.done[a.id] ? `<button class="btn" data-done="${a.id}">${ic('check')}済み ${S.doneMin[a.id] != null ? clock(S.doneMin[a.id]) : ''}</button>` : `<button class="btn btn--primary" data-done="${a.id}" data-close>${ic('check')}乗った</button>`}
         <a class="btn" href="${routeUrl(pos)}" target="_blank" rel="noopener">${ic('route')}ルート</a>
       </div>
+      ${S.done[a.id] ? '' : `<div class="btnrow">${(S.order || orderFromPlan(simulateDay(c))).includes(a.id) ? `<span class="muted" style="flex:1;align-self:center;font-size:13px">${ic('check')} プランに入っています</span>` : `<button class="btn" data-add="${a.id}" data-add-how="best" data-close>${ic('plus')}プランに追加</button>`}<button class="btn" data-add="${a.id}" data-add-how="next" data-close>${ic('flag')}次に行く</button></div>`}
       <div class="seg"><button class="${must ? 'is-active' : ''}" data-ride-st="${a.id}" data-v="must">絶対乗る</button><button class="${!must && !S.excluded[a.id] ? 'is-active' : ''}" data-ride-st="${a.id}" data-v="">おまかせ</button><button class="${S.excluded[a.id] ? 'is-active' : ''}" data-ride-st="${a.id}" data-v="skip">乗らない</button></div>
       <p class="para">${esc(a.desc)}</p>
       <div class="box"><b>日本との違い</b>${esc(a.japan)}</div>
@@ -1058,21 +1169,23 @@ function openShow(id) {
 function mealCfg(mealId) {
   const base = PLANS[S.plan].meals.find((m) => m.id === mealId);
   const ov = S.prefs.mealOverrides[mealId] || {};
-  return { base, ov, at: ov.at ?? base.at, rest: ov.restaurant || base.restaurant };
+  return { base, ov, at: ov.at ?? base.at, rest: ov.restaurant || base.restaurant, dur: ov.dur ?? base.dur };
 }
 function openAnchorEdit(id) {
   if (id.startsWith('show:')) return openShow(id.slice(5));
   const mealId = id.slice(5);
-  const { base, ov, at, rest } = mealCfg(mealId);
+  const { base, ov, at, rest, dur } = mealCfg(mealId);
   const opts = RESTAURANTS.filter((r) => (mealId === 'snack' ? true : r.kind === 'meal' || r.kind === 'cafe'));
   const c = ctx();
   openSheet(`<div class="sheet__content">
     <div><div class="kicker">Meal</div><h2 class="sheet__title" id="sheetTitle">${esc(base.ja)}</h2></div>
     <div class="stepper">
       <button data-meal-step="${mealId}" data-delta="-15">−15分</button>
-      <div class="stepper__v">${clock(at)}<div style="font-family:var(--jp);font-size:12px;font-weight:700;color:var(--muted)">${base.dur}分</div></div>
+      <div class="stepper__v">${clock(at)}<div style="font-family:var(--jp);font-size:12px;font-weight:700;color:var(--muted)">${S.order ? '順番で決まる' : '開始'}</div></div>
       <button data-meal-step="${mealId}" data-delta="15">＋15分</button>
     </div>
+    <div class="field__h" style="margin:0"><b>食事にかける時間</b><span class="num">${dur}分</span></div>
+    <div class="times">${[20, 30, 45, 60, 75, 90, 120].map((t) => `<button class="time ${t === dur ? 'is-active' : ''}" data-meal-dur="${mealId}" data-v="${t}">${t}分</button>`).join('')}</div>
     <div class="restgrid">${opts.map((r) => `<button class="rest ${r.id === rest ? 'is-active' : ''}" data-meal-rest="${mealId}" data-rest="${r.id}">
       <span class="rest__n">${jw(r.ja)}</span><span class="rest__s">徒歩${walkMin(c.pos, coordsOf(r.id))}分${r.mobile === 'yes' ? ' · MO' : ''}</span></button>`).join('')}</div>
     <div class="btnrow"><button class="btn" data-meal-off="${mealId}">${ov.off ? '予定に戻す' : '今日は省略'}</button><button class="btn" data-meal-reset="${mealId}">初期設定</button></div>
@@ -1100,6 +1213,7 @@ function openSettings() {
     <div>
       <div class="setrow"><span class="setrow__ico">${ic('locate')}</span><div class="setrow__b"><div class="setrow__t">現在地（GPS）</div><div class="setrow__s">${S.gps && R.gpsPos ? `使用中 · 精度 約${Math.round(R.gpsPos.acc)}m` : 'オフ'}</div></div>
         <span class="toggle"><input type="checkbox" data-gps-toggle ${S.gps ? 'checked' : ''} aria-label="現在地を使う"><i></i></span></div>
+      ${renderLocRow(position())}
       <div class="setrow"><span class="setrow__ico">${ic('refresh')}</span><div class="setrow__b"><div class="setrow__t">待ち時間</div><div class="setrow__s">${liveTxt}</div></div>
         <button class="btn btn--sm" data-act="refresh">更新</button></div>
       <div class="setrow"><span class="setrow__ico">${ic('x')}</span><div class="setrow__b"><div class="setrow__t">記録をリセット</div><div class="setrow__s">済み・プランの条件を消去</div></div>
@@ -1189,7 +1303,16 @@ document.addEventListener('click', async (e) => {
   if (d.openShow) return openShow(d.openShow);
   if (d.done) return markDone(d.done);
   if (d.undo) return undoDone(d.undo);
+  if (d.add) { const how = d.addHow || R.addMode; closeSheet(); return addToPlan(d.add, how); }
+  if (d.addMode) { R.addMode = d.addMode; return openAddSheet(); }
+  if (d.mv) return moveInPlan(d.mv, Number(d.d));
+  if (d.rm) return removeFromPlan(d.rm);
+  if (d.mealDur) {
+    S.prefs.mealOverrides[d.mealDur] = { ...(S.prefs.mealOverrides[d.mealDur] || {}), dur: Number(d.v) }; save(); renderView();
+    return openAnchorEdit('meal:' + d.mealDur);
+  }
   if (d.pin) {
+    if (S.order) { S.order = [d.pin, ...S.order.filter((x) => x !== d.pin)]; }
     S.pin = { id: d.pin, until: nowMin() + 30 }; R.alerts = R.alerts.filter((x) => x.id !== d.pin); save();
     go('home'); return toast(`${attractionById[d.pin].short} を次の行き先にしました`, 'ok');
   }
@@ -1267,6 +1390,11 @@ document.addEventListener('click', async (e) => {
     case 'plan-edit': R.draft = null; return openPlanBuilder();
     case 'plan-edit-shows': R.draft = null; return openPlanBuilder('shows');
     case 'plan-apply': return applyPlanDraft();
+    case 'plan-add': return openAddSheet();
+    case 'plan-edit-order': R.planEdit = true; return renderPlan();
+    case 'plan-edit-done': R.planEdit = false; return renderPlan();
+    case 'plan-auto': { const sn = snapshot(); S.order = null; save(); renderAll(); return toast('おまかせのプランに戻しました', '', { label: '元に戻す', fn: () => restore(sn) }); }
+    case 'prog-toggle': R.progOpen = !R.progOpen; return renderHome();
     case 'replan': {
       const before = R.lastPlanIds;
       await fetchLive({ manual: false });
@@ -1298,6 +1426,8 @@ document.addEventListener('change', (e) => {
     if (d.bMealOn) { const o = D.prefs.mealOverrides[d.bMealOn] = { ...(D.prefs.mealOverrides[d.bMealOn] || {}) }; o.off = !t.checked; return openPlanBuilder(); }
     if (d.bMealRest) { D.prefs.mealOverrides[d.bMealRest] = { ...(D.prefs.mealOverrides[d.bMealRest] || {}), restaurant: t.value }; return openPlanBuilder(); }
     if (d.bMealAt) { D.prefs.mealOverrides[d.bMealAt] = { ...(D.prefs.mealOverrides[d.bMealAt] || {}), at: Number(t.value) }; return openPlanBuilder(); }
+    if (d.bFirst !== undefined) { D.first = t.value; return openPlanBuilder(); }
+    if (d.bMealDur) { D.prefs.mealOverrides[d.bMealDur] = { ...(D.prefs.mealOverrides[d.bMealDur] || {}), dur: Number(t.value) }; return openPlanBuilder(); }
     if (d.bShowOn) { D.prefs.shows[d.bShowOn] = { ...(D.prefs.shows[d.bShowOn] || {}), on: t.checked }; return openPlanBuilder(); }
   }
 });

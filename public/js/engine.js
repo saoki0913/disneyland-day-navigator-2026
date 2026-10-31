@@ -98,7 +98,7 @@ export function buildAnchors(planId, prefs = {}, done = {}) {
     const r = restaurantById[ov.restaurant || m.restaurant];
     out.push({
       id: 'meal:' + m.id, kind: 'meal', title: m.ja, place: r?.ja, restaurant: r?.id,
-      start: ov.at ?? m.at, end: (ov.at ?? m.at) + m.dur, claim: 0,
+      start: ov.at ?? m.at, end: (ov.at ?? m.at) + (ov.dur ?? m.dur), claim: 0,
       pos: r?.pos, emoji: r?.emoji || '🍽️', done: !!done['meal:' + m.id], flex: m.id === 'snack',
     });
   }
@@ -405,6 +405,81 @@ function stripDown(live, ctx) {
     out[k] = { ...v, wait: null };
   }
   return out;
+}
+
+// ---------- user-edited plan (fixed order) ----------
+/**
+ * Lay out a user-ordered plan. order: ['rideId' | 'meal:lunch' | 'show:fantasmic', ...]
+ * - rides: walk + wait (live near now, estimate later) + ride, in the given order
+ * - meals: start whenever you arrive (time follows the order), duration from the anchor
+ * - shows: fixed performance time; arriving early leaves free time, arriving late is flagged
+ * Returns the same shape as simulateDay: { items, missingMust, rides, late }.
+ */
+export function planFromOrder(ctx, order) {
+  const anchorById = Object.fromEntries((ctx.anchors || []).map((a) => [a.id, a]));
+  const startNow = ctx.now;
+  let now = Math.max(ctx.now, ctx.openMin);
+  let pos = ctx.pos;
+  const items = [];
+  const scheduled = {};
+  let late = 0;
+  for (const id of order || []) {
+    if (ctx.done?.[id]) continue;
+    const a = attractionById[id];
+    if (a) {
+      const p = ctx.coords?.[a.id] || a.pos;
+      const walk = walkMin(pos, p);
+      const live = now - startNow <= 30 ? ctx.live : stripDown(ctx.live, ctx);
+      const av = availability(a, { ...ctx, live, now: Math.max(startNow, ctx.openMin), preopen: startNow < ctx.openMin });
+      if (!av.ok) { items.push({ type: 'ride', id, a, blocked: av.reason, start: now, end: now, walk, wait: null, must: isMust(a, ctx) }); continue; }
+      const start = now + walk;
+      if (start > ctx.closeMin - 2) { items.push({ type: 'ride', id, a, over: true, start, end: start, walk, wait: null, must: isMust(a, ctx) }); continue; }
+      const w = waitFor(a, start, { ...ctx, live });
+      const end = start + w.wait + a.dur;
+      items.push({ type: 'ride', id, a, walk, start, wait: w.wait, waitKind: w.kind, end, must: isMust(a, ctx) });
+      scheduled[id] = true;
+      now = end; pos = p;
+      continue;
+    }
+    const x = anchorById[id];
+    if (!x || x.done) continue;
+    const walk = walkMin(pos, x.pos);
+    const arrive = now + walk;
+    if (x.kind === 'meal') {
+      const d = x.end - x.start;
+      const an = { ...x, start: arrive, end: arrive + d, shifted: arrive !== x.start };
+      items.push({ type: 'meal', id, anchor: an, start: arrive, end: an.end, walk });
+      now = an.end; pos = x.pos || pos;
+    } else {
+      const claimFrom = x.start - (x.claim || 0);
+      const an = { ...x };
+      if (arrive > x.start + 5) { an.late = 'miss'; late++; }
+      else if (arrive > claimFrom) an.late = 'short';
+      if (!an.late && claimFrom - walk - now >= 10) items.push({ type: 'free', start: now, end: claimFrom - walk, minutes: claimFrom - walk - now });
+      items.push({ type: 'show', id, anchor: an, start: x.start, claimFrom: Math.max(arrive, claimFrom), end: x.end, walk });
+      if (an.late !== 'miss') { now = Math.max(x.end, arrive); pos = x.pos || pos; }
+    }
+  }
+  if (now < ctx.closeMin - 10) items.push({ type: 'free', start: now, end: ctx.closeMin, minutes: ctx.closeMin - now });
+  const missingMust = Object.keys(mustOf(ctx)).filter((id) => !ctx.done?.[id] && !scheduled[id] && !ctx.excluded?.[id]);
+  return { items, missingMust, rides: items.filter((i) => i.type === 'ride' && !i.blocked && !i.over).length, late };
+}
+
+/** Choose where to insert `id` into `order` so the day flows best (no missed shows, least total time). */
+export function bestInsert(ctx, order, id) {
+  const cost = (o) => {
+    const r = planFromOrder(ctx, o);
+    const over = r.items.filter((i) => i.over).length;
+    const last = r.items.filter((i) => i.type !== 'free').pop();
+    return r.late * 10000 + over * 5000 + (last ? last.end : 0);
+  };
+  let best = null;
+  for (let i = 0; i <= order.length; i++) {
+    const o = [...order.slice(0, i), id, ...order.slice(i)];
+    const c = cost(o);
+    if (!best || c < best.c) best = { c, o, i };
+  }
+  return best.o;
 }
 
 export const _test = { scoreRide, stripDown };

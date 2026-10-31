@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { recommend, simulateDay, buildAnchors, anchorConflicts, crowdRatio, walkMin, distanceM } from '../public/js/engine.js';
+import { recommend, simulateDay, planFromOrder, bestInsert, buildAnchors, anchorConflicts, crowdRatio, walkMin, distanceM } from '../public/js/engine.js';
 import { normalizeTPWLive } from '../lib/server.js';
 import { ATTRACTIONS } from '../public/js/data.js';
 
@@ -165,4 +165,46 @@ test('lower wait tolerance plans shorter average waits', () => {
 test('"歩く量 少なめ" plans less total walking than "気にしない"', () => {
   const walk = (w) => simulateDay({ ...base({ now: 480 }), cond: { maxWait: 60, walk: w } }).items.filter((i) => i.type === 'ride').reduce((s, i) => s + i.walk, 0);
   assert.ok(walk('low') <= walk('any'), `low:${walk('low')} any:${walk('any')}`);
+});
+
+// ---------- user-edited plan (fixed order) ----------
+const orderOf = (sim) => sim.items.filter((i) => ['ride', 'meal', 'show'].includes(i.type)).map((i) => i.id);
+test('planFromOrder: keeps the user order exactly; meals follow the order, shows keep their time', () => {
+  const c = base({ now: 600 });
+  const order = ['meal:dinner', 'space', 'rise', 'show:fantasmic'];
+  const r = planFromOrder(c, order);
+  const ids = r.items.filter((i) => i.type !== 'free').map((i) => i.id);
+  assert.deepEqual(ids, order);
+  const dinner = r.items.find((i) => i.id === 'meal:dinner');
+  assert.ok(dinner.start < 660, 'dinner moved to where the user put it');
+  const f = r.items.find((i) => i.id === 'show:fantasmic');
+  const orig = c.anchors.find((a) => a.id === 'show:fantasmic');
+  assert.equal(f.start, orig.start, 'show time is fixed');
+  for (let i = 1; i < ids.length - 1; i++) assert.ok(r.items[i].start >= r.items[i - 1].end - 0.01);
+});
+test('planFromOrder: meal duration override is used', () => {
+  const c = { ...base({ now: 600 }), anchors: buildAnchors('balance', { mealOverrides: { lunch: { dur: 120 } } }) };
+  const r = planFromOrder(c, ['meal:lunch']);
+  const m = r.items.find((i) => i.id === 'meal:lunch');
+  assert.equal(m.end - m.start, 120);
+});
+test('planFromOrder: show reached too late is flagged, not silently dropped', () => {
+  const c = base({ now: 1300 });
+  const r = planFromOrder(c, ['rise', 'falcon', 'space', 'indy', 'show:fantasmic']);
+  assert.ok(r.items.some((i) => i.over || i.anchor?.late));
+});
+test('planFromOrder: a snapshot of the auto plan reproduces it', () => {
+  const c = base({ now: 480 });
+  const sim = simulateDay(c);
+  const r = planFromOrder(c, orderOf(sim));
+  assert.deepEqual(orderOf(r), orderOf(sim));
+  assert.deepEqual(r.missingMust, []);
+});
+test('bestInsert: never inserts in a way that makes a show late when another slot works', () => {
+  const c = base({ now: 480 });
+  const order = orderOf(simulateDay(c)).filter((id) => id !== 'pirates');
+  const o = bestInsert(c, order, 'pirates');
+  assert.equal(o.length, order.length + 1);
+  const before = planFromOrder(c, order).late;
+  assert.ok(planFromOrder(c, o).late <= before);
 });

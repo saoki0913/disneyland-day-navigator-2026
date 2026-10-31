@@ -139,6 +139,43 @@ body.has-actionbar main { padding-bottom: calc(var(--tabh, 60px) + 90px); }
 .must.is-done { background: var(--navy); color: #fff; }
 .must.is-down { border-style: dashed; color: var(--muted); }
 
+/* home: slim progress band (tap to expand) */
+.pband { padding: 0; overflow: hidden; }
+.pband__h { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 12px; min-height: 44px; text-align: left; }
+.pband .prog__n { font-size: 20px; flex: none; }
+.pband .prog__n small { font-size: 12px; }
+.pband__bar { flex: 1; min-width: 40px; height: 6px; border-radius: 3px; background: var(--card-2); border: 1px solid var(--line); overflow: hidden; }
+.pband__bar i { display: block; height: 100%; background: var(--red); }
+.pband__s { flex: 0 1 auto; min-width: 0; max-width: 52%; font-size: 12.5px; font-weight: 700; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pband__s .num { color: var(--red); }
+.pband__chev { flex: none; color: var(--muted); transition: transform .15s; }
+.pband.is-open .pband__chev { transform: rotate(90deg); }
+.pband__body { border-top: 1px solid var(--line); padding: 10px 12px 12px; display: grid; gap: 8px; }
+.pband__body .musts { padding: 0; }
+.mini { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.mini__i { display: flex; align-items: baseline; gap: 10px; font-size: 13.5px; padding: 4px 0; border-bottom: 1px dashed var(--line); }
+.mini__i .num { flex: none; width: 42px; text-align: right; color: var(--red); font-weight: 600; }
+.mini__n { flex: 1; min-width: 0; font-weight: 700; }
+.mini__i--meal .mini__n, .mini__i--show .mini__n { color: var(--mid); }
+.mini__w { flex: none; font-size: 12px; color: var(--muted); }
+.cdrow { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 13px; }
+.cdrow .ico { color: var(--red); flex: none; }
+
+/* plan editing */
+.sec__btns { display: flex; gap: 6px; }
+.planmode { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); margin: 0 2px; }
+.planmode span { flex: 1; min-width: 0; }
+.planmode .ico { flex: none; }
+.planmode.is-manual { color: var(--navy); font-weight: 700; }
+.tl__ctl { display: flex; gap: 4px; flex: none; }
+.tl__ctl button { width: 36px; height: 40px; display: grid; place-items: center; border-radius: 8px; border: 1px solid var(--navy); background: var(--card); font-size: 18px; }
+.tl__ctl button:active { background: var(--card-2); }
+.tl__ctl .tl__rm { border-color: var(--red); color: var(--red); }
+.tl--edit .tl__card { padding-right: 6px; }
+.tl__item--off .tl__card { border-style: dashed; opacity: .75; }
+.addbtn { border-style: dashed; margin-top: -4px; }
+.sheet__hint { margin: 0 0 6px; font-size: 12px; color: var(--muted); text-align: center; }
+
 /* notes & alerts */
 .note { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: var(--r); background: var(--mustard-l); border: 1px dashed var(--mid); font-size: 13.5px; }
 .note--bad { background: var(--red-l); border-color: var(--red); }
@@ -274,7 +311,8 @@ body.has-actionbar main { padding-bottom: calc(var(--tabh, 60px) + 90px); }
 .mealrow + .mealrow { border-top: 1px solid var(--line); }
 .mealrow__h { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .mealrow__h b { font-size: 14px; }
-.mealrow__ctl { display: grid; grid-template-columns: 1fr 84px; gap: 6px; margin-top: 8px; }
+.mealrow__ctl { display: grid; grid-template-columns: 1fr 84px 84px; gap: 6px; margin-top: 8px; }
+@media (max-width: 380px) { .mealrow__ctl { grid-template-columns: 1fr 1fr; } .mealrow__ctl select:first-child { grid-column: 1 / -1; } }
 .mealrow__ctl select { width: 100%; min-width: 0; }
 select, input[type=time], input[type=number], input[type=text] {
   min-height: 40px; border: var(--bw) solid var(--navy); border-radius: 8px; background: var(--card); padding: 0 8px; font-size: 15px;
@@ -394,6 +432,7 @@ details.more p { margin: 4px 0 0; font-size: 13.5px; }
 }
 .toast.is-on { opacity: 1; transform: none; }
 .toast.is-error { background: var(--red); }
+.toast.is-warn { background: var(--mid); }
 .toast .linkbtn { color: var(--mustard); margin-left: auto; flex: none; }
 
 /* ---------- map ---------- */
