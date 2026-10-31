@@ -443,6 +443,115 @@ export function simulateDay(ctx) {
   return { items, missingMust, waiting, rides: items.filter((i) => i.type === 'ride').length };
 }
 
+// ---------- the user's plan: fixed sequence, times recomputed ----------
+/**
+ * Lay out a plan in EXACTLY the given order (rides, 'meal:x', 'show:x'); nothing is reordered.
+ * - ride: walk + wait (live near now, estimate later) + ride
+ * - meal: starts on arrival, but not before its chosen time (time follows the order when moved)
+ * - show: fixed performance time; arriving early leaves free time, arriving late is only flagged
+ * - rides that are down now go to `waiting` (they keep their place in the order for later)
+ * Returns { items, waiting, missingMust, rides, late }.
+ */
+export function planFromOrder(ctx, order) {
+  const anchorById = Object.fromEntries((ctx.anchors || []).map((a) => [a.id, a]));
+  const startNow = ctx.now;
+  let now = Math.max(ctx.now, ctx.openMin);
+  let pos = ctx.pos;
+  const items = [], waiting = [], scheduled = {};
+  const late = [];
+  for (const id of order || []) {
+    if (ctx.done?.[id]) continue;
+    const a = attractionById[id];
+    if (a) {
+      const p = ctx.coords?.[a.id] || a.pos;
+      const live = now - startNow <= 30 ? ctx.live : stripDown(ctx.live, ctx);
+      const av = availability(a, { ...ctx, live, now: Math.max(startNow, ctx.openMin), preopen: startNow < ctx.openMin });
+      if (!av.ok) { waiting.push(id); continue; }
+      const walk = walkMin(pos, p);
+      const start = now + walk;
+      const w = waitFor(a, start, { ...ctx, live });
+      const end = start + w.wait + a.dur;
+      const it = { type: 'ride', id, a, walk, start, wait: w.wait, waitKind: w.kind, end, must: isMust(a, ctx) };
+      if (start > ctx.closeMin - 2) { it.over = true; late.push(id); }
+      items.push(it);
+      scheduled[id] = true;
+      now = end; pos = p;
+      continue;
+    }
+    const x = anchorById[id];
+    if (!x || x.done) continue;
+    const walk = walkMin(pos, x.pos);
+    const arrive = now + walk;
+    if (x.kind === 'meal') {
+      const d = x.end - x.start;
+      const start = Math.max(arrive, x.start);
+      if (start - walk - now >= 10) items.push({ type: 'free', start: now, end: start - walk, minutes: start - walk - now });
+      const an = { ...x, start, end: start + d, shifted: start > x.start + 4 };
+      items.push({ type: 'meal', id, anchor: an, start, end: an.end, walk });
+      now = an.end; pos = x.pos || pos;
+    } else {
+      const claimFrom = x.start - (x.claim || 0);
+      const an = { ...x };
+      if (arrive > x.start + 5) { an.late = 'miss'; late.push(id); }
+      else if (arrive > claimFrom + 5) an.late = 'short';
+      if (!an.late && claimFrom - walk - now >= 10) items.push({ type: 'free', start: now, end: claimFrom - walk, minutes: claimFrom - walk - now });
+      items.push({ type: 'show', id, anchor: an, start: x.start, claimFrom: Math.max(arrive, claimFrom), end: x.end, walk });
+      if (an.late !== 'miss') { now = Math.max(x.end, arrive); pos = x.pos || pos; }
+    }
+  }
+  if (now < ctx.closeMin - 10) items.push({ type: 'free', start: now, end: ctx.closeMin, minutes: ctx.closeMin - now });
+  const missingMust = Object.keys(mustOf(ctx)).filter((id) => !ctx.done?.[id] && !scheduled[id] && !ctx.excluded?.[id] && !waiting.includes(id));
+  return { items, waiting, missingMust, late, rides: items.filter((i) => i.type === 'ride' && !i.over).length };
+}
+
+/**
+ * Keep the plan's sequence in sync with the current meals/shows: drop ones that were turned off,
+ * insert newly turned-on ones by their time (before the first item that starts later).
+ * prevStarts: { id: plannedStart } from the previous layout.
+ */
+export function syncSequence(seq, anchors, prevStarts = {}) {
+  const ids = new Set(anchors.map((a) => a.id));
+  const out = seq.filter((id) => attractionById[id] || ids.has(id));
+  for (const a of anchors) {
+    if (out.includes(a.id)) continue;
+    const i = out.findIndex((id) => (prevStarts[id] ?? Infinity) > a.start);
+    out.splice(i < 0 ? out.length : i, 0, a.id);
+  }
+  return out;
+}
+
+/**
+ * For a re-optimised plan only (not for the user's own moves): a show that would be missed is moved
+ * earlier, right after the last item that still ends before its spot-claiming time.
+ */
+export function fitShows(ctx, seq) {
+  let out = [...seq];
+  for (let guard = 0; guard < 6; guard++) {
+    const r = planFromOrder(ctx, out);
+    const lateShow = r.items.find((i) => i.type === 'show' && i.anchor.late === 'miss');
+    if (!lateShow) break;
+    const claimFrom = lateShow.anchor.start - (lateShow.anchor.claim || 0);
+    const before = r.items.filter((i) => i.id && i.id !== lateShow.id && i.end + 10 <= claimFrom).map((i) => i.id);
+    const lastId = before.at(-1);
+    out = out.filter((x) => x !== lateShow.id);
+    const k = lastId ? out.indexOf(lastId) + 1 : out.findIndex((x) => !ctx.done?.[x]);
+    out.splice(k < 0 ? 0 : k, 0, lateShow.id);
+  }
+  return out;
+}
+
+/** Locked rides keep their index in the open (not-done) part of the previous sequence. */
+export function applyLocks(fresh, prevSeq, locks = {}, done = {}) {
+  const locked = Object.keys(locks).filter((id) => locks[id] && attractionById[id] && !done[id] && prevSeq.includes(id));
+  if (!locked.length) return fresh;
+  const prevOpen = prevSeq.filter((id) => !done[id]);
+  const out = fresh.filter((id) => !locked.includes(id));
+  for (const id of locked.sort((a, b) => prevOpen.indexOf(a) - prevOpen.indexOf(b))) {
+    out.splice(Math.min(prevOpen.indexOf(id), out.length), 0, id);
+  }
+  return out;
+}
+
 // For future times we don't know WHEN a DOWN ride reopens, so it stays out of the plan
 // ("再開待ち") until live data says it is operating again — then it comes back automatically.
 // Long-term closures (REFURBISHMENT, or CLOSED during operating hours) stay closed too.
