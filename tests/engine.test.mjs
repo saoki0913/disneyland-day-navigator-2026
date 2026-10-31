@@ -123,3 +123,12 @@ test('walking estimate is distance × 1.4 at 70 m/min', () => {
   assert.ok(d > 540 && d < 570);
   assert.equal(walkMin(a, b), Math.round((d * 1.4) / 70));
 });
+
+test('a pinned ride becomes the primary recommendation', () => {
+  const c = base({ now: 600 });
+  const r = recommend({ ...c, pin: { id: 'matterhorn', until: 700 } });
+  assert.equal(r.primary.a.id, 'matterhorn');
+  assert.equal(r.primary.reasons[0].k, 'pin');
+  const r2 = recommend({ ...c, pin: { id: 'matterhorn', until: 500 } }); // expired
+  assert.notEqual(r2.primary.a.id, 'matterhorn');
+});

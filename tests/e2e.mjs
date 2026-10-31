@@ -10,7 +10,8 @@ const base = process.argv[2] || 'http://127.0.0.1:8788';
 const SHOTS = process.env.SHOTS || 'screenshots';
 mkdirSync(SHOTS, { recursive: true });
 const fx = (n) => JSON.parse(readFileSync(new URL(`./fixtures/${n}`, import.meta.url)));
-const live = () => ({ ok: true, ...normalizeTPWLive(fx('tpw-live.json')), source: 'themeparks.wiki', sourceLabel: 'ThemeParks.wiki', fetchedAt: new Date().toISOString(), errors: [] });
+let liveVariant = 0;
+const live = () => { const n = normalizeTPWLive(fx('tpw-live.json')); if (liveVariant === 1) { n.attractions.rise = { ...n.attractions.rise, status: 'OPERATING', wait: 40 }; n.attractions.space = { ...n.attractions.space, wait: 25 }; } return ({ ok: true, ...n, source: 'themeparks.wiki', sourceLabel: 'ThemeParks.wiki', fetchedAt: new Date().toISOString(), errors: [] }); };
 const meta = { ok: true, coords: normalizeChildren(fx('tpw-children.json')), schedule: normalizeSchedule(fx('tpw-schedule.json')), errors: [] };
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkqPhfDwAEYQHqXc2zYwAAAABJRU5ErkJggg==', 'base64');
 
@@ -96,14 +97,14 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
   });
   await step('9. Tap = complete; item stays visible as 完了; undo needs confirmation; survives reload', async () => {
     await tab(page, 'home');
-    const first = await page.getAttribute('.next [data-done]', 'data-done');
-    await page.click('.next [data-done]');
+    const first = await page.getAttribute('#actionbar [data-done]', 'data-done');
+    await page.click('#actionbar [data-done]');
     await page.waitForTimeout(300);
     assert.match(await page.textContent('#toast'), /完了！/);
     assert.match(await page.textContent('.progress__count'), /^1/);
     await page.reload(); await page.waitForSelector('.next__title'); await page.waitForTimeout(300);
     assert.match(await page.textContent('.progress__count'), /^1/);
-    assert.notEqual(await page.getAttribute('.next [data-done]', 'data-done'), first, 'next recommendation changes');
+    assert.notEqual(await page.getAttribute('#actionbar [data-done]', 'data-done'), first, 'next recommendation changes');
     await tab(page, 'plan');
     const doneRow = page.locator(`.tl--done [data-done="${first}"]`);
     assert.equal(await doneRow.count(), 1, 'completed item still listed');
@@ -132,11 +133,11 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
   });
   await step('"別の候補" skips the current suggestion and shows feedback', async () => {
     await tab(page, 'home');
-    const cur = await page.getAttribute('.next [data-skip]', 'data-skip');
-    await page.click('.next [data-skip]');
+    const cur = await page.getAttribute('#actionbar [data-skip]', 'data-skip');
+    await page.click('#actionbar [data-skip]');
     await page.waitForTimeout(250);
     assert.match(await page.textContent('#toast'), /おすすめから外しました/);
-    assert.notEqual(await page.getAttribute('.next [data-skip]', 'data-skip') ?? 'anchor', cur);
+    assert.notEqual(await page.getAttribute('#actionbar [data-skip]', 'data-skip') ?? 'anchor', cur);
     await page.screenshot({ path: `${SHOTS}/02-home-after-skip.png` });
   });
   await step('8. Photos: real image loads; broken image falls back to poster', async () => {
@@ -206,6 +207,42 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.ok(await page.locator('.leaflet-marker-icon').count() >= 15);
     assert.match(await page.textContent('#mapcard'), /次の目的地/);
     await page.screenshot({ path: `${SHOTS}/04-map.png` });
+  });
+  await step('Alerts: reopened must-ride and a sudden wait drop are announced; 行く！ pins it', async () => {
+    await tab(page, 'home');
+    liveVariant = 1;
+    await page.evaluate(() => { window.__dlnavi.S.sim.base += 15; });
+    await page.click('#livePill'); await page.waitForTimeout(600);
+    const t = await page.textContent('#view-home');
+    assert.match(t, /レジスタンスの台頭 再開！/);
+    assert.match(t, /スペース・マウンテン 空いてきた！/);
+    await page.screenshot({ path: `${SHOTS}/16-alert.png` });
+    await page.click('[data-pin="rise"]'); await page.waitForTimeout(300);
+    assert.match(await page.textContent('.next__title'), /レジスタンス/);
+    assert.match(await page.textContent('#actionbar'), /レジスタンス/);
+    liveVariant = 0;
+  });
+  await step('Trend: history recorded → sparkline in list + chart in detail', async () => {
+    await tab(page, 'explore');
+    assert.ok(await page.locator('#view-explore .spark').count() >= 5);
+    await page.click('#view-explore [data-open="space"]'); await page.waitForTimeout(250);
+    assert.equal(await page.locator('.bigspark svg').count(), 1);
+    const box = await page.locator('.bigspark svg').boundingBox();
+    await page.mouse.move(box.x + box.width * 0.3, box.y + box.height / 2);
+    await page.waitForTimeout(100);
+    assert.match(await page.textContent('.bigspark__tip'), /推定/);
+    await page.screenshot({ path: `${SHOTS}/17-trend-detail.png` });
+    await page.click('.sheet__backdrop', { position: { x: 10, y: 10 } });
+  });
+  await step('Action bar: visible on home only; add-to-home guide shown and dismissable', async () => {
+    await tab(page, 'plan');
+    assert.equal(await page.isVisible('#actionbar'), false);
+    await tab(page, 'home');
+    assert.equal(await page.isVisible('#actionbar'), true);
+    assert.equal(await page.locator('.a2hs').count(), 1);
+    await page.screenshot({ path: `${SHOTS}/18-a2hs.png`, fullPage: true });
+    await page.click('[data-act="a2hs-off"]'); await page.waitForTimeout(150);
+    assert.equal(await page.locator('.a2hs').count(), 0);
   });
   await step('No uncaught JS errors', async () => assert.deepEqual(errors, []));
   await ctx.close();

@@ -22,6 +22,8 @@ const defaults = {
   landAt: 0,
   lastDone: null,      // { id, at }
   sim: null,           // { base: minutes, setAt: ms } — time simulation for testing
+  pin: null,           // { id, until } destination chosen from an alert
+  a2hsDismissed: false,
   exploreTab: 'rides', exploreFilter: 'all', exploreSort: 'reco', foodFilter: 'all',
   mapFilter: 'rides',
   tab: 'home',
@@ -46,6 +48,8 @@ const R = {
   meta: null, photos: {},
   gpsPos: null, gpsErr: null, gpsWatch: null,
   lastPlanIds: null,
+  hist: {},            // { rideId: [[min, wait|null], ...] } today's observed waits (this device)
+  alerts: [],          // [{ id, type:'reopen'|'drop', from, to, at }]
 };
 try {
   const c = JSON.parse(localStorage.getItem(KEY + ':live') || 'null');
@@ -54,6 +58,8 @@ try {
   if (m && Date.now() - m.at < 12 * 3600e3) R.meta = m.data;
   const p = JSON.parse(localStorage.getItem(KEY + ':photos') || 'null');
   if (p && Date.now() - p.at < 3 * 86400e3 && p.data && Object.values(p.data)[0]?.source) R.photos = p.data;
+  const h = JSON.parse(localStorage.getItem(KEY + ':hist') || 'null');
+  if (h?.date === TRIP.date) R.hist = h.data || {};
 } catch { /* ignore */ }
 
 // =====================================================================
@@ -173,6 +179,7 @@ async function fetchLive({ manual = false } = {}) {
     clearTimeout(t);
     const j = await res.json().catch(() => null);
     if (!res.ok || !j?.ok) throw new Error(j?.errors?.join(' / ') || `HTTP ${res.status}`);
+    if (!j.stale) { detectAlerts(R.live?.ok && !R.live.stale ? R.live : null, j); recordHistory(j); }
     R.live = j; R.liveReceivedAt = Date.now(); R.liveStatus = j.stale ? 'stale' : 'ok'; R.liveError = j.stale ? (j.errors || []).join(' / ') : null;
     localStorage.setItem(KEY + ':live', JSON.stringify({ at: R.liveReceivedAt, data: j }));
     if (manual) toast(j.stale ? '最新取得に失敗：前回の値を表示中' : `待ち時間を更新しました（${j.sourceLabel}）`, j.stale ? 'error' : 'ok');
@@ -183,6 +190,36 @@ async function fetchLive({ manual = false } = {}) {
   }
   renderAll();
 }
+function recordHistory(j) {
+  const m = Math.round(nowMin());
+  for (const [id, v] of Object.entries(j.attractions || {})) {
+    const arr = (R.hist[id] ||= []);
+    const last = arr[arr.length - 1];
+    const w = v.status === 'OPERATING' && Number.isFinite(v.wait) ? v.wait : null;
+    if (last && Math.abs(last[0] - m) < 2) { last[1] = w; continue; }
+    arr.push([m, w]);
+    if (arr.length > 300) arr.shift();
+  }
+  try { localStorage.setItem(KEY + ':hist', JSON.stringify({ date: TRIP.date, data: R.hist })); } catch { /* full */ }
+}
+// Compare with the previous LIVE sample: a closed ride reopening, or a sudden wait drop.
+function detectAlerts(prev, next) {
+  if (!prev?.attractions || nowMin() < hours().open) return;
+  const fresh = [];
+  for (const [id, v] of Object.entries(next.attractions || {})) {
+    const a = attractionById[id], p0 = prev.attractions[id];
+    if (!a || !p0 || S.done[id] || S.excluded[id]) continue;
+    if (p0.status !== 'OPERATING' && v.status === 'OPERATING' && p0.status !== 'REFURBISHMENT') fresh.push({ id, type: 'reopen', to: v.wait });
+    else if (v.status === 'OPERATING' && Number.isFinite(p0.wait) && Number.isFinite(v.wait) && p0.wait - v.wait >= 15 && v.wait <= p0.wait * 0.7 && (a.pop >= 4 || a.must)) fresh.push({ id, type: 'drop', from: p0.wait, to: v.wait });
+  }
+  if (!fresh.length) return;
+  fresh.sort((x, y) => (attractionById[y.id].must - attractionById[x.id].must) || (PRIORITY[y.id] || 0) - (PRIORITY[x.id] || 0));
+  const now = nowMin();
+  R.alerts = [...fresh.map((f) => ({ ...f, at: now })), ...R.alerts.filter((x) => !fresh.some((f) => f.id === x.id))].slice(0, 3);
+  try { navigator.vibrate?.([180, 80, 180]); } catch { /* unsupported (iOS) */ }
+}
+const activeAlerts = () => R.alerts.filter((x) => nowMin() - x.at < 20 && !S.done[x.id]);
+
 async function fetchMeta() {
   try {
     const res = await fetch('/api/meta');
@@ -248,7 +285,7 @@ function ctx(extra = {}) {
   return {
     now, openMin: h.open, closeMin: h.close, pos: (() => { const p = position(); return p.lat == null ? null : p; })(),
     planId: S.plan, done: S.done, excluded: S.excluded, skip: S.skip, live, crowd: crowdRatio(live, now),
-    anchors: anchors(), coords: coordsMap(), ...extra,
+    anchors: anchors(), coords: coordsMap(), pin: S.pin, ...extra,
   };
 }
 
@@ -318,6 +355,7 @@ function markDone(id) {
   S.doneMin[id] = nowMin();
   S.lastDone = { id, at: Date.now() };
   delete S.skip[id];
+  if (S.pin?.id === id) S.pin = null;
   save(); renderAll();
   const n = doneRides().length;
   toast(`✓ ${doneName(id)} 完了！${attractionById[id] ? `（${n}つ目）` : ''}`, 'ok', { label: '取り消す', fn: () => undoDone(id, true) });
@@ -384,7 +422,7 @@ function renderClock() {
 const RCHIP = {
   must: ['★', '必須', 'must'], dip: ['📉', 'いつもより空き', 'good'], later: ['🔥', 'あとで混む', 'hot'], short: ['⏱', '待ち短め', 'good'],
   near: ['📍', 'すぐ近く', 'good'], pop: ['👑', '大人気', ''], fit: ['✅', '次の予定に間に合う', ''], bump: ['↪', '休憩を後ろへ', 'warn'],
-  soft: ['⚡', '場所取り短め', 'warn'], close: ['🌙', '閉園前に並べばOK', 'warn'],
+  soft: ['⚡', '場所取り短め', 'warn'], close: ['🌙', '閉園前に並べばOK', 'warn'], pin: ['📌', 'あなたが選択', 'must'],
 };
 const rchips = (reasons) => `<div class="rchips">${(reasons || []).map((x) => {
   const [i, t, k] = RCHIP[x.k] || ['•', x.t, ''];
@@ -396,6 +434,79 @@ function miniBar(start, parts, endLabel, endTime) {
   const total = parts.reduce((s, p) => s + Math.max(0, p.m), 0) || 1;
   return `<div class="minitl"><div class="minitl__bar">${parts.filter((p) => p.m > 0).map((p) => `<div class="minitl__seg minitl__seg--${p.k}" style="flex:${p.m} 1 0">${p.m / total > 0.14 ? esc(p.t) : ''}</div>`).join('')}</div>
     <div class="minitl__labels"><span>いま ${clock(start)}</span><span>${endLabel} ${clock(endTime)}</span></div></div>`;
+}
+
+// ---------- wait-time trend (today's observed values on this device) ----------
+function trendOf(id) {
+  const pts = (R.hist[id] || []).filter((p) => p[1] != null);
+  if (pts.length < 2) return null;
+  const last = pts[pts.length - 1];
+  const ref = pts.filter((p) => p[0] <= last[0] - 20).pop() || pts[0];
+  if (last[0] - ref[0] < 10) return null;
+  const d = last[1] - ref[1];
+  return { d, dir: d <= -10 ? 'down' : d >= 10 ? 'up' : 'flat', mins: last[0] - ref[0] };
+}
+const TREND = { down: ['↘', '減少中', 'var(--good)'], up: ['↗', '増加中', 'var(--bad)'], flat: ['→', '横ばい', 'var(--muted)'] };
+function sparkSmall(id) {
+  const pts = (R.hist[id] || []).filter((p) => p[1] != null);
+  if (pts.length < 2) return '';
+  const w = 70, h = 22, x0 = pts[0][0], x1 = Math.max(pts[pts.length - 1][0], x0 + 30);
+  const ymax = Math.max(30, ...pts.map((p) => p[1]));
+  const X = (m) => 2 + ((m - x0) / (x1 - x0)) * (w - 8), Y = (v) => h - 3 - (v / ymax) * (h - 6);
+  const t = trendOf(id);
+  const last = pts[pts.length - 1];
+  return `<span class="spark" title="今日の待ち時間の推移"><svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true">
+    <line x1="2" x2="${w - 2}" y1="${h - 3}" y2="${h - 3}" stroke="var(--soft)" stroke-width="1"/>
+    <polyline fill="none" stroke="var(--navy)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" points="${pts.map((p) => `${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(' ')}"/>
+    <circle cx="${X(last[0]).toFixed(1)}" cy="${Y(last[1]).toFixed(1)}" r="3.5" fill="var(--red)" stroke="var(--paper)" stroke-width="1.5"/></svg>${t ? `<b style="color:${TREND[t.dir][2]}">${TREND[t.dir][0]}</b>` : ''}</span>`;
+}
+function sparkBig(a) {
+  const pts = (R.hist[a.id] || []);
+  const h0 = hours();
+  const W = 320, H = 130, L = 30, Rr = 8, T = 10, B = 22;
+  const x0 = h0.open, x1 = h0.close;
+  const est = [];
+  for (let m = x0; m <= x1; m += 30) est.push([m, Math.round(estimateWait(a, m) * crowdRatio(liveMap(), nowMin()))]);
+  const vals = [...pts.filter((p) => p[1] != null).map((p) => p[1]), ...est.map((p) => p[1])];
+  const ymax = Math.max(30, Math.ceil(Math.max(...vals) / 30) * 30);
+  const X = (m) => L + ((m - x0) / (x1 - x0)) * (W - L - Rr), Y = (v) => T + (1 - v / ymax) * (H - T - B);
+  const grid = [0, ymax / 2, ymax].map((v) => `<line x1="${L}" x2="${W - Rr}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--soft)" stroke-width="1"/><text x="${L - 4}" y="${Y(v) + 4}" text-anchor="end" class="ax">${v}</text>`).join('');
+  const xt = [8, 12, 16, 20].filter((hh) => hh * 60 >= x0 && hh * 60 <= x1).map((hh) => `<text x="${X(hh * 60)}" y="${H - 6}" text-anchor="middle" class="ax">${hh}時</text>`).join('');
+  // observed line, broken where the ride was closed (null)
+  const segs = []; let cur = [];
+  for (const p of pts) { if (p[1] == null) { if (cur.length) segs.push(cur); cur = []; } else cur.push(p); }
+  if (cur.length) segs.push(cur);
+  const live = segs.map((sg) => sg.length === 1 ? `<circle cx="${X(sg[0][0])}" cy="${Y(sg[0][1])}" r="3" fill="var(--navy)"/>` : `<polyline fill="none" stroke="var(--navy)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" points="${sg.map((p) => `${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(' ')}"/>`).join('');
+  const nowX = X(Math.min(x1, Math.max(x0, nowMin())));
+  const lastP = pts.filter((p) => p[1] != null).pop();
+  const data = esc(JSON.stringify({ pts: pts.filter((p) => p[1] != null), est, x0, x1, L, R: Rr, W }));
+  return `<div class="bigspark" data-spark="${data}">
+    <div class="bigspark__head"><b>待ち時間の推移</b><span class="bigspark__legend"><i class="lg lg--live"></i>今日の実測 <i class="lg lg--est"></i>推定</span></div>
+    <svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${esc(a.short)}の待ち時間の推移">
+      ${grid}${xt}
+      <polyline fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="4 4" points="${est.map((p) => `${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(' ')}"/>
+      ${live}
+      <line x1="${nowX}" x2="${nowX}" y1="${T}" y2="${H - B}" stroke="var(--red)" stroke-width="1.5" stroke-dasharray="2 3"/>
+      ${lastP ? `<circle cx="${X(lastP[0])}" cy="${Y(lastP[1])}" r="5" fill="var(--red)" stroke="var(--paper)" stroke-width="2"/>` : ''}
+      <line class="bigspark__x" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="var(--navy)" stroke-width="1" visibility="hidden"/>
+    </svg>
+    <div class="bigspark__tip">${pts.length ? 'グラフをなぞると時刻ごとの値' : 'アプリを開いている間の実測を記録していきます'}</div></div>`;
+}
+document.addEventListener('pointermove', sparkHover);
+document.addEventListener('pointerdown', sparkHover);
+function sparkHover(e) {
+  const box = e.target.closest?.('.bigspark');
+  if (!box) return;
+  const d = JSON.parse(box.dataset.spark);
+  const svg = box.querySelector('svg'), r = svg.getBoundingClientRect();
+  const vx = ((e.clientX - r.left) / r.width) * d.W;
+  const m = d.x0 + ((vx - d.L) / (d.W - d.L - d.R)) * (d.x1 - d.x0);
+  if (m < d.x0 || m > d.x1) return;
+  const near = (arr) => arr.reduce((b, p) => (!b || Math.abs(p[0] - m) < Math.abs(b[0] - m) ? p : b), null);
+  const lp = near(d.pts), ep = near(d.est);
+  const line = box.querySelector('.bigspark__x');
+  line.setAttribute('x1', vx); line.setAttribute('x2', vx); line.setAttribute('visibility', 'visible');
+  box.querySelector('.bigspark__tip').innerHTML = `<b>${clock(m)}</b>　${lp && Math.abs(lp[0] - m) <= 15 ? `実測 <b>${lp[1]}分</b>（${clock(lp[0])}）　` : ''}推定 ${ep ? ep[1] : '-'}分`;
 }
 
 // =====================================================================
@@ -445,6 +556,13 @@ function renderHome() {
     html += `<div class="note note--bad"><span class="note__icon">⚠️</span><div><div class="note__t">${sim.missingMust.map((id) => esc(attractionById[id].short)).join('・')} が入りきらない</div><div class="note__s">食事・ショーの時間を見直してください</div></div></div>`;
   }
 
+  for (const al of activeAlerts()) {
+    const a = attractionById[al.id];
+    html += `<div class="alert" role="alert"><div class="alert__icon">${al.type === 'reopen' ? '🎉' : '📉'}</div>
+      <div class="alert__body"><div class="alert__t">${esc(a.short)} ${al.type === 'reopen' ? '再開！' : '空いてきた！'}</div>
+        <div class="alert__s">${al.type === 'reopen' ? `いま 待ち${al.to ?? '?'}分` : `<s>${al.from}分</s> → <b>${al.to}分</b>`}</div></div>
+      <button class="btn btn--sm btn--primary" data-pin="${al.id}">行く！</button><button class="alert__x" data-dismiss-alert="${al.id}" aria-label="閉じる">✕</button></div>`;
+  }
   html += renderNextCard(r, c);
 
   if (r.alts.length) {
@@ -472,9 +590,40 @@ function renderHome() {
   }
 
   html += renderLocCard(pos);
+  if (!isStandalone() && !S.a2hsDismissed) html += a2hsCard();
   html += renderDataCard();
   html += footer();
   el.innerHTML = html;
+  renderActionBar(r);
+}
+const isStandalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+function a2hsCard() {
+  return `<div class="card card--pad a2hs"><div class="h-section" style="margin:0 0 10px"><h2>📲 ホーム画面に追加</h2><button class="alert__x" data-act="a2hs-off" aria-label="閉じる">✕</button></div>
+    <div class="flow">
+      <div class="flow__step"><div class="flow__icon">🧭</div><div class="flow__s">Safariで開く</div></div>
+      <div class="flow__step"><div class="flow__icon"><svg viewBox="0 0 24 24" width="22" height="22"><path fill="var(--navy)" d="M12 3 7.5 7.5l1.4 1.4L11 6.8V15h2V6.8l2.1 2.1 1.4-1.4ZM5 11v9a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-9h-2v8H7v-8Z"/></svg></div><div class="flow__s">共有ボタン</div></div>
+      <div class="flow__step"><div class="flow__icon">➕</div><div class="flow__s">ホーム画面に追加</div></div>
+      <div class="flow__step"><div class="flow__icon"><img src="/icon-180.png" alt="" width="30" height="30" style="border-radius:8px"></div><div class="flow__s">アイコンから起動</div></div>
+    </div>
+    <div class="rchips" style="margin-top:10px"><span class="rchip rchip--good"><i>📱</i>全画面</span><span class="rchip rchip--good"><i>📶</i>電波が弱くても開ける</span><span class="rchip rchip--good"><i>⚡</i>すぐ起動</span></div></div>`;
+}
+// Thumb-reach action bar (one-handed): the two most frequent actions, always at the bottom.
+function renderActionBar(r) {
+  let bar = $('#actionbar');
+  if (!bar) { bar = document.createElement('div'); bar.id = 'actionbar'; bar.className = 'actionbar'; document.body.appendChild(bar); }
+  const p = r?.primary;
+  const show = S.tab === 'home' && p && (p.type === 'ride' || p.type === 'anchor');
+  bar.hidden = !show;
+  document.body.classList.toggle('has-actionbar', !!show);
+  if (!show) return;
+  if (p.type === 'ride') {
+    bar.innerHTML = `<button class="actionbar__side" data-skip="${p.a.id}" aria-label="別の候補"><span>↻</span><small>別の候補</small></button>
+      <button class="actionbar__main" data-done="${p.a.id}">✓ ${esc(p.a.short)} 乗った！</button>`;
+  } else {
+    const x = p.anchor;
+    bar.innerHTML = `<button class="actionbar__side" data-anchor-edit="${x.id}" aria-label="変更"><span>✎</span><small>変更</small></button>
+      <button class="actionbar__main" data-done="${x.id}">✓ ${esc(x.title)} ${x.kind === 'show' ? '観た！' : '食べた！'}</button>`;
+  }
 }
 
 function renderNextCard(r, c) {
@@ -502,13 +651,13 @@ function renderNextCard(r, c) {
           <div class="stat"><div class="stat__k">🏁 終わり</div><div class="stat__v">${clock(p.finish)}</div><div class="stat__src"><span class="tag tag--ghost">見込み</span></div></div>
         </div>
         ${rchips(p.reasons)}
+        ${(() => { const t = trendOf(a.id); return t && t.dir !== 'flat' ? `<div class="rchips"><span class="rchip ${t.dir === 'down' ? 'rchip--good' : 'rchip--hot'}"><i>${TREND[t.dir][0]}</i>${t.mins}分で${t.d > 0 ? '+' : ''}${t.d}分（${TREND[t.dir][1]}）</span></div>` : ''; })()}
         ${bar}
-        <button class="btn btn--primary" data-done="${a.id}">✓ 乗り終わった！</button>
         <div class="btnrow btnrow--2">
           <a class="btn btn--ghost" href="${routeUrl(coordsOf(a.id))}" target="_blank" rel="noopener">🧭 ルート</a>
-          <button class="btn btn--ghost" data-skip="${a.id}">↻ 別の候補</button>
+          <button class="btn btn--ghost" data-open="${a.id}">ℹ️ くわしく</button>
         </div>
-        <button class="linkbtn" data-open="${a.id}">ℹ️ くわしく・写真</button>
+        <div class="hint">👇 乗ったら下の大きなボタン</div>
       </div></article>`;
   }
 
@@ -532,7 +681,6 @@ function renderNextCard(r, c) {
           <div class="stat"><div class="stat__k">${isShow ? '⏰ 場所取り' : '⌛ 所要'}</div><div class="stat__v">${isShow ? clock(x.start - x.claim) : x.end - x.start + '<small>分</small>'}</div></div>
         </div>
         <div class="rchips">${chips.map(([i, t, k]) => `<span class="rchip ${k ? 'rchip--' + k : ''}"><i>${i}</i>${esc(t)}</span>`).join('')}</div>
-        <button class="btn btn--primary" data-done="${x.id}">✓ ${isShow ? '観た！' : '食べ終わった！'}</button>
         <div class="btnrow btnrow--2">
           <a class="btn btn--ghost" href="${routeUrl(x.pos)}" target="_blank" rel="noopener">🧭 ルート</a>
           <button class="btn btn--ghost" data-anchor-edit="${x.id}">✎ ${isShow ? '回を変える' : '時間・お店'}</button>
@@ -690,6 +838,7 @@ function renderExplore() {
           <div class="item__top"><div><div class="item__name">${a.must ? '★ ' : ''}${esc(a.ja)}</div>${S.done[a.id] ? '<span class="tag tag--live">✓ 完了</span>' : ''}<div class="item__en">${esc(a.en)}</div></div>
             <div class="item__wait">${w.wait == null ? `<span class="tag tag--bad">${esc(STATUS_JA[w.status] || '休止')}</span>` : `<b class="${waitClass(w.wait)}">${w.wait}<small>分</small></b><div>${kindTag(w.kind)}</div>`}</div></div>
           <div class="item__meta"><span>${esc(landById[a.land]?.ja)}</span>·<span>徒歩${walk}分</span>·<span>スリル ${stars(a.thrill)}</span></div>
+          ${sparkSmall(a.id) ? `<div class="item__meta">${sparkSmall(a.id)}<span>今日の推移</span></div>` : ''}
           <div class="item__meta">${rank.has(a.id) ? '<span class="tag tag--gold">今おすすめ</span>' : ''}${/日本未上陸/.test(a.japan) ? '<span class="tag">日本未上陸</span>' : ''}${a.must ? '<span class="tag tag--must">必須</span>' : ''}</div>
         </div></button>`).join('') || '<div class="empty">該当するアトラクションはありません</div>'}</div>`;
     el.innerHTML = html;
@@ -805,6 +954,7 @@ function openAttraction(id) {
       </div>
       ${!av.ok ? `<div class="note note--bad"><span class="note__icon">⛔</span><div>${esc(av.reason)}${a.must ? '。必須なので予定からは外さず、再開したら最優先で案内します。' : '。'}</div></div>` : ''}
       <p class="para">${esc(a.desc)}</p>
+      ${sparkBig(a)}
       <div class="box"><b>🇯🇵 日本との違い</b><br>${esc(a.japan)}</div>
       <div class="box"><b>💡 攻略メモ</b><br>${esc(a.tip)}</div>
       <dl class="kv">
@@ -915,6 +1065,7 @@ function go(tab) {
   window.scrollTo(0, 0);
 }
 function renderView(tab = S.tab) {
+  if (tab !== 'home') renderActionBar(null);
   if (tab === 'home') renderHome();
   else if (tab === 'plan') renderPlan();
   else if (tab === 'explore') renderExplore();
@@ -965,6 +1116,11 @@ document.addEventListener('click', async (e) => {
   if (d.openFood) return openFood(d.openFood);
   if (d.done) return markDone(d.done);
   if (d.undo) return undoDone(d.undo);
+  if (d.pin) {
+    S.pin = { id: d.pin, until: nowMin() + 30 }; R.alerts = R.alerts.filter((x) => x.id !== d.pin); save();
+    go('home'); return toast(`📌 ${attractionById[d.pin].short} を次の行き先にしました`, 'ok');
+  }
+  if (d.dismissAlert) { R.alerts = R.alerts.filter((x) => x.id !== d.dismissAlert); return renderHome(); }
   if (d.skip) { skipFor(d.skip); const el = $('#alts'); return; }
   if (d.plan) return setPlan(d.plan);
   if (d.xtab) { S.exploreTab = d.xtab; save(); return renderExplore(); }
@@ -1024,6 +1180,7 @@ document.addEventListener('click', async (e) => {
   if (d.mealReset) { delete S.prefs.mealOverrides[d.mealReset]; save(); closeSheet(); renderAll(); return toast('初期設定に戻しました'); }
   switch (d.act) {
     case 'refresh': return fetchLive({ manual: true });
+    case 'a2hs-off': S.a2hsDismissed = true; save(); return renderHome();
     case 'replan': {
       const before = R.lastPlanIds;
       await fetchLive({ manual: false });

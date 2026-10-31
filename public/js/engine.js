@@ -262,6 +262,12 @@ export function recommend(ctx) {
   let pool = cands;
   if (targetReached) pool = cands.filter((c) => c.a.must || c.wait <= 25);
 
+  // A destination the user explicitly chose (e.g. from a "再開しました" alert) goes first.
+  const pinned = ctx.pin && ctx.pin.until > ctx.now ? cands.find((c) => c.a.id === ctx.pin.id) : null;
+  if (pinned && !result.primary) {
+    pinned.reasons = [{ k: 'pin', t: 'あなたが選んだ行き先' }, ...pinned.reasons];
+    result.primary = { type: 'ride', ...pinned };
+  }
   if (!result.primary) {
     if (pool.length) {
       result.primary = { type: 'ride', ...pool[0] };
