@@ -308,10 +308,42 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
   await ctx.close();
 }
 
+// ---------- B2: manual time can restart a plan without wiping progress ----------
+{
+  const { ctx, page, errors } = await newCtx();
+  await step('Manual start time changes future plan, survives refresh, and preserves done items', async () => {
+    await page.click('#actionbar [data-done]');
+    await tab(page, 'plan');
+    const done = await page.locator('.tl--done .tl__item').count();
+    await page.fill('#planTimeInput', '15:30');
+    await page.click('[data-act="plan-time-set"]');
+    assert.equal(await page.evaluate(() => window.__dlnavi.S.planTime.base), 930);
+    assert.equal(await page.locator('.tl--done .tl__item').count(), done);
+    await page.reload(); await page.waitForSelector('#planTimeInput');
+    assert.equal(await page.evaluate(() => window.__dlnavi.S.planTime.base), 930);
+    await page.click('[data-act="plan-edit"]');
+    await page.fill('[data-b-start]', '16:15');
+    await page.locator('[data-b-start]').dispatchEvent('change');
+    await page.click('[data-act="plan-apply"]');
+    assert.equal(await page.evaluate(() => window.__dlnavi.S.planTime.base), 975);
+    await page.click('[data-act="plan-time-auto"]');
+    assert.equal(await page.evaluate(() => window.__dlnavi.S.planTime), null);
+  });
+  await step('No JS errors in manual-time builder', async () => assert.deepEqual(errors, []));
+  await ctx.close();
+}
+
 // ---------- C: GPS allowed ----------
 {
   const { ctx, page, errors } = await newCtx({ geo: { latitude: 33.81185, longitude: -117.9214, accuracy: 15 } });
   await step('7a. GPS allowed → position used, distances shown', async () => {
+    await page.evaluate(() => {
+      const original = navigator.geolocation.watchPosition.bind(navigator.geolocation);
+      navigator.geolocation.watchPosition = (ok, fail, options) => {
+        window.__gpsCallback = ok;
+        return original(ok, fail, options);
+      };
+    });
     await page.click('[data-act="pick-land"]'); await page.waitForTimeout(150);
     await page.click('[data-act="gps-start"]'); await page.waitForTimeout(800);
     assert.match(await page.textContent('.locrow'), /GPS/);
@@ -319,6 +351,14 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await tab(page, 'map'); await page.waitForTimeout(1200);
     assert.equal(await page.locator('.mk--me').count(), 1);
     assert.match(await page.textContent('#mapcard'), /徒歩\d+分/);
+    const stable = await page.evaluate(() => {
+      const before = document.querySelector('.mk--ride');
+      for (let i = 0; i < 12; i++) {
+        window.__gpsCallback({ coords: { latitude: 33.81185 + i * 0.000001, longitude: -117.9214, accuracy: 15 } });
+      }
+      return before === document.querySelector('.mk--ride');
+    });
+    assert.ok(stable, 'GPS jitter should not recreate map markers');
     await page.screenshot({ path: `${SHOTS}/04-map-gps.png` });
   });
   await step('No uncaught JS errors (GPS)', async () => assert.deepEqual(errors, []));
