@@ -26,7 +26,7 @@ API トークンを使う場合の最小権限：`Account › Cloudflare Pages �
 
 ## GitHub push → Cloudflare Pages 自動デプロイ（無料・既存サービス分離）
 
-- GitHub の本番ブランチ `main` への **push** で `.github/workflows/verify.yml` が起動し、単体テスト76件とモバイルE2E43件を実行します。
+- GitHub の本番ブランチ `main` への **push** で `.github/workflows/verify.yml` が起動し、単体テスト76件とモバイルE2E44件を実行します。
 - **検証が成功した最新コミットのみ** `.github/workflows/deploy-pages.yml` が起動して、本番 `https://dl-navi-1031.pages.dev` にデプロイします。失敗したテストや古いコミットは公開されません。GitHub Actions の `workflow_dispatch` からプレビュー/本番を手動選択することもできます。
 - Cloudflare と GitHub のネイティブ Git 連携は使いません（Cloudflare Git installation が 8000011 で失敗するため）。代わりに公式サポートの `wrangler pages deploy public --project-name dl-navi-1031 --branch main` を使います。
 - **初回に1回だけ必要**：Cloudflare ダッシュボードの API Tokens で、対象アカウントの `Account › Cloudflare Pages › Edit` のみを許可したトークンを発行し、この GitHub リポジトリの `Settings › Secrets and variables › Actions › New repository secret` に **`CLOUDFLARE_API_TOKEN`** として保存します。Cloudflare のアカウントIDはワークフローで既存の対象アカウントに固定しているため、Secret は不要です。トークンを git、チャット、ログに貼らないでください。
@@ -93,7 +93,7 @@ API トークンを使う場合の最小権限：`Account › Cloudflare Pages �
 ```bash
 npm test                               # 76 unit tests（エンジン・API正規化・写真選定）
 npx wrangler pages dev public --port 8788 &
-node tests/e2e.mjs http://127.0.0.1:8788   # 43 browser E2E steps（iPhoneサイズ）
+node tests/e2e.mjs http://127.0.0.1:8788   # 44 browser E2E steps（iPhoneサイズ）
 ```
 
 ## コスト

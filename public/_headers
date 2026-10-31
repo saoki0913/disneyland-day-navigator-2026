@@ -7,9 +7,9 @@
 /index.html
   Cache-Control: no-cache
 /js/*
-  Cache-Control: public, max-age=300
+  Cache-Control: no-cache
 /css/*
-  Cache-Control: public, max-age=300
+  Cache-Control: no-cache
 /fonts/*
   Cache-Control: public, max-age=31536000, immutable
 /vendor/*

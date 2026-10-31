@@ -508,6 +508,28 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
   await A.ctx.close(); await B.ctx.close();
 }
 
+// ---------- B4: a new deploy is picked up without closing the app ----------
+{
+  const { ctx, page, errors } = await newCtx();
+  await step('App update: new deploy → banner with 更新, tap reloads the new code', async () => {
+    await page.waitForTimeout(3500); // first ETag snapshot
+    let bump = true;
+    await ctx.route('**/js/app.js', async (r) => {
+      if (r.request().method() !== 'HEAD' || !bump) return r.continue();
+      const res = await r.fetch();
+      r.fulfill({ response: res, headers: { ...res.headers(), etag: '"new-deploy"' } });
+    });
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    await page.waitForTimeout(600);
+    assert.match(await page.textContent('#banner'), /新しいバージョン/);
+    bump = false;
+    await Promise.all([page.waitForNavigation(), page.click('[data-act="app-update"]')]);
+    await page.waitForSelector('.next__title');
+    assert.deepEqual(errors, []);
+  });
+  await ctx.close();
+}
+
 // ---------- C: GPS allowed ----------
 {
   const { ctx, page, errors } = await newCtx({ geo: { latitude: 33.81185, longitude: -117.9214, accuracy: 15 } });

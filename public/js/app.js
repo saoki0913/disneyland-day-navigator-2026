@@ -502,6 +502,7 @@ function renderStatus() {
   else { txt.textContent = '推定'; }
 
   const b = $('#banner');
+  if (R.updateReady) return;
   const phase = dayPhase();
   let msg = '', err = false;
   if (phase === 'sim') msg = `テスト時刻 ${clock(nowMin())}`;
@@ -1926,6 +1927,7 @@ document.addEventListener('click', async (e) => {
   if (d.shareJoin) return joinShare(d.shareJoin);
   switch (d.act) {
     case 'refresh': return fetchLive({ manual: true });
+    case 'app-update': return applyUpdate();
     case 'share-open': return openShare();
     case 'nav-end': return endNav('案内を終了しました');
     case 'food-map': S.mapFilter = 'food'; R.mapFood = { q: S.foodQ, ids: R.foodHits || [] }; save(); return go('map');
@@ -2049,4 +2051,37 @@ setInterval(() => { if (S.gps) requestFix(); }, 20e3);
 // While a route is on screen: check every 5 s (a fix is actually taken every ~10 s, see GPS_EVERY).
 setInterval(() => { if (guiding() && S.gps && document.visibilityState === 'visible') requestFix(); }, 5e3);
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+
+// ---------- app updates ----------
+// A page that stays open keeps running the code it was loaded with. Check for a newer deploy
+// (ETag of the app code) when the app comes back to the foreground and every 10 minutes.
+// If there is one: reload right away when it is safe (coming back after a while, nothing open),
+// otherwise show a banner with a one-tap 更新.
+const UPDATE_FILES = ['/js/app.js', '/js/engine.js', '/js/map.js', '/css/app.css'];
+let codeTag = null, hiddenAt = 0;
+async function currentCodeTag() {
+  const tags = await Promise.all(UPDATE_FILES.map((u) => fetch(u, { method: 'HEAD', cache: 'no-store' }).then((r) => (r.ok ? r.headers.get('etag') || r.headers.get('last-modified') || '' : '')).catch(() => '')));
+  return tags.every((t) => !t) ? null : tags.join('|');
+}
+function safeToReload() { return !R.dragging && !R.nav && $('#sheet').hidden && !R.draft && document.activeElement?.tagName !== 'INPUT'; }
+function applyUpdate() { try { navigator.serviceWorker?.getRegistration().then((r) => r?.update()); } catch { /* ignore */ } location.reload(); }
+async function checkForUpdate({ allowAutoReload = false } = {}) {
+  const tag = await currentCodeTag();
+  if (!tag) return;
+  if (codeTag == null) { codeTag = tag; return; }
+  if (tag === codeTag) return;
+  R.updateReady = true;
+  if (allowAutoReload && safeToReload()) return applyUpdate();
+  const b = $('#banner');
+  b.hidden = false; b.className = 'banner is-update';
+  b.innerHTML = `<span>新しいバージョンがあります</span><button class="btn btn--sm btn--primary" data-act="app-update">${ic('refresh')}更新</button>`;
+  document.documentElement.style.setProperty('--bnr', b.offsetHeight + 'px');
+}
+setTimeout(() => checkForUpdate(), 3000);
+setInterval(() => { if (document.visibilityState === 'visible') checkForUpdate(); }, 10 * 60e3);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
+  // Back after 30 s or more: a quick, quiet reload is fine if a new version is out.
+  checkForUpdate({ allowAutoReload: hiddenAt && Date.now() - hiddenAt > 30e3 });
+});
 window.__dlnavi = { S, R, ctx, recommend, simulateDay, pullShare, renderMap: () => renderMap() };
