@@ -527,6 +527,27 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.ok(stable, 'GPS jitter should not recreate map markers');
     await page.screenshot({ path: `${SHOTS}/04-map-gps.png` });
   });
+  await step('Food search with GPS: nearest first, route starts from my position, in-app map to the shop', async () => {
+    await tab(page, 'explore');
+    await page.click('[data-xtab="food"]'); await page.waitForTimeout(150);
+    await page.fill('#foodQ', 'チキン'); await page.waitForTimeout(200);
+    assert.match(await page.textContent('.fbar'), /GPS/);
+    const walks = await page.$$eval('#foodList [data-open-food]', (els) => els.map((e) => parseInt(e.textContent.match(/徒歩(\d+)分/)[1])));
+    for (let i = 1; i < walks.length; i++) assert.ok(walks[i] >= walks[i - 1], 'nearest first');
+    // long price must not squeeze the menu name into a vertical column
+    const w = await page.$eval('#foodList [data-open-food="plazainn"] .fhit > span:first-child', (e) => e.getBoundingClientRect().width);
+    assert.ok(w > 120, `menu name width ${w}`);
+    await page.screenshot({ path: `${SHOTS}/06-food-search-gps.png` });
+    await page.click('#foodList [data-open-food="plazainn"]'); await page.waitForTimeout(250);
+    const href = await page.getAttribute('#sheet a[data-route]', 'href');
+    assert.match(href, /origin=33\.8118\d+,-117\.921\d*/, 'route starts at the GPS position');
+    assert.match(href, /travelmode=walking/);
+    await page.click('[data-food-map="plazainn"]'); await page.waitForTimeout(1500);
+    assert.equal(await page.locator('.mk--food.is-target').count(), 1);
+    assert.match(await page.textContent('#mapcard'), /GO[\s\S]*プラザ・イン[\s\S]*徒歩\d+分/);
+    assert.match(await page.getAttribute('#mapcard a[data-route]', 'href'), /origin=/);
+    await page.screenshot({ path: `${SHOTS}/04-map-food-route.png` });
+  });
   await step('No uncaught JS errors (GPS)', async () => assert.deepEqual(errors, []));
   await ctx.close();
 }

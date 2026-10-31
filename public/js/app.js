@@ -433,7 +433,13 @@ function closeSheet() { $('#sheet').hidden = true; document.body.style.overflow 
 document.addEventListener('click', (e) => { if (e.target.closest('[data-close]')) closeSheet(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSheet(); });
 
-const routeUrl = (pos) => `https://www.google.com/maps/dir/?api=1&destination=${pos.lat},${pos.lon}&travelmode=walking`;
+// Walking directions in Google Maps. Start = this phone's GPS fix when we have a recent one
+// (otherwise Google Maps itself starts from "your location").
+function routeUrl(pos) {
+  const g = S.gps && R.gpsPos && Date.now() - R.gpsPos.at < 5 * 60e3 ? R.gpsPos : null;
+  return `https://www.google.com/maps/dir/?api=1${g ? `&origin=${g.lat.toFixed(6)},${g.lon.toFixed(6)}` : ''}&destination=${pos.lat},${pos.lon}&travelmode=walking`;
+}
+const routeAttr = (pos) => `href="${esc(routeUrl(pos))}" data-route="${pos.lat},${pos.lon}" target="_blank" rel="noopener"`;
 const dots = (n, max = 5) => `<span aria-label="${n}/${max}" style="letter-spacing:1px">${'●'.repeat(n)}<span style="color:var(--line)">${'●'.repeat(max - n)}</span></span>`;
 const doneRides = () => Object.keys(S.done).filter((k) => attractionById[k]);
 const PACE = { relax: 'ゆったり', balance: 'ふつう', rides: 'たくさん' };
@@ -744,7 +750,7 @@ function renderNextCard(r, c) {
       ${rtags(p.reasons)}
       ${bar}
       <div class="btnrow">
-        <a class="btn" href="${routeUrl(coordsOf(a.id))}" target="_blank" rel="noopener">${ic('route')}ルート</a>
+        <a class="btn" ${routeAttr(coordsOf(a.id))}>${ic('route')}ルート</a>
         <button class="btn" data-open="${a.id}">${ic('info')}くわしく</button>
       </div></article>`;
   }
@@ -768,7 +774,7 @@ function renderNextCard(r, c) {
       </div>
       <div class="tags">${tags.map(([t, k]) => `<span class="tag ${k ? 'tag--' + k : ''}">${esc(t)}</span>`).join('')}</div>
       <div class="btnrow">
-        <a class="btn" href="${routeUrl(x.pos)}" target="_blank" rel="noopener">${ic('route')}ルート</a>
+        <a class="btn" ${routeAttr(x.pos)}>${ic('route')}ルート</a>
         ${rest ? `<button class="btn" data-open-food="${rest.id}">${ic('food')}メニュー</button>` : `<button class="btn" data-open-show="${x.show}">${ic('info')}くわしく</button>`}
       </div></article>`;
   }
@@ -1321,7 +1327,7 @@ function foodListHtml(c) {
     <button class="row" data-open-food="${r.id}" type="button">
       <span class="row__thumb">${foodImg(r)}</span>
       <span class="row__body"><span class="row__name">${jw(r.ja)}</span>
-        ${hits.length ? `<span class="fhits">${hits.slice(0, 3).map((m) => `<span class="fhit"><span>${markHit(m.name, q)}</span><span>${esc(m.price)}</span></span>`).join('')}</span>` : `<span class="row__meta"><span>${esc(r.menu[0]?.name || '')}</span></span>`}
+        ${hits.length ? `<span class="fhits">${hits.slice(0, 3).map((m) => `<span class="fhit"><span>${markHit(m.name, q)}</span><span>${esc(String(m.price).replace(/（[^）]*）/g, ''))}</span></span>`).join('')}</span>` : `<span class="row__meta"><span>${esc(r.menu[0]?.name || '')}</span></span>`}
         <span class="row__meta"><span>${ic('walk')}徒歩${walk}分</span><span>${esc(landById[r.land]?.ja || '')}</span>${r.mobile === 'yes' ? '<span class="tag tag--live">モバイルオーダー</span>' : ''}${r.halloween.length ? '<span class="tag tag--warn">限定</span>' : ''}</span></span>
       <span class="row__chev">${ic('chev')}</span></button>`).join('')}</div>
     <p class="footer">料金・限定メニューは事前調査の情報です</p>`;
@@ -1353,7 +1359,7 @@ function openAttraction(id) {
       ${!av.ok ? `<div class="note note--bad">${ic('alert')}<div><div class="note__t">${esc(av.reason)}</div>${must ? '<div class="note__s">再開したら最優先で案内します</div>' : ''}</div></div>` : ''}
       <div class="btnrow">
         ${S.done[a.id] ? `<button class="btn" data-done="${a.id}">${ic('check')}済み ${S.doneMin[a.id] != null ? clock(S.doneMin[a.id]) : ''}</button>` : `<button class="btn btn--primary" data-done="${a.id}" data-close>${ic('check')}乗った</button>`}
-        <a class="btn" href="${routeUrl(pos)}" target="_blank" rel="noopener">${ic('route')}ルート</a>
+        <a class="btn" ${routeAttr(pos)}>${ic('route')}ルート</a>
       </div>
       <div class="seg"><button class="${must ? 'is-active' : ''}" data-ride-st="${a.id}" data-v="must">絶対乗る</button><button class="${!must && !S.excluded[a.id] ? 'is-active' : ''}" data-ride-st="${a.id}" data-v="">おまかせ</button><button class="${S.excluded[a.id] ? 'is-active' : ''}" data-ride-st="${a.id}" data-v="skip">乗らない</button></div>
       <p class="para">${esc(a.desc)}</p>
@@ -1387,7 +1393,10 @@ function openFood(id) {
       <ul class="menu">${r.menu.map((m) => `<li><span>${esc(m.name)}<br><small class="muted">${esc(m.en)}</small></span><span>${esc(m.price)}</span></li>`).join('')}</ul>
       ${r.halloween.length ? `<div class="box"><b>ハロウィン限定（報道ベース）</b>${r.halloween.map((h) => `${esc(h.name)}<span class="muted">（${esc(h.note)}）</span>`).join('<br>')}</div>` : ''}
       <div class="btnrow">
-        <a class="btn" href="${routeUrl(pos)}" target="_blank" rel="noopener">${ic('route')}ルート</a>
+        <a class="btn" ${routeAttr(pos)}>${ic('route')}ルート</a>
+        <button class="btn" data-food-map="${r.id}">${ic('pin')}地図で見る</button>
+      </div>
+      <div class="btnrow">
         <a class="btn btn--navy" href="${esc(r.menuUrl)}" target="_blank" rel="noopener">公式メニュー</a>
       </div>
     </div>`);
@@ -1669,14 +1678,21 @@ async function renderMap() {
       rides: ATTRACTIONS.map((a) => ({ a, pos: coordsOf(a.id), w: waitInfo(a), done: !!S.done[a.id] })),
       food: RESTAURANTS.filter((x) => !R.mapFood || R.mapFood.ids.includes(x.id)).map((x) => ({ r: x, pos: coordsOf(x.id) })),
       shows: SHOWS.map((s) => ({ s, pos: s.venuePos })),
-      nextId: r.primary?.a?.id || null,
+      nextId: R.mapFood?.one ? null : r.primary?.a?.id || null,
+      target: R.mapFood?.one ? { id: R.mapFood.ids[0] } : null,
       icons: { food: ic('food'), show: ic('show') },
       coordsSrc: (() => { const n = Object.keys(R.meta?.coords || {}).filter((k) => attractionById[k]).length; return n >= 15 ? 'api' : n > 0 ? 'partial' : 'approx'; })(),
     });
+    document.querySelectorAll('[data-mf]').forEach((b) => b.classList.toggle('is-active', b.dataset.mf === S.mapFilter));
+    if (R.mapFood?.one && !R.mapFood.fitted) {
+      R.mapFood.fitted = true;
+      const g = R.gpsPos && S.gps ? R.gpsPos : null;
+      setTimeout(() => mapMod.fitTo([g, coordsOf(R.mapFood.ids[0])]), 220);
+    }
     let fc = el.querySelector('#mapFoodChip');
     if (R.mapFood) {
       if (!fc) { fc = document.createElement('button'); fc.id = 'mapFoodChip'; fc.className = 'chip is-active'; fc.dataset.act = 'map-food-clear'; el.querySelector('.mapbar').prepend(fc); }
-      fc.innerHTML = `「${esc(R.mapFood.q)}」の店 ${R.mapFood.ids.length}件 ${ic('x')}`;
+      fc.innerHTML = R.mapFood.one ? `${esc(R.mapFood.q)} ${ic('x')}` : `「${esc(R.mapFood.q)}」の店 ${R.mapFood.ids.length}件 ${ic('x')}`;
     } else fc?.remove();
     const meOn = !!(S.gps && R.gpsPos);
     const meBtn = el.querySelector('[data-act="map-me"]');
@@ -1687,13 +1703,14 @@ async function renderMap() {
       meBtn.setAttribute('aria-label', meOn ? '現在地に移動' : '現在地を表示');
     }
     const p = r.primary;
-    const dest = p?.type === 'ride' ? { name: p.a.short, pos: coordsOf(p.a.id), wait: p.wait, open: `data-open="${p.a.id}"` } : p?.type === 'anchor' ? { name: p.anchor.title + (p.anchor.place ? '・' + p.anchor.place : ''), pos: p.anchor.pos, open: `data-anchor-edit="${p.anchor.id}"` } : null;
+    const shop = R.mapFood?.one ? restaurantById[R.mapFood.ids[0]] : null;
+    const dest = shop ? { name: shop.ja, pos: coordsOf(shop.id), open: `data-open-food="${shop.id}"`, k: 'GO' } : p?.type === 'ride' ? { name: p.a.short, pos: coordsOf(p.a.id), wait: p.wait, open: `data-open="${p.a.id}"` } : p?.type === 'anchor' ? { name: p.anchor.title + (p.anchor.place ? '・' + p.anchor.place : ''), pos: p.anchor.pos, open: `data-anchor-edit="${p.anchor.id}"` } : null;
     const me = position();
     $('#mapcard').hidden = !dest;
     if (dest) {
-      $('#mapcard').innerHTML = `<button class="mapdest__b" style="text-align:left" ${dest.open}><div class="mapdest__k">NEXT</div><div class="mapdest__n">${esc(dest.name)}</div>
+      $('#mapcard').innerHTML = `<button class="mapdest__b" style="text-align:left" ${dest.open}><div class="mapdest__k">${dest.k || 'NEXT'}</div><div class="mapdest__n">${esc(dest.name)}</div>
         <div class="mapdest__m">${me.lat != null ? `徒歩${walkMin(me, dest.pos)}分` : '現在地未設定'}${dest.wait != null ? ` · 待ち${dest.wait}分` : ''}${mapMod.coordsNote()}</div></button>
-        <a class="btn btn--primary btn--sm" href="${routeUrl(dest.pos)}" target="_blank" rel="noopener">${ic('route')}ルート</a>`;
+        <a class="btn btn--primary btn--sm" ${routeAttr(dest.pos)}>${ic('route')}ルート</a>`;
     }
   } catch (e) {
     el.innerHTML = `<div class="note note--bad" style="margin:12px">${ic('alert')}<div>地図を読み込めませんでした（${esc(e.message)}）</div></div>`;
@@ -1706,6 +1723,12 @@ document.addEventListener('click', async (e) => {
   const t = e.target.closest('button, a, [data-open]');
   if (!t) return;
   const d = t.dataset;
+  if (d.route) {
+    const [lat, lon] = d.route.split(',').map(Number);
+    t.href = routeUrl({ lat, lon });
+    if (S.gps) requestFix({ force: true });
+    return;
+  }
   if (d.tab) return go(d.tab);
   if (d.tabGo) { closeSheet(); return go(d.tabGo); }
   if (d.open) return openAttraction(d.open);
@@ -1722,6 +1745,12 @@ document.addEventListener('click', async (e) => {
   if (d.xtab) { S.exploreTab = d.xtab; save(); return renderExplore(); }
   if (d.xf) { S.exploreFilter = d.xf; save(); return renderExplore(); }
   if (d.ff) { S.foodFilter = d.ff; save(); return renderExplore(); }
+  if (d.foodMap) {
+    const r = restaurantById[d.foodMap];
+    closeSheet(); S.mapFilter = 'food'; R.mapFood = { q: r.ja.split('・')[0], ids: [r.id], one: true }; save();
+    if (!S.gps) gpsIfGranted();
+    return go('map');
+  }
   if (d.fq !== undefined) { S.foodQ = S.foodQ === d.fq ? '' : d.fq; save(); return renderExplore(); }
   if (d.mf) { S.mapFilter = d.mf; save(); document.querySelectorAll('[data-mf]').forEach((b) => b.classList.toggle('is-active', b.dataset.mf === d.mf)); return renderMap(); }
   if (d.land) { S.land = d.land; S.landAt = Date.now(); save(); renderAll(); return toast(`現在地：${landById[d.land].ja}`, 'ok'); }

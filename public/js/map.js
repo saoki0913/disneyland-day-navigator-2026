@@ -110,8 +110,10 @@ function apply(opts) {
   if (f === 'all' || f === 'food') {
     for (const { r, pos } of opts.food) {
       if (!valid(pos)) continue;
-      upsert(seen, 'f:' + r.id, pos, `<div class="mk mk--food">${opts.icons?.food || ''}</div>`, 24,
-        `<b>${esc(r.ja)}</b><br>${esc(r.menu[0]?.name || '')}<br><button class="linkbtn" data-open-food="${r.id}">くわしく</button>`, { title: r.ja });
+      const isT = opts.target?.id === r.id;
+      if (isT) nextPos = pos;
+      upsert(seen, 'f:' + r.id, pos, `<div class="mk mk--food ${isT ? 'is-target' : ''}">${opts.icons?.food || ''}</div>`, isT ? 32 : 24,
+        `<b>${esc(r.ja)}</b><br>${esc(r.menu[0]?.name || '')}<br><button class="linkbtn" data-open-food="${r.id}">くわしく</button>`, { title: r.ja, z: isT ? 1000 : 0 });
     }
   }
   if (f === 'all' || f === 'shows') {
@@ -149,4 +151,11 @@ export function setMe(g) {
   };
 }
 export function locate(g) { if (map && valid(g)) map.setView([g.lat, g.lon], Math.max(map.getZoom(), 17.5)); }
+// Show every given point (e.g. me + the shop) with room for the top chips and bottom card.
+export function fitTo(points) {
+  const pts = points.filter(valid).map((p) => [p.lat, p.lon]);
+  if (!map || !pts.length) return;
+  if (pts.length === 1) return map.setView(pts[0], Math.max(map.getZoom(), 17));
+  map.fitBounds(pts, { paddingTopLeft: [40, 70], paddingBottomRight: [60, 110], maxZoom: 18 });
+}
 export function fit() { if (map) map.fitBounds(PARK_BOUNDS, FIT_PAD); }

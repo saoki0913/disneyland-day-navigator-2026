@@ -512,8 +512,9 @@ body.is-dragging { -webkit-user-select: none; user-select: none; cursor: grabbin
 .fsearch input { flex: 1; min-width: 0; border: 0; background: transparent; font: inherit; font-size: 16px; outline: none; color: var(--ink); }
 .fsearch button { color: var(--muted); font-size: 18px; display: grid; place-items: center; width: 28px; height: 28px; }
 .fhits { display: flex; flex-direction: column; gap: 2px; margin-top: 3px; }
-.fhit { display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; color: var(--ink); font-weight: 700; }
-.fhit span:last-child { color: var(--muted); font-weight: 600; white-space: nowrap; }
+.fhit { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 0 8px; font-size: 12.5px; color: var(--ink); font-weight: 700; line-height: 1.45; }
+.fhit > span:first-child { flex: 1 1 9em; min-width: 0; }
+.fhit > span:last-child { flex: 0 1 auto; max-width: 100%; color: var(--muted); font-weight: 600; text-align: right; overflow-wrap: anywhere; }
 .fhit mark { background: var(--mustard-l); color: inherit; border-radius: 3px; padding: 0 1px; }
 .fbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12.5px; color: var(--muted); font-weight: 700; }
 
@@ -521,3 +522,5 @@ body.is-dragging { -webkit-user-select: none; user-select: none; cursor: grabbin
 .tl__upd { margin-left: 8px; font-size: 12.5px; display: inline-flex; align-items: center; gap: 2px; vertical-align: 1px; }
 .tl__item.is-past .tl__card, .tl__item.is-past .tl__time { opacity: .5; }
 .tl__item--now.is-fresh .tl__res { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+
+.mk--food.is-target { width: 32px; height: 32px; font-size: 17px; background: var(--red); outline: 3px solid var(--navy); outline-offset: 1px; }
