@@ -1,0 +1,23 @@
+{
+ "schedule": [
+  {
+   "date": "2026-10-30",
+   "type": "OPERATING",
+   "openingTime": "2026-10-30T08:00:00-07:00",
+   "closingTime": "2026-10-30T23:00:00-07:00"
+  },
+  {
+   "date": "2026-10-31",
+   "type": "EXTRA_HOURS",
+   "description": "Early Entry",
+   "openingTime": "2026-10-31T07:30:00-07:00",
+   "closingTime": "2026-10-31T08:00:00-07:00"
+  },
+  {
+   "date": "2026-10-31",
+   "type": "OPERATING",
+   "openingTime": "2026-10-31T08:00:00-07:00",
+   "closingTime": "2026-10-31T23:00:00-07:00"
+  }
+ ]
+}

@@ -1,0 +1,5 @@
+# Cloudflare Pages project (independent *.pages.dev URL — does not touch existing Workers,
+# routes, DNS, or the account's workers.dev subdomain).
+name = "dl-navi-1031"
+pages_build_output_dir = "public"
+compatibility_date = "2026-10-01"

@@ -1,0 +1,31 @@
+{
+ "children": [
+  {
+   "id": "c1",
+   "name": "Star Wars: Rise of the Resistance",
+   "entityType": "ATTRACTION",
+   "location": {
+    "latitude": 33.81548,
+    "longitude": -117.92357
+   }
+  },
+  {
+   "id": "c2",
+   "name": "Plaza Inn",
+   "entityType": "RESTAURANT",
+   "location": {
+    "latitude": 33.81188,
+    "longitude": -117.91843
+   }
+  },
+  {
+   "id": "c3",
+   "name": "Far Away Thing",
+   "entityType": "ATTRACTION",
+   "location": {
+    "latitude": 28.4,
+    "longitude": -81.5
+   }
+  }
+ ]
+}

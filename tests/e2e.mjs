@@ -1,0 +1,267 @@
+// End-to-end browser test (Playwright, iPhone-sized). Usage: node tests/e2e.mjs [baseUrl]
+// API responses are mocked from test fixtures so the run is deterministic.
+import { createRequire } from 'node:module';
+import { readFileSync, mkdirSync } from 'node:fs';
+import assert from 'node:assert/strict';
+import { normalizeTPWLive, normalizeChildren, normalizeSchedule } from '../lib/server.js';
+const require = createRequire(import.meta.url);
+const { chromium } = require('playwright');
+const base = process.argv[2] || 'http://127.0.0.1:8788';
+const SHOTS = process.env.SHOTS || 'screenshots';
+mkdirSync(SHOTS, { recursive: true });
+const fx = (n) => JSON.parse(readFileSync(new URL(`./fixtures/${n}`, import.meta.url)));
+const live = () => ({ ok: true, ...normalizeTPWLive(fx('tpw-live.json')), source: 'themeparks.wiki', sourceLabel: 'ThemeParks.wiki', fetchedAt: new Date().toISOString(), errors: [] });
+const meta = { ok: true, coords: normalizeChildren(fx('tpw-children.json')), schedule: normalizeSchedule(fx('tpw-schedule.json')), errors: [] };
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkqPhfDwAEYQHqXc2zYwAAAABJRU5ErkJggg==', 'base64');
+
+const results = [];
+async function step(name, fn) {
+  try { await fn(); results.push(['PASS', name]); console.log('PASS', name); }
+  catch (e) { results.push(['FAIL', name, e.message]); console.log('FAIL', name, '\n   ', e.message.split('\n')[0]); }
+}
+const browser = await chromium.launch();
+async function newCtx({ liveMode = 'ok', sim = '10:00', geo = null, photos = 'ok' } = {}) {
+  const ctx = await browser.newContext({
+    viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'ja-JP', timezoneId: 'America/Los_Angeles',
+    ...(geo ? { geolocation: geo, permissions: ['geolocation'] } : {}),
+  });
+  await ctx.route('**/api/live', (r) => liveMode === 'ok' ? r.fulfill({ json: live() }) : r.fulfill({ status: 502, json: { ok: false, errors: ['themeparks.wiki: HTTP 503', 'queue-times.com: timeout'] } }));
+  await ctx.route('**/api/meta', (r) => r.fulfill({ json: meta }));
+  await ctx.route('**/api/photos', (r) => photos === 'ok'
+    ? r.fulfill({ json: { ok: true, photos: { rise: { src: 'https://upload.wikimedia.org/test/rise.png', page: 'https://en.wikipedia.org/wiki/x', title: 'Rise' }, indy: { src: 'https://upload.wikimedia.org/test/broken.png', page: '', title: 'Indy' } } } })
+    : r.fulfill({ status: 502, json: { ok: false } }));
+  await ctx.route('https://upload.wikimedia.org/test/rise.png', (r) => r.fulfill({ body: PNG, contentType: 'image/png' }));
+  await ctx.route('https://upload.wikimedia.org/test/broken.png', (r) => r.fulfill({ status: 404, body: '' }));
+  await ctx.route(/tile\.openstreetmap\.org/, (r) => r.abort());
+  const [h, m] = sim.split(':').map(Number);
+  await ctx.addInitScript((v) => { if (!localStorage.getItem('dlnavi-1031-v1')) localStorage.setItem('dlnavi-1031-v1', JSON.stringify({ sim: { base: v, setAt: Date.now() } })); }, h * 60 + m);
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(base + '/');
+  await page.waitForSelector('.next__title');
+  await page.waitForTimeout(400);
+  return { ctx, page, errors };
+}
+const tab = async (p, t) => { await p.click(`.tab[data-tab="${t}"]`); await p.waitForTimeout(250); };
+const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'horizontal overflow');
+
+// ---------- A: normal day with live data ----------
+{
+  const { ctx, page, errors } = await newCtx();
+  await step('1. iPhone size: home renders the Next Stop card, no horizontal scroll', async () => {
+    const t = await page.textContent('.next__title');
+    assert.match(t, /次は.+へ！/);
+    await noHScroll(page);
+    await page.screenshot({ path: `${SHOTS}/01-home.png` });
+    await page.screenshot({ path: `${SHOTS}/01-home-full.png`, fullPage: true });
+  });
+  await step('2. All five tabs switch views', async () => {
+    for (const t of ['plan', 'map', 'explore', 'shows', 'home']) {
+      await tab(page, t);
+      assert.equal(await page.getAttribute(`#view-${t}`, 'hidden'), null, t);
+      assert.equal(await page.getAttribute(`.tab[data-tab="${t}"]`, 'aria-current'), 'page');
+      if (t !== 'map') await noHScroll(page);
+    }
+  });
+  await step('5. LIVE values are shown with LIVE label + source', async () => {
+    assert.match(await page.textContent('#livePillText'), /LIVE/);
+    assert.ok(await page.locator('.next .tag--live').count() >= 1);
+    assert.match(await page.textContent('.datastat'), /ThemeParks\.wiki/);
+  });
+  await step('12. DOWN must-ride is flagged with reason (and not recommended now)', async () => {
+    const notes = await page.textContent('#view-home');
+    assert.match(notes, /レジスタンスの台頭：一時休止中/);
+    assert.doesNotMatch(await page.textContent('.next__title'), /レジスタンス/);
+  });
+  await step('3/4. Plans A/B/C switch and both Star Wars rides stay in every plan', async () => {
+    await tab(page, 'plan');
+    for (const id of ['relax', 'rides', 'balance']) {
+      await page.click(`[data-plan="${id}"]`);
+      await page.waitForTimeout(200);
+      assert.ok(await page.locator(`[data-plan="${id}"].is-active`).count() === 1);
+      const tl = await page.textContent('.tl');
+      assert.match(tl, /レジスタンスの台頭/, `${id} rise`);
+      assert.match(tl, /ミレニアム・ファルコン/, `${id} falcon`);
+      await page.screenshot({ path: `${SHOTS}/03-plan-${id}.png`, fullPage: true });
+    }
+    assert.match(await page.textContent('#toast'), /プランB/);
+  });
+  await step('11. Timeline: meals/shows appear once each, in time order, no overlap with rides', async () => {
+    const items = await page.$$eval('.tl__item', (els) => els.map((e) => ({ t: e.querySelector('.tl__time').textContent, cls: e.className, name: e.querySelector('.tl__name')?.textContent || '' })));
+    const toMin = (s) => { const [h, m] = s.split(':').map(Number); return h * 60 + m; };
+    for (let i = 1; i < items.length; i++) assert.ok(toMin(items[i].t) >= toMin(items[i - 1].t), `order ${items[i - 1].t} > ${items[i].t}`);
+    const fant = items.filter((i) => /ファンタズミック/.test(i.name));
+    assert.equal(fant.length, 1, 'Fantasmic once');
+  });
+  await step('9. "乗り終わった" records progress, survives reload', async () => {
+    await tab(page, 'home');
+    const first = await page.getAttribute('.next [data-done]', 'data-done');
+    await page.click('.next [data-done]');
+    await page.waitForTimeout(300);
+    assert.match(await page.textContent('#toast'), /記録しました/);
+    assert.match(await page.textContent('.progress__count'), /^1/);
+    await page.reload(); await page.waitForSelector('.next__title'); await page.waitForTimeout(300);
+    assert.match(await page.textContent('.progress__count'), /^1/);
+    await tab(page, 'plan');
+    assert.match(await page.textContent('#view-plan'), /体験済み/);
+    await tab(page, 'home');
+    assert.notEqual(await page.getAttribute('.next [data-done]', 'data-done'), first, 'next recommendation changes');
+  });
+  await step('10. Re-optimise after check-in keeps the remaining must-rides', async () => {
+    await tab(page, 'plan');
+    await page.click('[data-act="replan"]');
+    await page.waitForTimeout(500);
+    assert.match(await page.textContent('#toast'), /組み直/);
+    const tl = await page.textContent('.tl');
+    const st = await page.evaluate(() => window.__dlnavi.S.done);
+    for (const id of ['rise', 'falcon']) if (!st[id]) assert.match(tl, id === 'rise' ? /レジスタンス/ : /ファルコン/);
+  });
+  await step('"別の候補" skips the current suggestion and shows feedback', async () => {
+    await tab(page, 'home');
+    const cur = await page.getAttribute('.next [data-skip]', 'data-skip');
+    await page.click('.next [data-skip]');
+    await page.waitForTimeout(250);
+    assert.match(await page.textContent('#toast'), /おすすめから外しました/);
+    assert.notEqual(await page.getAttribute('.next [data-skip]', 'data-skip') ?? 'anchor', cur);
+    await page.screenshot({ path: `${SHOTS}/02-home-after-skip.png` });
+  });
+  await step('8. Photos: real image loads; broken image falls back to poster', async () => {
+    await tab(page, 'explore');
+    await page.waitForTimeout(500);
+    const ok = await page.$eval('#view-explore [data-open="rise"] img', (i) => i.complete && i.naturalWidth > 0).catch(() => false);
+    assert.ok(ok, 'rise photo loaded');
+    assert.equal(await page.locator('#view-explore [data-open="indy"] img').count(), 0, 'broken indy image replaced');
+    assert.equal(await page.locator('#view-explore [data-open="indy"] .poster').count(), 1);
+    await page.screenshot({ path: `${SHOTS}/05-explore.png`, fullPage: true });
+  });
+  await step('Explore: filters/sort work and refurb closure is shown', async () => {
+    await page.click('[data-xf="down"]'); await page.waitForTimeout(150);
+    const t = await page.textContent('.list');
+    assert.match(t, /スモールワールド|スモール・?ワールド|スモールワールド|イッツ・ア・スモールワールド/);
+    assert.match(t, /リニューアル休止/);
+    await page.click('[data-xf="all"]');
+    await page.selectOption('[data-xsort]', 'wait'); await page.waitForTimeout(150);
+    const waits = await page.$$eval('.item__wait b', (b) => b.map((x) => parseInt(x.textContent)));
+    for (let i = 1; i < waits.length; i++) assert.ok(waits[i] >= waits[i - 1]);
+    await page.click('[data-xtab="food"]'); await page.waitForTimeout(150);
+    assert.ok(await page.locator('[data-open-food]').count() >= 10);
+    await page.screenshot({ path: `${SHOTS}/06-food.png`, fullPage: true });
+    await page.click('[data-xtab="halloween"]'); await page.waitForTimeout(150);
+    assert.match(await page.textContent('#view-explore'), /ヴァンパイア・ミッキー/);
+    await page.screenshot({ path: `${SHOTS}/07-halloween.png`, fullPage: true });
+  });
+  await step('Detail sheet opens with description, Japan diff, manual wait input', async () => {
+    await page.click('[data-xtab="rides"]'); await page.waitForTimeout(150);
+    await page.click('#view-explore [data-open="haunted"]'); await page.waitForTimeout(250);
+    assert.equal(await page.isVisible('#sheet'), true);
+    assert.match(await page.textContent('#sheet'), /日本との違い/);
+    await page.fill('#manualWait', '15');
+    await page.click('[data-manual-save="haunted"]'); await page.waitForTimeout(200);
+    assert.match(await page.textContent('#toast'), /手入力/);
+    assert.match(await page.textContent('#view-explore [data-open="haunted"]'), /15分[\s\S]*手入力/);
+  });
+  await step('Shows: times from API, toggle off removes from plan, pick 21:00 Fantasmic', async () => {
+    await tab(page, 'shows');
+    assert.match(await page.textContent('#view-shows'), /APIの公式時刻/);
+    await page.screenshot({ path: `${SHOTS}/08-shows.png`, fullPage: true });
+    await page.uncheck('[data-show-toggle="cavalcade"]'); await page.waitForTimeout(200);
+    await page.click('[data-pick-show="fantasmic"][data-time="21:00"]'); await page.waitForTimeout(200);
+    await tab(page, 'plan');
+    const tl = await page.textContent('.tl');
+    assert.doesNotMatch(tl, /カヴァルケード/);
+    const fItem = await page.locator('.tl__item', { hasText: 'ファンタズミック' }).first().textContent();
+    assert.match(fItem, /21:00/);
+    await tab(page, 'shows');
+    await page.check('[data-show-toggle="cavalcade"]');
+    await page.click('[data-pick-show="fantasmic"][data-time="22:30"]');
+  });
+  await step('Meal can be changed (time + restaurant)', async () => {
+    await tab(page, 'plan');
+    await page.locator('.tl__item--meal [data-anchor-edit]').first().click(); await page.waitForTimeout(200);
+    await page.fill('#mealAt', '12:15');
+    await page.selectOption('#mealRest', 'ronto');
+    await page.click('[data-meal-save]'); await page.waitForTimeout(200);
+    assert.match(await page.textContent('.tl'), /ロント・ロースターズ/);
+  });
+  await step('Map renders markers and next-destination card', async () => {
+    await tab(page, 'map'); await page.waitForTimeout(1500);
+    assert.ok(await page.locator('.leaflet-marker-icon').count() >= 15);
+    assert.match(await page.textContent('#mapcard'), /次の目的地/);
+    await page.screenshot({ path: `${SHOTS}/04-map.png` });
+  });
+  await step('No uncaught JS errors', async () => assert.deepEqual(errors, []));
+  await ctx.close();
+}
+
+// ---------- B: API failure ----------
+{
+  const { ctx, page, errors } = await newCtx({ liveMode: 'fail', photos: 'fail' });
+  await step('6. API failure → error banner, 推定 labels, still recommends', async () => {
+    await page.waitForTimeout(500);
+    assert.match(await page.textContent('#banner'), /取得できませんでした/);
+    assert.match(await page.textContent('#livePillText'), /取得失敗/);
+    assert.ok(await page.locator('.next .tag--est').count() >= 1);
+    assert.equal(await page.locator('.next .tag--live').count(), 0, 'no LIVE label when not live');
+    await page.click('[data-act="refresh"]'); await page.waitForTimeout(400);
+    assert.match(await page.textContent('#toast'), /取得できませんでした/);
+    await page.screenshot({ path: `${SHOTS}/09-api-failure.png` });
+  });
+  await step('8b. No photos → poster fallback everywhere', async () => {
+    assert.equal(await page.locator('.next img').count(), 0);
+    assert.equal(await page.locator('.next .poster').count(), 1);
+  });
+  await step('No uncaught JS errors (failure mode)', async () => assert.deepEqual(errors, []));
+  await ctx.close();
+}
+
+// ---------- C: GPS allowed ----------
+{
+  const { ctx, page, errors } = await newCtx({ geo: { latitude: 33.81185, longitude: -117.9214, accuracy: 15 } });
+  await step('7a. GPS allowed → position used, distances shown', async () => {
+    await page.click('[data-act="gps-start"]'); await page.waitForTimeout(800);
+    assert.match(await page.textContent('.loc'), /GPS使用中/);
+    assert.match(await page.textContent('#toast'), /現在地を取得/);
+    await tab(page, 'map'); await page.waitForTimeout(1200);
+    assert.equal(await page.locator('.mk--me').count(), 1);
+    assert.match(await page.textContent('#mapcard'), /直線\d+m/);
+    await page.screenshot({ path: `${SHOTS}/04-map-gps.png` });
+  });
+  await step('No uncaught JS errors (GPS)', async () => assert.deepEqual(errors, []));
+  await ctx.close();
+}
+
+// ---------- D: GPS denied ----------
+{
+  const { ctx, page, errors } = await newCtx();
+  await step('7b. GPS denied → clear message + manual area picker works', async () => {
+    await page.evaluate(() => {
+      navigator.geolocation.watchPosition = (ok, err) => { setTimeout(() => err({ code: 1, message: 'denied' }), 50); return 1; };
+      navigator.geolocation.clearWatch = () => {};
+    });
+    await page.click('[data-act="gps-start"]'); await page.waitForTimeout(400);
+    assert.match(await page.textContent('.loc'), /許可されていません/);
+    await page.click('[data-act="pick-land"]'); await page.waitForTimeout(200);
+    await page.click('[data-land="tomorrow"]'); await page.waitForTimeout(200);
+    assert.match(await page.textContent('.loc'), /トゥモローランド/);
+    await page.screenshot({ path: `${SHOTS}/10-gps-denied-land.png` });
+  });
+  await step('No uncaught JS errors (GPS denied)', async () => assert.deepEqual(errors, []));
+  await ctx.close();
+}
+
+// ---------- E: before opening / meal time / night ----------
+for (const [t, expect, file] of [['07:00', /開園/, '11-preopen'], ['11:28', /ランチ/, '12-lunch'], ['21:00', /場所取り|花火|スクリームズ/, '13-night']]) {
+  const { ctx, page, errors } = await newCtx({ sim: t });
+  await step(`Time ${t}: home adapts (${expect})`, async () => {
+    assert.match(await page.textContent('#view-home'), expect);
+    await page.screenshot({ path: `${SHOTS}/${file}.png` });
+    assert.deepEqual(errors, []);
+  });
+  await ctx.close();
+}
+
+await browser.close();
+const fail = results.filter((r) => r[0] === 'FAIL');
+console.log(`\n${results.length - fail.length}/${results.length} passed`);
+process.exit(fail.length ? 1 : 0);

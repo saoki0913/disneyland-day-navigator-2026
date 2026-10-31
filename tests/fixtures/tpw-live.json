@@ -1,0 +1,373 @@
+{
+ "id": "7340550b-c14d-4def-80bb-acdb51d49a66",
+ "name": "Disneyland Park",
+ "entityType": "PARK",
+ "timezone": "America/Los_Angeles",
+ "liveData": [
+  {
+   "id": "fixture-0",
+   "name": "Star Wars: Rise of the Resistance",
+   "entityType": "ATTRACTION",
+   "parkId": "7340550b-c14d-4def-80bb-acdb51d49a66",
+   "status": "DOWN",
+   "queue": {
+    "STANDBY": {
+     "waitTime": null
+    }
+   },
+   "lastUpdated": "2026-10-31T17:02:00Z"
+  },
+  {
+   "id": "fixture-1",
+   "name": "Millennium Falcon: Smugglers Run",
+   "entityType": "ATTRACTION",
+   "parkId": "7340550b-c14d-4def-80bb-acdb51d49a66",
+   "status": "OPERATING",
+   "queue": {
+    "STANDBY": {
+     "waitTime": 45
+    },
+    "SINGLE_RIDER": {
+     "waitTime": 15
+    }
+   },
+   "lastUpdated": "2026-10-31T17:02:00Z"
+  },
+  {
+   "id": "fixture-2",
+   "name": "Indiana Jones™ Adventure",
+   "entityType": "ATTRACTION",
+   "parkId": "7340550b-c14d-4def-80bb-acdb51d49a66",
+   "status": "OPERATING",
+   "queue": {
+    "STANDBY": {
+     "waitTime": 25
+    }
+   },
+   "lastUpdated": "2026-10-31T17:02:00Z"
+  },
+  {
+   "id": "fixture-3",
+   "name": "Space Mountain",
+   "entityType": "ATTRACTION",
+   "parkId": "7340550b-c14d-4def-80bb-acdb51d49a66",
+   "status": "OPERATING",
+   "queue": {
+    "STANDBY": {
+     "waitTime": 55
+    }
+   },
+   "lastUpdated": "2026-10-31T17:02:00Z"
+  },
+  {
+   "id": "fixture-4",
+   "name": "Haunted Mansion Holiday",
+   "entityType": "ATTRACTION",
+   "parkId": "7340550b-c14d-4def-80bb-acdb51d49a66",
+   "status": "OPERATING",
+   "queue": {
+    "STANDBY": {
+     "waitTime": 60
+    }
+   },
+   "lastUpdated": "2026-10-31T17:02:00Z"
+  },
+  {
+   "id": "fixture-5",
+   "name": "Big Thunder Mountain Railroad",
+   "entityType": "ATTRACTION",
+   "parkId": "7340550b-c14d-4def-80bb-acdb51d49a66",
+   "status": "OPERATING",
+   "queue": {
+    "STANDBY": {
+     "waitTime": 35
+    }
+   },
+   "lastUpdated": "2026-10-31T17:02:00Z"
+  },
+  {
+   "id": "fixture-6",
+   "name": "Mickey & Minnie's Runaway Railway",
+   "entityType": "ATTRACTION",
+   "parkId": "7340550b-c14d-4def-80bb-acdb51d49a66",
+   "status": "OPERATING",
+   "queue": {
+    "STANDBY": {
+     "waitTime": 40
+    }
+   },
+   "lastUpdated": "2026-10-31T17:02:00Z"
+  },
+  {
+   "id": "fixture-7",
+   "name": "Pirates of the Caribbean",
+   "entityType": "ATTRACTION",
+   "parkId": "7340550b-c14d-4def-80bb-acdb51d49a66",
+   "status": "OPERATING",
+   "queue": {
+    "STANDBY": {
+     "waitTime": 20
+    }
+   },
+   "lastUpdated": "2026-10-31T17:02:00Z"
+  },
+  {
+   "id": "fixture-8",
+   "name": "Matterhorn Bobsleds",
+   "entityType": "ATTRACTION",
+   "parkId": "7340550b-c14d-4def-80bb-acdb51d49a66",
+   "status": "OPERATING",
+   "queue": {
+    "STANDBY": {
+     "waitTime": 50
+    }
+   },
+   "lastUpdated": "2026-10-31T17:02:00Z"
+  },
+  {
+   "id": "fixture-9",
+   "name": "Jungle Cruise",
+   "entityType": "ATTRACTION",
+   "parkId": "7340550b-c14d-4def-80bb-acdb51d49a66",
+   "status": "OPERATING",
+   "queue": {
+    "STANDBY": {
+     "waitTime": 30
+    }
+   },
+   "lastUpdated": "2026-10-31T17:02:00Z"
+  },
+  {
+   "id": "fixture-10",
+   "name": "Tiana's Bayou Adventure",
+   "entityType": "ATTRACTION",
+   "parkId": "7340550b-c14d-4def-80bb-acdb51d49a66",
+   "status": "OPERATING",
+   "queue": {
+    "STANDBY": {
+     "waitTime": 45
+    }
+   },
+   "lastUpdated": "2026-10-31T17:02:00Z"
+  },
+  {
+   "id": "fixture-11",
+   "name": "Star Tours - The Adventures Continue",
+   "entityType": "ATTRACTION",
+   "parkId": "7340550b-c14d-4def-80bb-acdb51d49a66",
+   "status": "OPERATING",
+   "queue": {
+    "STANDBY": {
+     "waitTime": 15
+    }
+   },
+   "lastUpdated": "2026-10-31T17:02:00Z"
+  },
+  {
+   "id": "fixture-12",
+   "name": "\"it's a small world\"",
+   "entityType": "ATTRACTION",
+   "parkId": "7340550b-c14d-4def-80bb-acdb51d49a66",
+   "status": "REFURBISHMENT",
+   "queue": {
+    "STANDBY": {
+     "waitTime": null
+    }
+   },
+   "lastUpdated": "2026-10-31T17:02:00Z"
+  },
+  {
+   "id": "fixture-13",
+   "name": "Peter Pan's Flight",
+   "entityType": "ATTRACTION",
+   "parkId": "7340550b-c14d-4def-80bb-acdb51d49a66",
+   "status": "OPERATING",
+   "queue": {
+    "STANDBY": {
+     "waitTime": 50
+    }
+   },
+   "lastUpdated": "2026-10-31T17:02:00Z"
+  },
+  {
+   "id": "fixture-14",
+   "name": "Mr. Toad's Wild Ride",
+   "entityType": "ATTRACTION",
+   "parkId": "7340550b-c14d-4def-80bb-acdb51d49a66",
+   "status": "OPERATING",
+   "queue": {
+    "STANDBY": {
+     "waitTime": 20
+    }
+   },
+   "lastUpdated": "2026-10-31T17:02:00Z"
+  },
+  {
+   "id": "fixture-15",
+   "name": "Alice in Wonderland",
+   "entityType": "ATTRACTION",
+   "parkId": "7340550b-c14d-4def-80bb-acdb51d49a66",
+   "status": "OPERATING",
+   "queue": {
+    "STANDBY": {
+     "waitTime": 25
+    }
+   },
+   "lastUpdated": "2026-10-31T17:02:00Z"
+  },
+  {
+   "id": "fixture-16",
+   "name": "Buzz Lightyear Astro Blasters",
+   "entityType": "ATTRACTION",
+   "parkId": "7340550b-c14d-4def-80bb-acdb51d49a66",
+   "status": "OPERATING",
+   "queue": {
+    "STANDBY": {
+     "waitTime": 25
+    }
+   },
+   "lastUpdated": "2026-10-31T17:02:00Z"
+  },
+  {
+   "id": "fixture-17",
+   "name": "Autopia",
+   "entityType": "ATTRACTION",
+   "parkId": "7340550b-c14d-4def-80bb-acdb51d49a66",
+   "status": "OPERATING",
+   "queue": {
+    "STANDBY": {
+     "waitTime": 30
+    }
+   },
+   "lastUpdated": "2026-10-31T17:02:00Z"
+  },
+  {
+   "id": "fixture-18",
+   "name": "Finding Nemo Submarine Voyage",
+   "entityType": "ATTRACTION",
+   "parkId": "7340550b-c14d-4def-80bb-acdb51d49a66",
+   "status": "OPERATING",
+   "queue": {
+    "STANDBY": {
+     "waitTime": 25
+    }
+   },
+   "lastUpdated": "2026-10-31T17:02:00Z"
+  },
+  {
+   "id": "fixture-19",
+   "name": "Walt Disney's Enchanted Tiki Room",
+   "entityType": "ATTRACTION",
+   "parkId": "7340550b-c14d-4def-80bb-acdb51d49a66",
+   "status": "OPERATING",
+   "queue": {
+    "STANDBY": {
+     "waitTime": 5
+    }
+   },
+   "lastUpdated": "2026-10-31T17:02:00Z"
+  },
+  {
+   "id": "fixture-20",
+   "name": "Mark Twain Riverboat",
+   "entityType": "ATTRACTION",
+   "parkId": "7340550b-c14d-4def-80bb-acdb51d49a66",
+   "status": "OPERATING",
+   "queue": {
+    "STANDBY": {
+     "waitTime": 10
+    }
+   },
+   "lastUpdated": "2026-10-31T17:02:00Z"
+  },
+  {
+   "id": "fixture-21",
+   "name": "Disneyland Railroad - Main Street Station",
+   "entityType": "ATTRACTION",
+   "parkId": "7340550b-c14d-4def-80bb-acdb51d49a66",
+   "status": "OPERATING",
+   "queue": {
+    "STANDBY": {
+     "waitTime": 5
+    }
+   },
+   "lastUpdated": "2026-10-31T17:02:00Z"
+  },
+  {
+   "id": "fixture-22",
+   "name": "Pirate's Lair on Tom Sawyer Island",
+   "entityType": "ATTRACTION",
+   "parkId": "7340550b-c14d-4def-80bb-acdb51d49a66",
+   "status": "OPERATING",
+   "queue": {
+    "STANDBY": {
+     "waitTime": 5
+    }
+   },
+   "lastUpdated": "2026-10-31T17:02:00Z"
+  },
+  {
+   "id": "fx-s1",
+   "name": "Fantasmic!",
+   "entityType": "SHOW",
+   "status": "OPERATING",
+   "showtimes": [
+    {
+     "type": "Performance Time",
+     "startTime": "2026-10-31T21:00:00-07:00",
+     "endTime": "2026-10-31T21:22:00-07:00"
+    },
+    {
+     "type": "Performance Time",
+     "startTime": "2026-10-31T22:30:00-07:00",
+     "endTime": "2026-10-31T22:52:00-07:00"
+    }
+   ],
+   "lastUpdated": "2026-10-31T17:00:00Z"
+  },
+  {
+   "id": "fx-s2",
+   "name": "Halloween Screams",
+   "entityType": "SHOW",
+   "status": "OPERATING",
+   "showtimes": [
+    {
+     "type": "Performance Time",
+     "startTime": "2026-10-31T21:30:00-07:00",
+     "endTime": "2026-10-31T21:45:00-07:00"
+    }
+   ]
+  },
+  {
+   "id": "fx-s3",
+   "name": "Mickey and Friends Halloween Cavalcade",
+   "entityType": "SHOW",
+   "status": "OPERATING",
+   "showtimes": [
+    {
+     "type": "Performance Time",
+     "startTime": "2026-10-31T13:30:00-07:00",
+     "endTime": "2026-10-31T13:45:00-07:00"
+    },
+    {
+     "type": "Performance Time",
+     "startTime": "2026-10-31T14:45:00-07:00",
+     "endTime": "2026-10-31T15:00:00-07:00"
+    }
+   ]
+  },
+  {
+   "id": "fx-s4",
+   "name": "Main Street Philharmonic",
+   "entityType": "SHOW",
+   "status": "OPERATING",
+   "showtimes": [
+    {
+     "type": "Performance Time",
+     "startTime": "2026-10-31T11:00:00-07:00",
+     "endTime": "2026-10-31T11:20:00-07:00"
+    }
+   ]
+  }
+ ]
+}

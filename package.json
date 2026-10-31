@@ -1,0 +1,30 @@
+{
+  "name": "disneyland-day-navigator-2026",
+  "version": "1.0.0",
+  "description": "",
+  "scripts": {
+    "dev": "wrangler pages dev public --port 8788",
+    "deploy": "wrangler pages deploy public --project-name dl-navi-1031 --branch main",
+    "deploy:preview": "wrangler pages deploy public --project-name dl-navi-1031 --branch preview",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/saoki0913/disneyland-day-navigator-2026.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/saoki0913/disneyland-day-navigator-2026/issues"
+  },
+  "homepage": "https://github.com/saoki0913/disneyland-day-navigator-2026#readme",
+  "devDependencies": {
+    "@fontsource/dm-serif-display": "^5.3.0",
+    "@fontsource/oswald": "^5.3.0",
+    "leaflet": "^1.9.4",
+    "wrangler": "^4.156.0"
+  },
+  "type": "module",
+  "private": true
+}

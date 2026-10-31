@@ -1,0 +1,65 @@
+{
+ "lands": [
+  {
+   "id": 1,
+   "name": "Tomorrowland",
+   "rides": [
+    {
+     "id": 1,
+     "name": "Space Mountain",
+     "is_open": true,
+     "wait_time": 40,
+     "last_updated": "2026-10-31T17:00:00.000Z"
+    },
+    {
+     "id": 2,
+     "name": "Star Tours - The Adventures Continue",
+     "is_open": true,
+     "wait_time": 10,
+     "last_updated": "2026-10-31T17:00:00.000Z"
+    }
+   ]
+  },
+  {
+   "id": 2,
+   "name": "Star Wars: Galaxy's Edge",
+   "rides": [
+    {
+     "id": 3,
+     "name": "Star Wars: Rise of the Resistance",
+     "is_open": false,
+     "wait_time": 0,
+     "last_updated": "2026-10-31T17:00:00.000Z"
+    },
+    {
+     "id": 4,
+     "name": "Millennium Falcon: Smugglers Run",
+     "is_open": true,
+     "wait_time": 35,
+     "last_updated": "2026-10-31T17:00:00.000Z"
+    }
+   ]
+  },
+  {
+   "id": 3,
+   "name": "Adventureland",
+   "rides": [
+    {
+     "id": 5,
+     "name": "Indiana Jones™ Adventure",
+     "is_open": true,
+     "wait_time": 30,
+     "last_updated": "2026-10-31T17:00:00.000Z"
+    },
+    {
+     "id": 6,
+     "name": "Jungle Cruise",
+     "is_open": true,
+     "wait_time": 20,
+     "last_updated": "2026-10-31T17:00:00.000Z"
+    }
+   ]
+  }
+ ],
+ "rides": []
+}

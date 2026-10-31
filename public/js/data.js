@@ -1,0 +1,504 @@
+// ---------------------------------------------------------------------------
+// Static catalog for Disneyland Park (Anaheim) — Oct 31, 2026
+//
+// Honesty rules baked into this file:
+//  * `pos` coordinates here are APPROXIMATE fallbacks (hand-placed). At runtime
+//    the app replaces them with coordinates from the ThemeParks.wiki entity list
+//    whenever that API is reachable; the UI labels which one is in use.
+//  * `peak` / wait curves are PLANNING ESTIMATES, never shown as live values.
+//  * Prices, mobile-order availability and seasonal items are pre-trip
+//    research (labelled "事前情報") and must be re-checked in the official app.
+// ---------------------------------------------------------------------------
+
+export const TRIP = {
+  date: '2026-10-31',
+  tz: 'America/Los_Angeles',
+  // User-provided plan values. Overridden by the API schedule when available.
+  openMin: 8 * 60,
+  closeMin: 23 * 60,
+  hotel: { name: 'Clarion Hotel Anaheim Resort', pos: { lat: 33.80345, lon: -117.91508 } },
+  entrance: { lat: 33.80985, lon: -117.91899 },
+};
+
+export const PARK_ID_TPW = '7340550b-c14d-4def-80bb-acdb51d49a66';
+export const PARK_ID_QT = 16;
+
+// Lands — used for the "今どこ？" picker when GPS is unavailable.
+export const LANDS = [
+  { id: 'main', ja: 'メインストリートUSA', en: 'Main Street, U.S.A.', pos: { lat: 33.8110, lon: -117.9190 }, color: '#c8423a' },
+  { id: 'hub', ja: 'お城前（セントラルプラザ）', en: 'Central Plaza', pos: { lat: 33.8122, lon: -117.9190 }, color: '#1f2a44' },
+  { id: 'adv', ja: 'アドベンチャーランド', en: 'Adventureland', pos: { lat: 33.8115, lon: -117.9208 }, color: '#4f7a3a' },
+  { id: 'nos', ja: 'ニューオーリンズ・スクエア', en: 'New Orleans Square', pos: { lat: 33.8113, lon: -117.9222 }, color: '#5b3f78' },
+  { id: 'bayou', ja: 'バイユー・カントリー', en: 'Bayou Country', pos: { lat: 33.8126, lon: -117.9238 }, color: '#2f6b5a' },
+  { id: 'frontier', ja: 'フロンティアランド', en: 'Frontierland', pos: { lat: 33.8125, lon: -117.9210 }, color: '#a8642a' },
+  { id: 'sw', ja: 'ギャラクシーズ・エッジ', en: "Star Wars: Galaxy's Edge", pos: { lat: 33.8148, lon: -117.9228 }, color: '#3c4a5c' },
+  { id: 'fantasy', ja: 'ファンタジーランド', en: 'Fantasyland', pos: { lat: 33.8137, lon: -117.9188 }, color: '#b0518a' },
+  { id: 'toon', ja: 'ミッキーのトゥーンタウン', en: "Mickey's Toontown", pos: { lat: 33.8160, lon: -117.9180 }, color: '#d9852b' },
+  { id: 'tomorrow', ja: 'トゥモローランド', en: 'Tomorrowland', pos: { lat: 33.8117, lon: -117.9175 }, color: '#2d6fa3' },
+];
+export const landById = Object.fromEntries(LANDS.map((l) => [l.id, l]));
+
+// match: normalized-name substrings (lowercase, [a-z0-9] only) used to map API
+// records onto our ids. Keep them specific enough not to collide.
+// thrill 1-5, pop (popularity) 1-5, dur = ride + load/unload minutes.
+export const ATTRACTIONS = [
+  {
+    id: 'rise', ja: 'スター・ウォーズ：ライズ・オブ・レジスタンス', short: 'レジスタンスの台頭',
+    en: 'Star Wars: Rise of the Resistance', land: 'sw', must: true,
+    match: ['riseoftheresistance'], thrill: 3, pop: 5, dur: 22, peak: 95,
+    pos: { lat: 33.8155, lon: -117.9236 }, wiki: 'Star_Wars:_Rise_of_the_Resistance',
+    desc: 'ファースト・オーダーの巨大戦艦に捕らわれ、レジスタンスとして脱出する20分超の超大作。プレショー→シャトル→戦艦内部と、映画のセットに入り込んだような体験が続く。',
+    japan: '日本未上陸。東京にはない、ディズニー史上最大級のライド。',
+    tip: '休止が多い施設。休止中なら他を回り、再開したらすぐ向かうのが鉄則。',
+  },
+  {
+    id: 'falcon', ja: 'ミレニアム・ファルコン：スマグラーズ・ラン', short: 'ミレニアム・ファルコン',
+    en: 'Millennium Falcon: Smugglers Run', land: 'sw', must: true,
+    match: ['smugglersrun'], thrill: 3, pop: 4, dur: 12, peak: 60,
+    pos: { lat: 33.8146, lon: -117.9223 }, wiki: 'Millennium_Falcon:_Smugglers_Run',
+    desc: '実物大のミレニアム・ファルコンのコックピットで、6人1組でパイロット・砲手・エンジニアを分担して操縦するシミュレーター。',
+    japan: '日本未上陸。2人ならパイロット席を希望できると楽しい（キャストに相談）。',
+    tip: 'シングルライダーあり（2人で別々になってもよいなら時短）。',
+  },
+  {
+    id: 'indy', ja: 'インディ・ジョーンズ・アドベンチャー', short: 'インディ・ジョーンズ',
+    en: 'Indiana Jones Adventure', land: 'adv',
+    match: ['indianajones'], thrill: 3, pop: 5, dur: 12, peak: 70,
+    pos: { lat: 33.8119, lon: -117.9215 }, wiki: 'Indiana_Jones_Adventure',
+    desc: '「禁断の瞳の神殿」をジープで駆け抜けるアトラクション。ゴールの大玉や毒ヘビなど名シーン満載。',
+    japan: '東京ディズニーシーの「クリスタルスカルの魔宮」と同じライドシステムだが、物語・セットが異なるオリジナル版。',
+    tip: '午前中か夜が狙い目。行列内の古代文字の仕掛けも楽しい。',
+  },
+  {
+    id: 'space', ja: 'スペース・マウンテン', short: 'スペース・マウンテン',
+    en: 'Space Mountain', land: 'tomorrow',
+    match: ['spacemountain'], thrill: 4, pop: 5, dur: 8, peak: 75,
+    pos: { lat: 33.8113, lon: -117.9171 }, wiki: 'Space_Mountain_(Disneyland)',
+    desc: '真っ暗な宇宙空間を疾走する屋内コースター。座席スピーカーから音楽が流れるのがディズニーランド版の特徴。',
+    japan: '東京版はリニューアル休止中（2027年再開予定）。2人並び座席で乗れる。',
+    tip: '夜のショー時間帯に待ち時間が下がりやすい。',
+  },
+  {
+    id: 'haunted', ja: 'ホーンテッドマンション・ホリデー', short: 'ホーンテッドマンション',
+    en: 'Haunted Mansion Holiday', land: 'nos',
+    match: ['hauntedmansion'], thrill: 1, pop: 5, dur: 12, peak: 75,
+    pos: { lat: 33.8117, lon: -117.9232 }, wiki: 'Haunted_Mansion_Holiday',
+    desc: '『ナイトメアー・ビフォア・クリスマス』のジャックがお屋敷を乗っ取る季節限定バージョン。毎年変わる巨大ジンジャーブレッドハウスも見どころ。',
+    japan: '東京の「ホーンテッドマンション“ホリデーナイトメアー”」の本家。ハロウィン当日に乗れるのは特別。',
+    tip: 'ハロウィン当日は終日混雑。朝イチか夜遅めが比較的まし。',
+  },
+  {
+    id: 'thunder', ja: 'ビッグサンダー・マウンテン', short: 'ビッグサンダー',
+    en: 'Big Thunder Mountain Railroad', land: 'frontier',
+    match: ['bigthunder'], thrill: 3, pop: 4, dur: 8, peak: 55,
+    pos: { lat: 33.8129, lon: -117.9207 }, wiki: 'Big_Thunder_Mountain_Railroad',
+    desc: '鉱山列車が赤い岩山を駆け回るコースター。夜はライトアップされた景色がきれい。',
+    japan: '東京版とほぼ同系統。こちらは1979年開業のオリジナル。',
+    tip: 'パレードや花火の時間帯に空きやすい。',
+  },
+  {
+    id: 'mmrr', ja: 'ミッキー＆ミニーのランナウェイ・レールウェイ', short: 'ミッキーとミニーの暴走列車',
+    en: "Mickey & Minnie's Runaway Railway", land: 'toon',
+    match: ['runawayrailway'], thrill: 2, pop: 4, dur: 10, peak: 55,
+    pos: { lat: 33.8163, lon: -117.9183 }, wiki: "Mickey_&_Minnie's_Runaway_Railway",
+    desc: 'グーフィーが運転する列車でミッキーのアニメの世界へ。予測不能に動くトラックレスライド。',
+    japan: '日本未上陸。トゥーンタウン最奥にあるので移動時間に注意。',
+    tip: 'パーク北端。周辺をまとめて回ると効率的。',
+  },
+  {
+    id: 'pirates', ja: 'カリブの海賊', short: 'カリブの海賊',
+    en: 'Pirates of the Caribbean', land: 'nos',
+    match: ['piratesofthecaribbean'], thrill: 1, pop: 4, dur: 18, peak: 40,
+    pos: { lat: 33.8113, lon: -117.9217 }, wiki: 'Pirates_of_the_Caribbean_(attraction)',
+    desc: 'ウォルト自身が手掛けた最後のアトラクション（1967年）。約15分の長い船旅。',
+    japan: '東京版より長く、滝下りが2回。途中でブルーバイユー・レストランの横を通る。',
+    tip: '回転が速く、待ち時間が読みやすい。休憩代わりにも◎。',
+  },
+  {
+    id: 'matterhorn', ja: 'マッターホーン・ボブスレー', short: 'マッターホーン',
+    en: 'Matterhorn Bobsleds', land: 'fantasy',
+    match: ['matterhorn'], thrill: 4, pop: 3, dur: 7, peak: 60,
+    pos: { lat: 33.8131, lon: -117.9180 }, wiki: 'Matterhorn_Bobsleds',
+    desc: '雪山の中を駆け抜けるボブスレー型コースター。雪男ハロルドが登場。',
+    japan: '日本未上陸。世界初のチューブ型鋼製コースター（1959年）。揺れは強め。',
+    tip: '縦2人乗り。夜は待ち時間が下がりがち。',
+  },
+  {
+    id: 'jungle', ja: 'ジャングルクルーズ', short: 'ジャングルクルーズ',
+    en: 'Jungle Cruise', land: 'adv',
+    match: ['junglecruise'], thrill: 1, pop: 3, dur: 11, peak: 45,
+    pos: { lat: 33.8114, lon: -117.9205 }, wiki: 'Jungle_Cruise',
+    desc: '船長のジョークを聞きながら世界の秘境を巡るボートツアー（英語）。',
+    japan: '東京にもあるが、こちらが1955年開園時からの元祖。',
+    tip: '英語のジョークが中心。雰囲気を楽しむ枠。',
+  },
+  {
+    id: 'tiana', ja: 'ティアナのバイユー・アドベンチャー', short: 'ティアナのバイユー',
+    en: "Tiana's Bayou Adventure", land: 'bayou',
+    match: ['tianasbayou'], thrill: 3, pop: 4, dur: 12, peak: 60,
+    pos: { lat: 33.8128, lon: -117.9241 }, wiki: "Tiana's_Bayou_Adventure",
+    desc: 'ティアナのパーティー準備を手伝う丸太ボート。最後は大きな滝を落下（濡れることあり）。',
+    japan: '東京はスプラッシュ・マウンテンのまま。こちらは2024年に生まれ変わった新版。',
+    tip: '夜は冷えるので、濡れたくなければ昼間に。',
+  },
+  {
+    id: 'startours', ja: 'スター・ツアーズ', short: 'スター・ツアーズ',
+    en: 'Star Tours – The Adventures Continue', land: 'tomorrow',
+    match: ['startours'], thrill: 2, pop: 3, dur: 9, peak: 30,
+    pos: { lat: 33.8117, lon: -117.9180 }, wiki: 'Star_Tours_–_The_Adventures_Continue',
+    desc: 'スター・ウォーズの世界を3Dで旅するシミュレーター。行き先はランダム。',
+    japan: '東京とほぼ同じ内容。待ちが短い時の候補。',
+    tip: 'スター・ウォーズ好きならおかわり枠に。',
+  },
+  {
+    id: 'smallworld', ja: 'イッツ・ア・スモールワールド', short: 'スモールワールド',
+    en: '"it\'s a small world"', land: 'fantasy',
+    match: ['smallworld'], thrill: 1, pop: 3, dur: 16, peak: 30,
+    pos: { lat: 33.8148, lon: -117.9172 }, wiki: "It's_a_Small_World",
+    desc: '世界の子どもたちの歌声が響くボートライド。巨大な時計塔のファサードが見どころ。',
+    japan: '東京と同系統。秋はホリデー版への切替のため休止の場合あり（状況はAPIで表示）。',
+    tip: '休憩を兼ねて乗れる長めのライド。',
+  },
+  {
+    id: 'peterpan', ja: 'ピーターパン空の旅', short: 'ピーターパン',
+    en: "Peter Pan's Flight", land: 'fantasy',
+    match: ['peterpan'], thrill: 1, pop: 4, dur: 6, peak: 60,
+    pos: { lat: 33.8134, lon: -117.9193 }, wiki: "Peter_Pan's_Flight",
+    desc: '空飛ぶ海賊船でロンドンの夜景からネバーランドへ。',
+    japan: '東京と同じ題材。所要時間が短いのに列が長くなりがち。',
+    tip: '待ち30分以下なら乗る価値あり。',
+  },
+  {
+    id: 'toad', ja: 'ミスター・トードのワイルドライド', short: 'トードのワイルドライド',
+    en: "Mr. Toad's Wild Ride", land: 'fantasy',
+    match: ['mrtoad', 'toadswild'], thrill: 2, pop: 2, dur: 5, peak: 30,
+    pos: { lat: 33.8135, lon: -117.9184 }, wiki: "Mr._Toad's_Wild_Ride",
+    desc: '暴走するトードの車でイギリスの街を爆走するダークライド。ラストは意外な場所へ。',
+    japan: '日本未上陸。世界でここだけのクラシック。',
+    tip: '短時間で乗れる隠れ名作。',
+  },
+  {
+    id: 'alice', ja: 'アリス・イン・ワンダーランド', short: 'アリス',
+    en: 'Alice in Wonderland', land: 'fantasy',
+    match: ['aliceinwonderland'], thrill: 1, pop: 2, dur: 6, peak: 35,
+    pos: { lat: 33.8138, lon: -117.9177 }, wiki: 'Alice_in_Wonderland_(Disneyland_attraction)',
+    desc: 'イモムシ型のライドで不思議の国へ。建物の外を通る区間もある。',
+    japan: '日本未上陸（東京はレストラン/迷路のみ）。',
+    tip: 'ファンタジーランドの空き時間に。',
+  },
+  {
+    id: 'buzz', ja: 'バズ・ライトイヤー・アストロブラスター', short: 'バズ・ライトイヤー',
+    en: 'Buzz Lightyear Astro Blasters', land: 'tomorrow',
+    match: ['buzzlightyear'], thrill: 1, pop: 3, dur: 7, peak: 40,
+    pos: { lat: 33.8115, lon: -117.9182 }, wiki: 'Buzz_Lightyear_Astro_Blasters',
+    desc: 'レーザー銃で的を撃って得点を競うシューティングライド。2人で勝負できる。',
+    japan: '東京にも同系統あり。',
+    tip: '2人で点数勝負が盛り上がる。',
+  },
+  {
+    id: 'autopia', ja: 'オートピア', short: 'オートピア',
+    en: 'Autopia', land: 'tomorrow',
+    match: ['autopia'], thrill: 1, pop: 2, dur: 9, peak: 45,
+    pos: { lat: 33.8124, lon: -117.9166 }, wiki: 'Autopia',
+    desc: '自分でハンドルを握ってコースを走るゴーカート。',
+    japan: '日本にはない（東京のグランドサーキット・レースウェイは閉鎖）。',
+    tip: '待ち時間の割に満足度は好み次第。',
+  },
+  {
+    id: 'nemo', ja: 'ファインディング・ニモ・サブマリン・ヴォヤッジ', short: 'ニモ・サブマリン',
+    en: 'Finding Nemo Submarine Voyage', land: 'tomorrow',
+    match: ['findingnemo'], thrill: 1, pop: 2, dur: 15, peak: 40,
+    pos: { lat: 33.8124, lon: -117.9176 }, wiki: 'Finding_Nemo_Submarine_Voyage',
+    desc: '黄色い潜水艦でニモたちの海へ。',
+    japan: '日本未上陸。',
+    tip: '乗船が遅いので待ち時間は見た目より長め。',
+  },
+  {
+    id: 'tiki', ja: '魅惑のチキルーム', short: 'チキルーム',
+    en: "Walt Disney's Enchanted Tiki Room", land: 'adv',
+    match: ['tikiroom'], thrill: 1, pop: 2, dur: 16, peak: 10,
+    pos: { lat: 33.8116, lon: -117.9200 }, wiki: "Walt_Disney's_Enchanted_Tiki_Room",
+    desc: 'ウォルトが作った鳥たちのショー（1963年）。すぐ横でドールホイップが買える。',
+    japan: '東京版はスティッチ版。こちらがオリジナル。',
+    tip: '座って休める。ドールホイップとセットで。',
+  },
+  {
+    id: 'marktwain', ja: 'マークトウェイン号', short: 'マークトウェイン号',
+    en: 'Mark Twain Riverboat', land: 'frontier',
+    match: ['marktwain'], thrill: 1, pop: 2, dur: 16, peak: 10,
+    pos: { lat: 33.8122, lon: -117.9221 }, wiki: 'Mark_Twain_Riverboat',
+    desc: 'アメリカ河を一周する蒸気船。ファンタズミックの舞台を昼間に下見できる。',
+    japan: '東京にも同名の蒸気船あり。',
+    tip: 'ゆったりプランの休憩・写真枠に。',
+  },
+  {
+    id: 'railroad', ja: 'ディズニーランド鉄道', short: '鉄道',
+    en: 'Disneyland Railroad', land: 'main',
+    match: ['disneylandrailroad'], thrill: 1, pop: 2, dur: 20, peak: 10,
+    pos: { lat: 33.8100, lon: -117.9190 }, wiki: 'Disneyland_Railroad',
+    desc: 'パークを一周する蒸気機関車。グランドキャニオンと恐竜のジオラマを通る。',
+    japan: '東京のウエスタンリバー鉄道と違い、駅間移動にも使える。',
+    tip: '足を休めつつトゥーンタウンやトゥモローランドへ移動できる。',
+  },
+];
+export const attractionById = Object.fromEntries(ATTRACTIONS.map((a) => [a.id, a]));
+
+// ---------------------------------------------------------------------------
+// Dining. price = pre-trip research (USD, approximate, may have changed).
+// mobile: 'yes' | 'no' | 'unknown'  — all labelled 事前情報 in the UI.
+// ---------------------------------------------------------------------------
+export const RESTAURANTS = [
+  {
+    id: 'plazainn', ja: 'プラザ・イン', en: 'Plaza Inn', land: 'hub', kind: 'meal', style: 'カウンター（ビュッフェ式に並ぶ）',
+    match: ['plazainn'], pos: { lat: 33.8119, lon: -117.9184 }, mobile: 'unknown',
+    hours: '朝〜夜（当日の営業時間はアプリで確認）', emoji: '🍗',
+    menu: [
+      { name: 'フライドチキン・プラッター', en: 'Fried Chicken Platter', price: '$19.99〜21.99（情報により差あり）' },
+    ],
+    halloween: [
+      { name: 'ヴィラナス・レッドベルベットケーキ', en: 'Villainous Red Velvet Cake', note: '2026ハロウィン期間（〜11/12と報道）' },
+      { name: 'パンプキンケーキ（パンプキンムース入り）', en: 'Pumpkin Cake', note: '〜10/31までと報道 → 今日が最終日の可能性' },
+    ],
+    desc: 'ディズニーランド名物のフライドチキン。マッシュポテト・ビスケット付きでボリューム満点。ヴィクトリア調の店内も素敵。',
+    menuUrl: 'https://disneyland.disney.go.com/dining/disneyland/plaza-inn/menus/',
+  },
+  {
+    id: 'ronto', ja: 'ロント・ロースターズ', en: 'Ronto Roasters', land: 'sw', kind: 'meal', style: 'クイックサービス',
+    match: ['rontoroasters'], pos: { lat: 33.8149, lon: -117.9228 }, mobile: 'yes',
+    hours: '開園〜夜', emoji: '🌯',
+    menu: [
+      { name: 'ロント・ラップ', en: 'Ronto Wrap', price: '$15前後（目安）' },
+    ],
+    halloween: [],
+    desc: 'ポッドレーサーのエンジンで肉を焼く屋台。ソーセージとローストポークをピタで巻いた「ロント・ラップ」が名物。',
+    menuUrl: 'https://disneyland.disney.go.com/dining/disneyland/ronto-roasters/menus/',
+  },
+  {
+    id: 'dockingbay', ja: 'ドッキング・ベイ7・フード・アンド・カーゴ', en: 'Docking Bay 7 Food and Cargo', land: 'sw', kind: 'meal', style: 'クイックサービス',
+    match: ['dockingbay7'], pos: { lat: 33.8142, lon: -117.9235 }, mobile: 'yes',
+    hours: '昼〜夜', emoji: '🛸',
+    menu: [{ name: 'スター・ウォーズの世界観の料理', en: 'Galactic dishes', price: '$15〜20前後（目安）' }],
+    halloween: [],
+    desc: '宇宙船の格納庫という設定の食堂。ギャラクシーズ・エッジ内で座って食べられる。',
+    menuUrl: 'https://disneyland.disney.go.com/dining/disneyland/docking-bay-7-food-and-cargo/menus/',
+  },
+  {
+    id: 'tianas', ja: 'ティアナズ・パレス', en: "Tiana's Palace", land: 'nos', kind: 'meal', style: 'クイックサービス',
+    match: ['tianaspalace'], pos: { lat: 33.8115, lon: -117.9222 }, mobile: 'yes',
+    hours: '昼〜夜', emoji: '🥘',
+    menu: [
+      { name: 'ハウス・ガンボ', en: 'House Gumbo', price: '$16.99（2026年メニュー情報）' },
+      { name: '7グリーンズ・ガンボ（ベジ）', en: '7 Greens Gumbo', price: '$14.49' },
+      { name: 'ベニエ', en: 'Beignets', price: '要確認' },
+    ],
+    halloween: [],
+    desc: '『プリンセスと魔法のキス』のティアナのお店。ニューオーリンズ料理。ファンタズミック会場のすぐ近くで夕食に最適。',
+    menuUrl: 'https://disneyland.disney.go.com/dining/disneyland/tianas-palace/menus/',
+  },
+  {
+    id: 'jolly', ja: 'ジョリー・ホリデー・ベーカリー・カフェ', en: 'Jolly Holiday Bakery Cafe', land: 'hub', kind: 'cafe', style: 'クイックサービス',
+    match: ['jollyholiday'], pos: { lat: 33.8119, lon: -117.9197 }, mobile: 'yes',
+    hours: '朝〜夜', emoji: '🥪',
+    menu: [{ name: 'グリルドチーズ＆トマトスープ', en: 'Grilled Cheese & Tomato Soup', price: '要確認' }],
+    halloween: [
+      { name: 'ブーゴギ・ビーフ・トースト＆コーンチーズスープ', en: 'BooGogi Beef Toasted', note: '2026ハロウィン期間（報道）' },
+      { name: 'ミッキー・パンプキン・カップケーキ', en: 'Mickey Pumpkin Cupcake', note: '2026ハロウィン期間（報道）' },
+      { name: 'ミッキー・マミー・マカロン', en: 'Mickey Mummy Macaron', note: '〜10/31と報道 → 今日が最終日の可能性' },
+    ],
+    desc: '『メリー・ポピンズ』がテーマのカフェ。サンドイッチとスイーツ。お城の目の前でテラス席も気持ちいい。',
+    menuUrl: 'https://disneyland.disney.go.com/dining/disneyland/jolly-holiday-bakery-cafe/menus/',
+  },
+  {
+    id: 'bengal', ja: 'ベンガル・バーベキュー', en: 'Bengal Barbecue', land: 'adv', kind: 'snack', style: '軽食スタンド',
+    match: ['bengalbarbecue'], pos: { lat: 33.8114, lon: -117.9201 }, mobile: 'yes',
+    hours: '昼〜夜', emoji: '🍢',
+    menu: [{ name: '串焼き（ビーフ・チキン等）', en: 'Skewers', price: '要確認' }],
+    halloween: [],
+    desc: '歩きながら食べられる串焼き。インディ・ジョーンズの前後に。',
+    menuUrl: 'https://disneyland.disney.go.com/dining/disneyland/bengal-barbecue/menus/',
+  },
+  {
+    id: 'tropical', ja: 'トロピカル・ハイダウェイ', en: 'The Tropical Hideaway', land: 'adv', kind: 'sweets', style: '軽食スタンド',
+    match: ['tropicalhideaway'], pos: { lat: 33.8116, lon: -117.9203 }, mobile: 'yes',
+    hours: '昼〜夜', emoji: '🍍',
+    menu: [{ name: 'ドールホイップ（パイナップルのソフトクリーム）', en: 'Dole Whip', price: '要確認' }],
+    halloween: [],
+    desc: 'ディズニーランド定番スイーツ「ドールホイップ」。チキルームの隣。',
+    menuUrl: 'https://disneyland.disney.go.com/dining/disneyland/the-tropical-hideaway/menus/',
+  },
+  {
+    id: 'mintjulep', ja: 'ミントジュレップ・バー', en: 'Mint Julep Bar', land: 'nos', kind: 'sweets', style: '軽食スタンド',
+    match: ['mintjulep'], pos: { lat: 33.8114, lon: -117.9214 }, mobile: 'yes',
+    hours: '昼〜夜', emoji: '🍩',
+    menu: [{ name: 'ミッキー型ベニエ', en: 'Mickey Beignets', price: '要確認' }, { name: 'ミントジュレップ（ノンアル）', en: 'Mint Julep', price: '要確認' }],
+    halloween: [],
+    desc: '粉砂糖たっぷりのミッキー型ベニエが名物。',
+    menuUrl: 'https://disneyland.disney.go.com/dining/disneyland/mint-julep-bar/menus/',
+  },
+  {
+    id: 'gibson', ja: 'ギブソン・ガール・アイスクリーム・パーラー', en: 'Gibson Girl Ice Cream Parlor', land: 'main', kind: 'sweets', style: 'カウンター',
+    match: ['gibsongirl'], pos: { lat: 33.8108, lon: -117.9194 }, mobile: 'unknown',
+    hours: '朝〜閉園', emoji: '🍨',
+    menu: [{ name: 'アイスクリーム・サンデー', en: 'Sundaes', price: '要確認' }],
+    halloween: [{ name: 'レスト・イン・チョコレート', en: 'Rest in Chocolate', note: '2026ハロウィン期間（報道）' }],
+    desc: 'メインストリートの老舗アイスクリーム店。閉園間際は混雑。',
+    menuUrl: 'https://disneyland.disney.go.com/dining/disneyland/gibson-girl-ice-cream-parlor/menus/',
+  },
+  {
+    id: 'hungrybear', ja: 'ハングリー・ベア・バーベキュー・ジャンボリー', en: 'Hungry Bear Barbecue Jamboree', land: 'bayou', kind: 'meal', style: 'クイックサービス',
+    match: ['hungrybear'], pos: { lat: 33.8127, lon: -117.9233 }, mobile: 'yes',
+    hours: '昼〜夜', emoji: '🍖',
+    menu: [{ name: 'バーベキュー料理', en: 'BBQ plates', price: '要確認' }],
+    halloween: [{ name: 'ハットボックス・ゴースト ポップコーンバケット', en: 'Hatbox Ghost Bucket', note: '取扱店として報道（在庫は当日確認）' }],
+    desc: 'アメリカ河沿いのテラス席でBBQ。ファンタズミック前後にも便利。',
+    menuUrl: 'https://disneyland.disney.go.com/dining/disneyland/hungry-bear-barbecue-jamboree/menus/',
+  },
+  {
+    id: 'galactic', ja: 'ギャラクティック・グリル', en: 'Galactic Grill', land: 'tomorrow', kind: 'meal', style: 'クイックサービス',
+    match: ['galacticgrill'], pos: { lat: 33.8119, lon: -117.9177 }, mobile: 'yes',
+    hours: '昼〜夜', emoji: '🍔',
+    menu: [{ name: 'バーガー', en: 'Burgers', price: '要確認' }],
+    halloween: [],
+    desc: 'トゥモローランドの定番バーガー店。スペース・マウンテンの前後に。',
+    menuUrl: 'https://disneyland.disney.go.com/dining/disneyland/galactic-grill/menus/',
+  },
+  {
+    id: 'carnation', ja: 'カーネーション・カフェ', en: 'Carnation Cafe', land: 'main', kind: 'meal', style: 'テーブルサービス',
+    match: ['carnationcafe'], pos: { lat: 33.8109, lon: -117.9187 }, mobile: 'no',
+    hours: '朝〜夜（予約推奨）', emoji: '🍳',
+    menu: [{ name: 'スパイシー・チキンサンド', en: 'Spicy Chicken Sandwich', price: '要確認' }],
+    halloween: [{ name: 'キャラメルアップル・マティーニ（アルコール）', en: 'Caramel Apple Martini', note: '2026ハロウィン新作（報道）' }],
+    desc: 'メインストリートのクラシックなダイナー。座ってゆっくり食べたいときに。',
+    menuUrl: 'https://disneyland.disney.go.com/dining/disneyland/carnation-cafe/menus/',
+  },
+  {
+    id: 'harbour', ja: 'ハーバー・ギャレー', en: 'Harbour Galley', land: 'bayou', kind: 'snack', style: '軽食スタンド',
+    match: ['harbourgalley'], pos: { lat: 33.8124, lon: -117.9229 }, mobile: 'yes',
+    hours: '昼〜夜', emoji: '🦞',
+    menu: [{ name: 'クラムチャウダー（ブレッドボウル）', en: 'Clam Chowder Bread Bowl', price: '要確認' }],
+    halloween: [{ name: 'ハットボックス・ゴースト ポップコーンバケット', en: 'Hatbox Ghost Bucket', note: '取扱店として報道（在庫は当日確認）' }],
+    desc: 'アメリカ河のほとりの軽食スタンド。',
+    menuUrl: 'https://disneyland.disney.go.com/dining/disneyland/harbour-galley/menus/',
+  },
+  {
+    id: 'goldenhorseshoe', ja: 'ゴールデン・ホースシュー', en: 'The Golden Horseshoe', land: 'frontier', kind: 'sweets', style: 'カウンター',
+    match: ['goldenhorseshoe'], pos: { lat: 33.8122, lon: -117.9207 }, mobile: 'yes',
+    hours: '昼〜夜', emoji: '🥧',
+    menu: [{ name: 'チキン＆フライ', en: 'Chicken & Fries', price: '要確認' }],
+    halloween: [{ name: 'アップルパイ・サンデー', en: 'Apple Pie Sundae', note: '2026ハロウィン新作（報道）' }],
+    desc: '西部劇の酒場風ホール。座って休憩しながら食べられる。',
+    menuUrl: 'https://disneyland.disney.go.com/dining/disneyland/golden-horseshoe/menus/',
+  },
+  {
+    id: 'redwagon', ja: 'リトル・レッド・ワゴン', en: 'Little Red Wagon', land: 'main', kind: 'snack', style: 'ワゴン',
+    match: ['littleredwagon'], pos: { lat: 33.8117, lon: -117.9186 }, mobile: 'unknown',
+    hours: '朝〜夜', emoji: '🌭',
+    menu: [{ name: 'コーンドッグ', en: 'Corn Dog', price: '要確認' }],
+    halloween: [{ name: 'スパイシー・チリチーズ・コーンドッグ', en: 'Spicy Chili-Cheese Corn Dog', note: '2026ハロウィン期間（報道）' }],
+    desc: 'ディズニーランド名物のコーンドッグワゴン。',
+    menuUrl: 'https://disneyland.disney.go.com/dining/disneyland/little-red-wagon/menus/',
+  },
+];
+export const restaurantById = Object.fromEntries(RESTAURANTS.map((r) => [r.id, r]));
+
+export const POPCORN = [
+  {
+    id: 'vampire', ja: 'ヴァンパイア・ミッキー', en: 'Vampire Mickey Popcorn Bucket', emoji: '🧛',
+    price: '$32.99〜35.50（報道）',
+    where: 'パーク内の多数のポップコーンワゴン（報道では園内12か所）',
+    note: '最も見つけやすいハロウィンバケット。',
+  },
+  {
+    id: 'hatbox', ja: 'ハットボックス・ゴースト', en: 'Hatbox Ghost Popcorn Bucket', emoji: '👻',
+    price: '$39.75前後（8月時点の報道）',
+    where: 'ハーバー・ギャレー／ハングリー・ベア／ホーンテッドマンション付近・マークトウェイン号付近のポップコーンワゴン（報道）',
+    note: '1会計2個までと報道。人気のため売り切れの可能性あり。',
+  },
+];
+
+// ---------------------------------------------------------------------------
+// Shows. times = pre-trip research, NOT confirmed for 10/31 → shown as "要確認"
+// until the API (ThemeParks.wiki live showtimes) or the user confirms them.
+// ---------------------------------------------------------------------------
+export const SHOWS = [
+  {
+    id: 'cavalcade', ja: 'ミッキー＆フレンズ・ハロウィン・カヴァルケード', short: 'ハロウィン・カヴァルケード',
+    en: 'Mickey and Friends Halloween Cavalcade', match: ['halloweencavalcade', 'cavalcade'],
+    times: ['13:30', '14:45'], dur: 15, claim: 20, flex: true,
+    venue: 'メインストリートUSA〜お城前', venuePos: { lat: 33.8114, lon: -117.9190 },
+    viewing: 'お城前の円形ハブ周辺かメインストリート沿い。開始15〜20分前で十分なことが多い。',
+    desc: 'ハロウィン衣装のミッキーたちがフロートで行進する、ハロウィン期間限定の短いパレード。',
+    emoji: '🎃', defaultPick: '13:30',
+  },
+  {
+    id: 'fireworks', ja: 'ハロウィン・スクリームズ（花火）', short: 'ハロウィン・スクリームズ',
+    en: 'Halloween Screams', match: ['halloweenscreams'],
+    times: ['21:30'], dur: 15, claim: 25,
+    venue: 'お城・メインストリート上空（リバー沿いからも空の花火は見える）', venuePos: { lat: 33.8122, lon: -117.9214 },
+    viewing: '「動線重視」設定：アメリカ河沿い（フロンティアランド〜ニューオーリンズ側）で空の花火を見て、そのまま22:30のファンタズミックへ。お城の映像まで見たい場合はハブ（お城前）へ。',
+    desc: 'ジャック・スケリントンが案内するハロウィン限定の花火ショー。花火は「一部の夜のみ」とされ、10/31の実施は当日の公式アプリで要確認。',
+    emoji: '🎆', defaultPick: '21:30',
+  },
+  {
+    id: 'fantasmic', ja: 'ファンタズミック！', short: 'ファンタズミック！',
+    en: 'Fantasmic!', match: ['fantasmic'],
+    times: ['21:00', '22:30'], dur: 22, claim: 40,
+    venue: 'アメリカ河（ニューオーリンズ・スクエア／フロンティアランド沿い）', venuePos: { lat: 33.8120, lon: -117.9219 },
+    viewing: 'カリブの海賊〜ホーンテッドマンション前の川沿いが見やすい。前方は濡れることあり。22:30の回は花火後で比較的取りやすい。',
+    desc: 'ミッキーの夢の中で、ヴィランズとの戦いが水・炎・映像で描かれる夜の名作ショー。巨大なドラゴンのマレフィセントは必見。',
+    emoji: '🐉', defaultPick: '22:30',
+  },
+];
+export const showById = Object.fromEntries(SHOWS.map((s) => [s.id, s]));
+
+// ---------------------------------------------------------------------------
+// Plans. Times are minutes from midnight (park local time).
+// ---------------------------------------------------------------------------
+export const PLANS = {
+  relax: {
+    id: 'relax', label: 'A', ja: 'ゆったり満喫', tagline: '食事・写真・ショーをじっくり',
+    targetRides: 6, maxWait: 50, waitWeight: 0.55, walkWeight: 1.2,
+    meals: [
+      { id: 'lunch', ja: 'ランチ', at: 11 * 60 + 30, dur: 75, restaurant: 'plazainn' },
+      { id: 'snack', ja: 'ポップコーン＆スイーツ休憩', at: 15 * 60 + 15, dur: 40, restaurant: 'jolly' },
+      { id: 'dinner', ja: 'ディナー', at: 17 * 60 + 45, dur: 90, restaurant: 'tianas' },
+    ],
+    shows: { cavalcade: true, fireworks: true, fantasmic: true },
+    note: 'スター・ウォーズ2つ＋人気施設を厳選。食事は長めに確保し、空き時間は散策・写真・買い物に。',
+  },
+  balance: {
+    id: 'balance', label: 'B', ja: 'バランス型', tagline: '人気施設も食事もショーも',
+    targetRides: 9, maxWait: 70, waitWeight: 0.45, walkWeight: 0.9,
+    meals: [
+      { id: 'lunch', ja: 'ランチ', at: 11 * 60 + 30, dur: 60, restaurant: 'plazainn' },
+      { id: 'snack', ja: '限定ポップコーン＆お土産', at: 15 * 60 + 30, dur: 30, restaurant: 'harbour' },
+      { id: 'dinner', ja: 'ディナー', at: 18 * 60, dur: 70, restaurant: 'tianas' },
+    ],
+    shows: { cavalcade: true, fireworks: true, fantasmic: true },
+    note: 'おすすめ。スター・ウォーズ2つ＋人気施設を効率よく。ランチ・ディナー・ポップコーン・夜のショーもしっかり。',
+  },
+  rides: {
+    id: 'rides', label: 'C', ja: 'アトラクション重視', tagline: '乗れるだけ乗る（食事とショーは死守）',
+    targetRides: 14, maxWait: 90, waitWeight: 0.35, walkWeight: 0.7,
+    meals: [
+      { id: 'lunch', ja: 'ランチ', at: 11 * 60, dur: 45, restaurant: 'ronto' },
+      { id: 'snack', ja: 'ポップコーン休憩', at: 15 * 60 + 30, dur: 20, restaurant: 'harbour' },
+      { id: 'dinner', ja: 'ディナー', at: 18 * 60, dur: 55, restaurant: 'tianas' },
+    ],
+    shows: { cavalcade: false, fireworks: true, fantasmic: true },
+    note: '待ち時間の短い施設を柔軟に追加。食事・休憩・夜のショーは削りません。',
+  },
+};
+
+// Plan-specific preference (bonus points) — reflects the user's priority list.
+export const PRIORITY = {
+  rise: 30, falcon: 26, indy: 18, space: 17, haunted: 18, thunder: 15, mmrr: 15, pirates: 14,
+  matterhorn: 9, tiana: 9, jungle: 7, peterpan: 7, startours: 6, toad: 6, smallworld: 5, buzz: 5,
+  alice: 4, nemo: 3, autopia: 2, tiki: 4, marktwain: 3, railroad: 2,
+};
+
+// Planning-only crowd curve (fraction of each ride's `peak` by park hour).
+export const WAIT_CURVE = [
+  [8, 0.3], [9, 0.5], [10, 0.7], [11, 0.85], [12, 0.95], [13, 1.0], [14, 1.0], [15, 0.97],
+  [16, 0.92], [17, 0.88], [18, 0.85], [19, 0.82], [20, 0.78], [21, 0.6], [22, 0.5], [23, 0.4],
+];
