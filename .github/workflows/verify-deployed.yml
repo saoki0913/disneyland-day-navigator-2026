@@ -1,0 +1,67 @@
+name: Verify deployed Disneyland Navi
+on:
+  push:
+    branches: ['claude/vibrant-dijkstra-lbpi65']
+    paths:
+      - '.github/workflows/verify-deployed.yml'
+jobs:
+  verify-preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BASE: https://693da232.dl-navi-1031.pages.dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Verify deployed HTTP assets and APIs
+        run: |
+          node --input-type=module -e '
+          import assert from "node:assert/strict";
+          const root = process.env.BASE;
+          const check = async (path, ms=40000) => {
+            const r=await fetch(root+path,{signal:AbortSignal.timeout(ms)});
+            console.log("HTTP",r.status,path,"content-type",r.headers.get("content-type"));
+            assert.equal(r.status,200,path);
+            return r;
+          };
+          for(const path of ["/","/css/app.css","/js/app.js","/js/data.js","/vendor/leaflet/leaflet.js","/fonts/fredoka-latin-500-normal.woff2","/icon-180.png"]){
+            const r=await check(path);
+            const a=await r.arrayBuffer();
+            assert.ok(a.byteLength>100, path+" "+a.byteLength);
+            console.log("BYTES",a.byteLength,path);
+          }
+          const h=await (await check("/api/health")).json();
+          assert.equal(h.ok,true);
+          console.log("HEALTH",JSON.stringify(h));
+          for(const path of ["/api/live","/api/live","/api/meta","/api/photos?set=rides","/api/photos?set=food","/api/photos?set=shows"]){
+            const r=await fetch(root+path,{signal:AbortSignal.timeout(60000)});
+            const j=await r.json().catch(()=>null);
+            console.log("API",path,"http",r.status,"ok",j?.ok,"cache",j?.cache,"source",j?.source);
+            if(path.startsWith("/api/live")){
+              console.log("LIVE",JSON.stringify({errors:j?.errors,count:Object.keys(j?.attractions||{}).length,shows:j?.shows}));
+            }else if(path==="/api/meta"){
+              console.log("META",JSON.stringify({errors:j?.errors,coords:Object.keys(j?.coords||{}).length,schedule:j?.schedule}));
+            }else{
+              console.log("PHOTOS",JSON.stringify({set:j?.set,errors:j?.errors,ids:Object.keys(j?.photos||{}),items:Object.entries(j?.photos||{}).map(([id,p])=>({id,src:p.src,source:p.source}))}));
+            }
+            assert.equal(r.status,200,path);
+            assert.equal(j?.ok,true,path);
+          }
+          '
+      - name: Install Chromium for real deployed page E2E
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+      - name: Run mobile-size browser E2E on deployed URL
+        run: node tests/e2e.mjs "$BASE"
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployed-preview-iphone-screenshots
+          path: screenshots/
+          if-no-files-found: ignore
