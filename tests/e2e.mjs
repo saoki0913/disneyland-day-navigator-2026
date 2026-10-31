@@ -396,6 +396,21 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.click('#toastAct'); await page.waitForTimeout(250); // undo
     assert.equal(toMin(await dinnerT()), t0, 'undo restores dinner time');
   });
+  await step('All attractions are listed (e.g. くまのプーさん) and can be added to the plan', async () => {
+    await tab(page, 'explore');
+    await page.click('[data-xtab="rides"]'); await page.waitForTimeout(150);
+    await page.click('[data-xf="all"]'); await page.waitForTimeout(150);
+    assert.equal(await page.locator('#view-explore [data-open="pooh"]').count(), 1, 'Pooh listed');
+    await page.click('#view-explore [data-open="pooh"]'); await page.waitForTimeout(200);
+    assert.match(await page.textContent('#sheet'), /プーさん/);
+    await page.click('#sheet [data-add="pooh"][data-add-how="best"]'); await page.waitForTimeout(300);
+    await tab(page, 'plan');
+    assert.equal(await page.locator('.tl--plan > li[data-ride="pooh"]').count(), 1, 'Pooh in the plan');
+    await page.click('[data-act="plan-edit-order"]'); await page.waitForTimeout(100);
+    await page.click('[data-rm="pooh"]'); await page.waitForTimeout(200);
+    await page.click('[data-act="plan-edit-done"]'); await page.waitForTimeout(100);
+    await page.evaluate(() => { delete window.__dlnavi.S.excluded.pooh; });
+  });
   await step('Plan editing: "次に行く" from a ride sheet; meal duration is adjustable', async () => {
     await tab(page, 'explore');
     await page.click('[data-xtab="rides"]'); await page.waitForTimeout(150);
