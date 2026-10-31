@@ -16,12 +16,6 @@ jobs:
       - run: npm ci
       - name: Unit tests
         run: npm test
-      - name: Probe production walking route (informational, never fails)
-        run: |
-          for q in "from=33.8110,-117.9190&to=33.8117,-117.9232" "from=33.8121,-117.9200&to=33.8155,-117.9236" "from=33.8119,-117.9184&to=33.8113,-117.9171"; do
-            echo "== $q"
-            curl --silent --max-time 25 "https://dl-navi-1031.pages.dev/api/route?$q" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log(JSON.stringify({ok:j.ok,error:j.error,distance:j.distance,points:j.coords?.length,steps:(j.steps||[]).map(x=>[x.type,x.modifier,x.name,x.distance])}))}catch{console.log("raw:",s.slice(0,300))}})' || true
-          done
       - name: Install browser for E2E checks
         run: |
           npm install --no-save playwright

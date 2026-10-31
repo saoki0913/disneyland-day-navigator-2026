@@ -103,33 +103,3 @@ test('share API: two phones converge through the KV room', async () => {
   assert.equal(off.status, 503);
 });
 
-// ---------- in-app walking route ----------
-import { parsePoint, normalizeOSRM, handleRoute } from '../lib/route-server.js';
-test('route: points are validated to the resort area', () => {
-  assert.deepEqual(parsePoint('33.8110,-117.9190'), { lat: 33.811, lon: -117.919 });
-  assert.equal(parsePoint('35.68,139.76'), null, 'Tokyo rejected');
-  assert.equal(parsePoint('x'), null);
-});
-test('route: OSRM response is normalized; absurd detours are rejected', () => {
-  const from = { lat: 33.811, lon: -117.919 }, to = { lat: 33.8117, lon: -117.9232 };
-  const ok = { code: 'Ok', routes: [{ distance: 520, geometry: { coordinates: [[-117.919, 33.811], [-117.921, 33.8113], [-117.9232, 33.8117]] },
-    legs: [{ steps: [{ maneuver: { type: 'depart', location: [-117.919, 33.811] }, name: 'Main Street', distance: 200 }, { maneuver: { type: 'turn', modifier: 'left', location: [-117.921, 33.8113] }, name: '', distance: 320 }, { maneuver: { type: 'arrive', location: [-117.9232, 33.8117] }, distance: 0 }] }] }] };
-  const r = normalizeOSRM(ok, from, to);
-  assert.equal(r.distance, 520);
-  assert.deepEqual(r.coords[1], [33.811, -117.919]);
-  assert.equal(r.steps[1].modifier, 'left');
-  assert.deepEqual(r.steps[1].at, [33.8113, -117.921]);
-  assert.equal(normalizeOSRM({ ...ok, routes: [{ ...ok.routes[0], distance: 9000 }] }, from, to), null);
-  assert.equal(normalizeOSRM({ code: 'NoRoute' }, from, to), null);
-});
-test('route API: bad input → 400; router down → 502 (client falls back to a straight line)', async () => {
-  const bad = await handleRoute({ request: new Request('https://x/api/route?from=1,2&to=3,4') });
-  assert.equal(bad.status, 400);
-  const real = globalThis.fetch, realCaches = globalThis.caches;
-  globalThis.caches = { default: { match: async () => null, put: async () => {} } };
-  globalThis.fetch = async () => { throw new Error('down'); };
-  try {
-    const r = await handleRoute({ request: new Request('https://x/api/route?from=33.8110,-117.9190&to=33.8117,-117.9232') });
-    assert.equal(r.status, 502);
-  } finally { globalThis.fetch = real; globalThis.caches = realCaches; }
-});

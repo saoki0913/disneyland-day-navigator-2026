@@ -21,16 +21,6 @@ async function step(name, fn) {
   catch (e) { results.push(['FAIL', name, e.message]); console.log('FAIL', name, '\n   ', process.env.E2E_VERBOSE ? e.message : e.message.split('\n')[0]); }
 }
 const browser = await chromium.launch();
-let routeMode = 'ok';
-const fakeRoute = (url) => {
-  const q = new URL(url).searchParams;
-  const [fa, fo] = q.get('from').split(',').map(Number), [ta, to] = q.get('to').split(',').map(Number);
-  const mid = [fa, to]; // walk west/east first, then north/south: one turn
-  return { ok: true, distance: 400, coords: [[fa, fo], mid, [ta, to]], steps: [
-    { type: 'depart', modifier: '', name: '', distance: 200, at: [fa, fo] },
-    { type: 'turn', modifier: 'left', name: 'Main Street', distance: 200, at: mid },
-    { type: 'arrive', modifier: '', name: '', distance: 0, at: [ta, to] }] };
-};
 async function newCtx({ liveMode = 'ok', sim = '10:00', geo = null, photos = 'ok' } = {}) {
   const ctx = await browser.newContext({
     viewport: { width: 375, height: 667 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'ja-JP', timezoneId: 'America/Los_Angeles',
@@ -38,7 +28,6 @@ async function newCtx({ liveMode = 'ok', sim = '10:00', geo = null, photos = 'ok
   });
   await ctx.route('**/api/live', (r) => liveMode === 'ok' ? r.fulfill({ json: live() }) : r.fulfill({ status: 502, json: { ok: false, errors: ['themeparks.wiki: HTTP 503', 'queue-times.com: timeout'] } }));
   await ctx.route('**/api/meta', (r) => r.fulfill({ json: meta }));
-  await ctx.route('**/api/route?*', (r) => routeMode === 'ok' ? r.fulfill({ json: fakeRoute(r.request().url()) }) : r.fulfill({ status: 502, json: { ok: false, error: 'no-route' } }));
   await ctx.route('**/api/photos*', (r) => photos === 'ok'
     ? r.fulfill({ json: { ok: true, photos: { rise: { src: 'https://upload.wikimedia.org/test/rise.png', page: 'https://commons.wikimedia.org/wiki/File:x', title: 'Rise', author: 'Test', license: 'CC BY 4.0', source: 'Wikimedia Commons' }, indy: { src: 'https://upload.wikimedia.org/test/broken.png', page: '', title: 'Indy', source: 'Wikimedia Commons' } } } })
     : r.fulfill({ status: 502, json: { ok: false } }));
@@ -590,7 +579,10 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.equal(await page.locator('.mk--dest').count(), 1);
     const card = await page.textContent('#mapcard');
     assert.match(card, /案内中[\s\S]*プラザ・イン[\s\S]*残り\s*\d+\s*m/);
-    assert.match(card, /m先\s*左へ（Main Street）/);
+    assert.match(card, /m先\s*(やや|大きく)?(右|左)へ|m先\s*目的地/);
+    const pts = await page.evaluate(() => window.__dlnavi.R.nav.route.coords.length);
+    assert.ok(pts > 2, `follows the walkways (${pts} points), not a straight line`);
+    assert.equal(await page.evaluate(() => window.__dlnavi.R.nav.route.straight), false);
     await page.screenshot({ path: `${SHOTS}/04-map-food-route.png` });
     fixes = 0;
     await page.waitForTimeout(21000);
@@ -606,15 +598,14 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.waitForTimeout(12000);
     assert.equal(fixes, 0, 'no frequent GPS after guidance ended');
   });
-  await step('ルート falls back to a straight line when the router is unavailable', async () => {
-    routeMode = 'fail';
+  await step('ルート from the home card: walkway route to the next ride, 終了 ends guidance', async () => {
     await tab(page, 'home');
     await page.click('.next [data-nav]'); await page.waitForTimeout(1200);
-    assert.match(await page.textContent('#mapcard'), /直線/);
+    assert.match(await page.textContent('#mapcard'), /案内中/);
+    assert.doesNotMatch(await page.textContent('#mapcard'), /直線/);
     assert.equal(await page.locator('path.navline').count(), 1);
     await page.click('[data-act="nav-end"]'); await page.waitForTimeout(200);
     assert.equal(await page.locator('path.navline').count(), 0);
-    routeMode = 'ok';
   });
   await step('No uncaught JS errors (GPS)', async () => assert.deepEqual(errors, []));
   await ctx.close();

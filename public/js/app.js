@@ -5,6 +5,7 @@ import {
   recommend, simulateDay, buildAnchors, anchorConflicts, crowdRatio, rideRatios, walkMin, distanceM, hhmm, parseHHMM, estimateWait, availability, DEFAULT_MUST, gpsNeedsRedraw, movingPlanMin,
 } from './engine.js';
 import { SHARE_FIELDS, mergeDocs, sameDoc, newCode, CODE_RE } from './share.js';
+import { walkRoute } from './walk.js';
 
 // =====================================================================
 // State (persisted in localStorage — never sent anywhere)
@@ -1636,8 +1637,9 @@ function offerJoinFromLink() {
 }
 
 // =====================================================================
-// In-app walking guidance (ルート). Route along park walkways from /api/route (OpenStreetMap);
-// falls back to a straight line. GPS is read every 10 s ONLY while the route is on screen.
+// In-app walking guidance (ルート). Route along the park's guest walkways (walk.js, computed on
+// the phone); straight line only if no route is found. GPS is read every 10 s ONLY while the
+// route is on screen.
 // =====================================================================
 const TURN_JA = { left: '左へ', right: '右へ', 'slight left': 'やや左へ', 'slight right': 'やや右へ', 'sharp left': '大きく左へ', 'sharp right': '大きく右へ', straight: 'まっすぐ', uturn: '引き返す' };
 const stepText = (s) => (s.type === 'arrive' ? '目的地に到着' : TURN_JA[s.modifier] || 'そのまま進む');
@@ -1661,22 +1663,14 @@ function endNav(msg) {
   if (S.tab === 'map') renderMap();
   if (msg) toast(msg, 'ok');
 }
-async function navRoute(force = false) {
+function navRoute(force = false) {
   const n = R.nav;
-  if (!n || (!force && Date.now() - n.refetchAt < 30e3)) return;
+  if (!n || (!force && Date.now() - n.refetchAt < 20e3)) return;
   const from = navFrom(), to = n.dest.pos;
   n.refetchAt = Date.now();
   if (!from) { n.route = null; n.loading = false; if (S.tab === 'map') renderMap(); return; }
-  let route = null;
-  const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), 9000);
-  try {
-    const res = await fetch(`/api/route?from=${from.lat.toFixed(5)},${from.lon.toFixed(5)}&to=${to.lat.toFixed(5)},${to.lon.toFixed(5)}`, { signal: ctl.signal });
-    const j = await res.json().catch(() => null);
-    if (res.ok && j?.ok && j.coords?.length > 1) route = { coords: j.coords, distance: j.distance, steps: j.steps || [], straight: false };
-  } catch { /* offline / router down */ } finally { clearTimeout(t); }
-  if (R.nav !== n) return;
-  n.route = route || { coords: [[from.lat, from.lon], [to.lat, to.lon]], distance: Math.round(distanceM(from, to)), steps: [], straight: true };
+  const w = walkRoute(from, to);
+  n.route = w ? { ...w, straight: false } : { coords: [[from.lat, from.lon], [to.lat, to.lon]], distance: Math.round(distanceM(from, to)), steps: [], straight: true };
   n.route.stepIdx = n.route.steps.map((s) => (s.at ? nearestIdx(n.route.coords, { lat: s.at[0], lon: s.at[1] }) : -1));
   n.loading = false;
   if (S.tab === 'map') renderMap();
@@ -1724,7 +1718,7 @@ function navCardHtml() {
   const mins = Math.max(1, Math.round((pr.remaining * 1.0) / PACE_M));
   return `<div class="navcard"><div class="navcard__b"><div class="mapdest__k">案内中${n.route.straight ? '（直線）' : ''}</div><div class="mapdest__n">${name}</div>
       <div class="navcard__m">残り <b class="num">${pr.remaining}</b>m · 約${mins}分${pr.gps ? '' : ' · 推定位置から'}</div>
-      ${n.route.straight ? '<div class="navcard__next">道なりのルートを取得できなかったため直線で案内中</div>'
+      ${n.route.straight ? '<div class="navcard__next">園内の通路ルートが見つからないため直線で案内中</div>'
         : pr.next ? `<div class="navcard__next">${ic('route')}<b class="num">${pr.nextIn}</b>m先 ${esc(stepText(pr.next))}${pr.next.name && pr.next.type !== 'arrive' ? `（${esc(pr.next.name)}）` : ''}</div>` : ''}</div>
     <button class="btn btn--sm" data-act="nav-end">終了</button></div>`;
 }
@@ -2057,7 +2051,7 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
 // (ETag of the app code) when the app comes back to the foreground and every 10 minutes.
 // If there is one: reload right away when it is safe (coming back after a while, nothing open),
 // otherwise show a banner with a one-tap 更新.
-const UPDATE_FILES = ['/js/app.js', '/js/engine.js', '/js/map.js', '/css/app.css'];
+const UPDATE_FILES = ['/js/app.js', '/js/engine.js', '/js/map.js', '/js/walk.js', '/css/app.css'];
 let codeTag = null, hiddenAt = 0;
 async function currentCodeTag() {
   const tags = await Promise.all(UPDATE_FILES.map((u) => fetch(u, { method: 'HEAD', cache: 'no-store' }).then((r) => (r.ok ? r.headers.get('etag') || r.headers.get('last-modified') || '' : '')).catch(() => '')));

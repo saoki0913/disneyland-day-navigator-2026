@@ -228,3 +228,31 @@ test('DOWN ride: kept out of the timeline as 再開待ち, not reported as missi
   assert.ok(sim2.items.some((i) => i.id === 'rise'), 'reopened ride returns to the plan');
   assert.deepEqual(sim2.waiting, []);
 });
+
+// ---------- in-app walking routes (built-in guest walkway network) ----------
+import { walkRoute, NODES, EDGES } from '../public/js/walk.js';
+const PARK = { lat: [33.8095, 33.8170], lon: [-117.9250, -117.9160] };
+const inPark = ([lat, lon]) => lat >= PARK.lat[0] && lat <= PARK.lat[1] && lon >= PARK.lon[0] && lon <= PARK.lon[1];
+test('walk: the walkway network is connected', () => {
+  const adj = {};
+  for (const [a, b] of EDGES) { (adj[a] ||= []).push(b); (adj[b] ||= []).push(a); }
+  const seen = new Set(['hub']), q = ['hub'];
+  while (q.length) for (const v of adj[q.shift()] || []) if (!seen.has(v)) { seen.add(v); q.push(v); }
+  assert.deepEqual([...seen].sort(), Object.keys(NODES).sort());
+});
+test('walk: every ride is reachable from the entrance inside the park, with a sane detour', () => {
+  const ent = { lat: NODES.ent[0], lon: NODES.ent[1] };
+  for (const a of ATTRACTIONS) {
+    const r = walkRoute(ent, a.pos);
+    assert.ok(r, a.id);
+    assert.ok(r.coords.every(inPark), `${a.id} leaves the park`);
+    assert.ok(r.distance <= distanceM(ent, a.pos) * 2 + 80, `${a.id}: ${r.distance}m vs ${Math.round(distanceM(ent, a.pos))}m`);
+    assert.equal(r.steps[r.steps.length - 1].type, 'arrive');
+  }
+});
+test('walk: hub → Rise of the Resistance goes through Frontierland/Big Thunder Trail or Bayou, not outside', () => {
+  const r = walkRoute({ lat: 33.8121, lon: -117.9200 }, { lat: 33.8155, lon: -117.9236 });
+  assert.ok(r.coords.every(inPark));
+  assert.ok(r.distance < 900, `${r.distance}m`);
+  assert.ok(r.steps.some((s) => s.type === 'turn'), 'has turn directions');
+});

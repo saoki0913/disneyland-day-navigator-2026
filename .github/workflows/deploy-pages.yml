@@ -123,7 +123,3 @@ jobs:
           curl --fail --silent --show-error --retry 8 --retry-delay 3 --retry-all-errors "$BASE/" -o /dev/null
           curl --fail --silent --show-error --retry 8 --retry-delay 3 --retry-all-errors "$BASE/api/health"
           echo
-          # Informational only (never fails the deploy): is the in-app walking router reachable?
-          echo "Route probe (Main Street -> Haunted Mansion):"
-          curl --silent --max-time 20 "$BASE/api/route?from=33.8110,-117.9190&to=33.8117,-117.9232" | head -c 400 || true
-          echo
