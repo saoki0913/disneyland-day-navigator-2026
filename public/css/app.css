@@ -434,3 +434,32 @@ details.more p { margin: 4px 0 0; font-size: 13.5px; }
   .stat__v { font-size: 24px; }
   .actionbar__main { font-size: 15px; }
 }
+
+/* ---------- map: current location button ---------- */
+.mapfab button.has-label { width: auto; padding: 0 12px 0 10px; border-radius: 20px; display: flex; gap: 5px; font-size: 13px; font-weight: 700; color: var(--navy); }
+.mapfab button.is-on { color: #2b7bf3; border-color: #2b7bf3; }
+.mapfab { align-items: flex-end; }
+
+/* ---------- plan: re-plan panel ---------- */
+.replan { padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.replan__h { font-size: 14.5px; line-height: 1.4; }
+.replan__uses { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12.5px; color: var(--muted); font-weight: 700; }
+.replan__uses li { display: inline-flex; align-items: center; gap: 3px; }
+.replan__res { display: flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 700; color: var(--good); background: var(--good-l); border-radius: 6px; padding: 6px 8px; line-height: 1.4; }
+.replan__hint { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.replan__hint .ico { vertical-align: -2px; margin: 0 2px; }
+
+/* ---------- plan: live wait + drag & drop ---------- */
+.tl__wait { display: inline-flex; align-items: center; gap: 3px; color: var(--ink); font-weight: 700; }
+.tl__wait b { font-family: var(--num); font-size: 15px; font-weight: 600; }
+.tl__wait b.is-good { color: var(--good); } .tl__wait b.is-mid { color: var(--mid); } .tl__wait b.is-bad { color: var(--bad); }
+.tl__item--ride .tl__card { padding-left: 2px; }
+.tl__grip { flex: none; align-self: stretch; width: 30px; display: grid; place-items: center; color: var(--muted); font-size: 18px; cursor: grab; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.tl__item.is-dragging { z-index: 30; transition: none; }
+.tl__item.is-dragging .tl__card { box-shadow: 0 10px 24px rgba(30,42,68,.28); background: #fff; }
+.tl__item.is-dragging .tl__grip { cursor: grabbing; color: var(--navy); }
+body.is-dragging { -webkit-user-select: none; user-select: none; cursor: grabbing; }
+.tl__drop { position: absolute; left: 62px; right: 0; height: 3px; border-radius: 2px; background: var(--red); pointer-events: none; z-index: 25; }
+.tl__drop::before { content: ''; position: absolute; left: -5px; top: -3.5px; width: 10px; height: 10px; border-radius: 50%; background: var(--red); }
+.tl__item.is-changed .tl__card { animation: tlflash 2.4s ease-out 1; }
+@keyframes tlflash { 0%, 30% { background: var(--mustard-l); box-shadow: 0 0 0 3px var(--mustard); } 100% { box-shadow: none; } }

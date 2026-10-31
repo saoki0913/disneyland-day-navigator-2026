@@ -54,8 +54,29 @@ export function waitFor(a, atMin, ctx) {
   if (lv && nearNow && lv.status === 'OPERATING' && Number.isFinite(lv.wait)) {
     return { wait: lv.wait, kind: lv.kind || 'live' };
   }
-  const est = Math.round((estimateWait(a, atMin) * (ctx.crowd || 1)) / 5) * 5;
+  // Future times: start from this ride's own live/typical ratio and fade towards the
+  // park-wide crowd ratio over ~3 hours (a ride that is busy now tends to stay busy for a while).
+  const crowd = ctx.crowd || 1;
+  const own = ctx.rideRatio?.[a.id];
+  let ratio = crowd;
+  if (Number.isFinite(own)) {
+    const k = Math.max(0, 1 - Math.max(0, atMin - (ctx.liveAt ?? ctx.now)) / 180);
+    ratio = own * k + crowd * (1 - k);
+  }
+  const est = Math.round((estimateWait(a, atMin) * ratio) / 5) * 5;
   return { wait: Math.max(5, est), kind: 'est' };
+}
+
+// Per-ride ratio of the current LIVE wait to the typical wait at this time (clamped).
+export function rideRatios(live, now) {
+  const out = {};
+  for (const a of ATTRACTIONS) {
+    const lv = live?.[a.id];
+    if (lv && lv.status === 'OPERATING' && Number.isFinite(lv.wait)) {
+      out[a.id] = Math.min(2.5, Math.max(0.4, Math.max(5, lv.wait) / estimateWait(a, now)));
+    }
+  }
+  return out;
 }
 
 export function crowdRatio(live, now) {
@@ -287,6 +308,17 @@ export function recommend(ctx) {
     pinned.reasons = [{ k: 'pin', t: 'あなたが選んだ行き先' }, ...pinned.reasons];
     result.primary = { type: 'ride', ...pinned };
   }
+  // The user's own ride order (drag & drop on the plan): the first ordered ride that still
+  // fits before the next fixed block. Rides that don't fit yet come after that block.
+  if (!result.primary && ctx.order?.length) {
+    for (const id of ctx.order) {
+      const c = cands.find((x) => x.a.id === id);
+      if (!c) continue;
+      c.reasons = [{ k: 'order', t: 'あなたが決めた順番' }, ...c.reasons.filter((x) => x.k !== 'order')];
+      result.primary = { type: 'ride', ...c };
+      break;
+    }
+  }
   if (!result.primary) {
     if (pool.length) {
       result.primary = { type: 'ride', ...pool[0] };
@@ -334,7 +366,7 @@ export function simulateDay(ctx) {
   while (now < ctx.closeMin - 2 && guard++ < 80) {
     // Only trust live waits/status near the real current time.
     const liveNear = now - startNow <= 30 ? ctx.live : stripDown(ctx.live, ctx);
-    const r = recommend({ ...ctx, now, pos, done, anchors, live: liveNear, skip: {} });
+    const r = recommend({ ...ctx, now, pos, done, anchors, live: liveNear, skip: {}, liveAt: ctx.liveAt ?? startNow });
     const p = r.primary;
     if (!p) break;
     if (p.type === 'ride') {

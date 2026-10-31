@@ -119,6 +119,46 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     const fant = items.filter((i) => /ファンタズミック/.test(i.name));
     assert.equal(fant.length, 1, 'Fantasmic once');
   });
+  await step('Plan: shows the REAL current wait (LIVE) and a clear re-plan panel', async () => {
+    await tab(page, 'plan');
+    const live = page.locator('.tl--plan .tl__wait:has(.tag--live)');
+    assert.ok(await live.count() >= 1, 'LIVE wait in the timeline');
+    assert.match(await live.first().textContent(), /いま\s*\d+分/);
+    const card = await page.textContent('.replan');
+    assert.match(card, /から閉園/);
+    assert.match(card, /LIVE待ち時間/);
+    assert.match(card, /済み \d+件は除く/);
+    assert.match(card, /最新の待ち時間で作り直す/);
+  });
+  await step('Plan: drag & drop changes the ride order (and the home "next")', async () => {
+    await tab(page, 'plan');
+    const ids = await page.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride));
+    assert.ok(ids.length >= 3);
+    const target = ids.find((id, i) => i > 0 && id !== 'rise'); // rise is DOWN in the fixture (can't go first now)
+    await page.evaluate((t) => { const r = document.querySelector(`.tl--plan > li[data-ride="${t}"]`).getBoundingClientRect(); scrollBy(0, r.top - 500); }, target);
+    await page.waitForTimeout(100);
+    const g = await page.locator(`[data-grip="${target}"]`).boundingBox();
+    const first = await page.locator(`.tl--plan > li[data-ride="${ids[0]}"]`).boundingBox();
+    await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2);
+    await page.mouse.down();
+    for (let i = 1; i <= 8; i++) await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2 + ((first.y + 6) - (g.y + g.height / 2)) * (i / 8));
+    assert.equal(await page.locator('.tl__drop:not([hidden])').count(), 1, 'drop indicator');
+    await page.screenshot({ path: `${SHOTS}/03-plan-drag.png` });
+    await page.mouse.up();
+    await page.waitForTimeout(250);
+    const after = await page.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride));
+    assert.equal(after[0], target, `dragged ${target} first, got ${after.join(',')}`);
+    assert.match(await page.textContent('#toast'), /順番/);
+    assert.match(await page.textContent('.tl__item + .sec, .sec__sub'), /あなたが並べた順/);
+    assert.match(await page.textContent('[data-act="replan"]'), /おすすめ順で作り直す/);
+    await tab(page, 'home');
+    assert.equal(await page.getAttribute('#actionbar [data-done]', 'data-done'), target, 'home follows the custom order');
+    await tab(page, 'plan');
+    await page.click('[data-act="replan"]'); await page.waitForTimeout(500);
+    assert.equal(await page.evaluate(() => window.__dlnavi.S.order), null, 'order reset');
+    assert.match(await page.textContent('.replan__res'), /作り直しました/);
+    await page.screenshot({ path: `${SHOTS}/03-plan-replan.png`, fullPage: true });
+  });
   await step('9. Tap = complete; item stays visible as 完了; undo needs confirmation; survives reload', async () => {
     await tab(page, 'home');
     const first = await page.getAttribute('#actionbar [data-done]', 'data-done');
@@ -150,7 +190,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await tab(page, 'plan');
     await page.click('[data-act="replan"]');
     await page.waitForTimeout(500);
-    assert.match(await page.textContent('#toast'), /組み直/);
+    assert.match(await page.textContent('#toast'), /作り直しました/);
     const tl = await page.textContent('ol.tl:not(.tl--done)');
     const st = await page.evaluate(() => window.__dlnavi.S.done);
     for (const id of ['rise', 'falcon']) if (!st[id]) assert.match(tl, id === 'rise' ? /レジスタンス/ : /ファルコン/);
@@ -237,6 +277,21 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.ok((await page.locator('#mapcard').boundingBox()).height <= 64, 'compact destination bar');
     await page.screenshot({ path: `${SHOTS}/04-map.png` });
   });
+  await step('Map: markers survive refreshes during zoom; location button is labelled', async () => {
+    const n0 = await page.locator('.leaflet-marker-icon').count();
+    assert.match(await page.textContent('[data-act="map-me"]'), /現在地を表示/);
+    for (let i = 0; i < 3; i++) {
+      await page.evaluate(() => window.__map.setZoom(window.__map.getZoom() + 0.5));
+      await page.click('#livePill');
+      await page.waitForTimeout(150);
+    }
+    await page.evaluate(() => window.__map.setZoom(16));
+    await page.waitForTimeout(900);
+    assert.equal(await page.locator('.leaflet-marker-icon').count(), n0, 'same number of pins');
+    const visible = await page.$$eval('.leaflet-marker-icon', (els) => els.filter((e) => e.offsetParent && getComputedStyle(e).visibility !== 'hidden' && getComputedStyle(e).opacity !== '0').length);
+    assert.equal(visible, n0, 'all pins visible');
+    await page.evaluate(() => window.__map.fitBounds([[33.8095, -117.9248], [33.8168, -117.9160]]));
+  });
   await step('Alerts: reopened must-ride and a sudden wait drop are announced; 行く！ pins it', async () => {
     await tab(page, 'home');
     liveVariant = 1;
@@ -318,6 +373,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.match(await page.textContent('#toast'), /現在地を取得/);
     await tab(page, 'map'); await page.waitForTimeout(1200);
     assert.equal(await page.locator('.mk--me').count(), 1);
+    assert.equal(await page.locator('[data-act="map-me"].is-on').count(), 1, 'location button shows GPS on');
     assert.match(await page.textContent('#mapcard'), /徒歩\d+分/);
     await page.screenshot({ path: `${SHOTS}/04-map-gps.png` });
   });
@@ -330,8 +386,8 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
   const { ctx, page, errors } = await newCtx();
   await step('7b. GPS denied → clear message + manual area picker works', async () => {
     await page.evaluate(() => {
-      navigator.geolocation.watchPosition = (ok, err) => { setTimeout(() => err({ code: 1, message: 'denied' }), 50); return 1; };
-      navigator.geolocation.clearWatch = () => {};
+      navigator.geolocation.getCurrentPosition = (ok, err) => { setTimeout(() => err({ code: 1, message: 'denied' }), 50); };
+      navigator.geolocation.watchPosition = () => { throw new Error('continuous tracking must not be used'); };
     });
     await page.click('[data-act="pick-land"]'); await page.waitForTimeout(150);
     await page.click('[data-act="gps-start"]'); await page.waitForTimeout(400);

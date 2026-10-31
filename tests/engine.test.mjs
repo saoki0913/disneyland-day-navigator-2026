@@ -166,3 +166,35 @@ test('"歩く量 少なめ" plans less total walking than "気にしない"', ()
   const walk = (w) => simulateDay({ ...base({ now: 480 }), cond: { maxWait: 60, walk: w } }).items.filter((i) => i.type === 'ride').reduce((s, i) => s + i.walk, 0);
   assert.ok(walk('low') <= walk('any'), `low:${walk('low')} any:${walk('any')}`);
 });
+
+// ---------- user ride order (drag & drop on the plan) ----------
+test('order: the plan follows the user order when rides fit', () => {
+  const c = base({ now: 600, live: liveOf(fixture) });
+  const auto = simulateDay(c).items.filter((i) => i.type === 'ride').map((i) => i.id);
+  assert.ok(auto.length >= 3);
+  const order = [auto[2], auto[0], auto[1], ...auto.slice(3)];
+  const got = simulateDay({ ...c, order }).items.filter((i) => i.type === 'ride').map((i) => i.id);
+  assert.equal(got[0], auto[2], 'dragged ride goes first');
+  assert.equal(got.indexOf(auto[0]) < got.indexOf(auto[1]), true);
+  const r = recommend({ ...c, order });
+  assert.equal(r.primary.a.id, auto[2]);
+  assert.equal(r.primary.reasons[0].k, 'order');
+});
+test('order: rides that are done or excluded are skipped', () => {
+  const c = base({ now: 600, done: { space: true } });
+  const r = recommend({ ...c, order: ['space', 'haunted'], excluded: {} });
+  assert.equal(r.primary.a.id, 'haunted');
+});
+test('rideRatios: a ride busier than usual stays busier in the near-future estimate', async () => {
+  const { rideRatios, waitFor } = await import('../public/js/engine.js');
+  const a = ATTRACTIONS.find((x) => x.id === 'space');
+  const now = 660;
+  const live = { space: { status: 'OPERATING', wait: 120, kind: 'live' } };
+  const rr = rideRatios(live, now);
+  assert.ok(rr.space > 1.5);
+  const plain = waitFor(a, now + 60, { now, live: {}, crowd: 1 }).wait;
+  const busy = waitFor(a, now + 60, { now, live: {}, crowd: 1, rideRatio: rr, liveAt: now }).wait;
+  const far = waitFor(a, now + 400, { now, live: {}, crowd: 1, rideRatio: rr, liveAt: now }).wait;
+  assert.ok(busy > plain, `${busy} > ${plain}`);
+  assert.equal(far, waitFor(a, now + 400, { now, live: {}, crowd: 1 }).wait, 'fades back to the crowd ratio');
+});

@@ -2,7 +2,7 @@ import {
   TRIP, LANDS, landById, ATTRACTIONS, attractionById, RESTAURANTS, restaurantById, POPCORN, SHOWS, showById, PLANS, PRIORITY,
 } from './data.js';
 import {
-  recommend, simulateDay, buildAnchors, anchorConflicts, crowdRatio, walkMin, distanceM, hhmm, parseHHMM, estimateWait, availability, DEFAULT_MUST,
+  recommend, simulateDay, buildAnchors, anchorConflicts, crowdRatio, rideRatios, walkMin, distanceM, hhmm, parseHHMM, estimateWait, availability, DEFAULT_MUST,
 } from './engine.js';
 
 // =====================================================================
@@ -25,6 +25,7 @@ const defaults = {
   lastDone: null,      // { id, at }
   sim: null,           // { base: minutes, setAt: ms } — time simulation for testing
   pin: null,           // { id, until } destination chosen from an alert
+  order: null,         // [rideId, ...] ride order chosen by drag & drop on the plan (null → recommended order)
   a2hsDismissed: false,
   exploreTab: 'rides', exploreFilter: 'all', exploreSort: 'reco', foodFilter: 'all',
   mapFilter: 'rides',
@@ -48,7 +49,8 @@ function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch { 
 const R = {
   live: null, liveStatus: 'idle', liveError: null, liveReceivedAt: 0,
   meta: null, photos: {},
-  gpsPos: null, gpsErr: null, gpsWatch: null,
+  gpsPos: null, gpsErr: null, gpsBusy: false,
+  dragging: false, pendingRender: false, flash: null, replanned: null,
   lastPlanIds: null,
   hist: {},            // { rideId: [[min, wait|null], ...] } today's observed waits (this device)
   alerts: [],          // [{ id, type:'reopen'|'drop', from, to, at }]
@@ -244,28 +246,54 @@ async function fetchPhotos() {
 const credit = (key) => { const p = R.photos?.[key]; if (!p) return ''; return `Photo: ${[p.author, p.license].filter(Boolean).join(' · ') || p.title} / ${p.source || 'Wikimedia'}`; };
 
 // ---------- GPS ----------
-function startGPS(userInitiated = false) {
-  if (!('geolocation' in navigator)) { R.gpsErr = 'この端末・ブラウザは位置情報に対応していません'; renderAll(); return; }
-  if (R.gpsWatch != null) navigator.geolocation.clearWatch(R.gpsWatch);
-  R.gpsErr = null;
-  if (userInitiated) toast('位置情報の許可を確認しています…');
-  R.gpsWatch = navigator.geolocation.watchPosition((p) => {
-    const first = !R.gpsPos;
+// No continuous tracking (watchPosition keeps the GPS radio on and drains the battery).
+// Instead: single fixes, only while the app is visible and the user has turned GPS on,
+// at most every 60 s on the map tab and every 3 min elsewhere (plus when the user taps "現在地").
+const GPS_EVERY = () => (S.tab === 'map' ? 60e3 : 180e3);
+const gpsDue = () => !R.gpsPos || Date.now() - R.gpsPos.at > GPS_EVERY() - 5e3;
+function requestFix({ userInitiated = false, force = false } = {}) {
+  if (!('geolocation' in navigator)) {
+    R.gpsErr = 'この端末・ブラウザは位置情報に対応していません';
+    if (userInitiated) toast(R.gpsErr, 'error');
+    renderAll(); return;
+  }
+  if (R.gpsBusy || document.visibilityState === 'hidden') return;
+  if (!userInitiated && !force && (!S.gps || !gpsDue())) return;
+  R.gpsBusy = true; R.gpsErr = null;
+  if (userInitiated && !R.gpsPos) toast('位置情報の許可を確認しています…');
+  const onMap = S.tab === 'map';
+  navigator.geolocation.getCurrentPosition((p) => {
+    R.gpsBusy = false;
+    const prev = R.gpsPos;
     R.gpsPos = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy, at: Date.now() };
     if (!S.gps) { S.gps = true; save(); }
-    if (first && userInitiated) toast(`現在地を取得しました（精度 約${Math.round(p.coords.accuracy)}m）`, 'ok');
-    renderAll();
+    if (userInitiated) toast(`現在地を取得しました（精度 約${Math.round(p.coords.accuracy)}m）`, 'ok');
+    if (S.tab === 'map') {
+      renderMap();
+      if (userInitiated) mapMod?.locate(R.gpsPos);
+    } else if (!prev || userInitiated || distanceM(prev, R.gpsPos) > 25) renderAll();
   }, (err) => {
+    R.gpsBusy = false;
     R.gpsErr = err.code === 1 ? '位置情報が許可されていません（設定から許可するか、エリアを手動で選んでください）' : err.code === 3 ? '位置情報の取得がタイムアウトしました' : '位置情報を取得できませんでした';
-    if (err.code === 1) { S.gps = false; save(); if (R.gpsWatch != null) navigator.geolocation.clearWatch(R.gpsWatch); R.gpsWatch = null; }
+    if (err.code === 1) { S.gps = false; R.gpsPos = null; save(); }
     if (userInitiated) toast(R.gpsErr, 'error');
     renderAll();
-  }, { enableHighAccuracy: true, maximumAge: 30000, timeout: 20000 });
+  }, {
+    // High accuracy only when it matters (looking at the map or explicitly asked); reuse a recent fix otherwise.
+    enableHighAccuracy: onMap || userInitiated,
+    maximumAge: userInitiated ? 10e3 : onMap ? 30e3 : 90e3,
+    timeout: 15000,
+  });
 }
+function startGPS(userInitiated = false) { requestFix({ userInitiated, force: true }); }
 function stopGPS() {
-  if (R.gpsWatch != null) navigator.geolocation.clearWatch(R.gpsWatch);
-  R.gpsWatch = null; R.gpsPos = null; S.gps = false; save(); renderAll();
+  R.gpsPos = null; R.gpsErr = null; S.gps = false; save(); renderAll();
   toast('位置情報の利用を停止しました');
+}
+// Turn GPS on silently if the browser already granted permission (never triggers a prompt).
+function gpsIfGranted() {
+  if (S.gps || !navigator.permissions?.query) return;
+  navigator.permissions.query({ name: 'geolocation' }).then((p) => { if (p.state === 'granted') requestFix({ force: true }); }).catch(() => {});
 }
 
 // ---------- engine context ----------
@@ -289,6 +317,7 @@ function ctx(extra = {}) {
   return {
     now, openMin: h.open, closeMin: h.close, pos: (() => { const p = position(); return p.lat == null ? null : p; })(),
     planId: S.plan, done: S.done, excluded: S.excluded, skip: S.skip, live, crowd: crowdRatio(live, now),
+    rideRatio: now >= h.open ? rideRatios(live, now) : {}, liveAt: now, order: S.order,
     anchors: anchors(), coords: coordsMap(), pin: S.pin, must: mustMap(), cond: S.cond, ...extra,
   };
 }
@@ -317,6 +346,7 @@ const IC = {
   edit: '<path d="M4 20h4L19 9l-4-4L4 16Z"/>',
   sliders: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
   ride: '<path d="M3 19c2.5-8 5.5-13 9-13s6.5 5 9 13M3 19h18"/>',
+  grip: '<path d="M5 8h14M5 12h14M5 16h14"/>',
 };
 const ic = (k) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${IC[k] || ''}</svg>`;
 
@@ -451,7 +481,7 @@ function renderClock() {
 const RTAG = {
   must: ['絶対乗る', 'must'], dip: ['いつもより空き', 'live'], later: ['あとで混む', 'warn'], short: ['待ち短め', 'live'],
   near: ['すぐ近く', 'live'], pop: ['大人気', ''], fit: ['次の予定に間に合う', ''], bump: ['休憩を後ろへ', 'warn'],
-  soft: ['場所取り短め', 'warn'], close: ['閉園前に並べばOK', 'warn'], pin: ['あなたが選択', 'must'],
+  soft: ['場所取り短め', 'warn'], close: ['閉園前に並べばOK', 'warn'], pin: ['あなたが選択', 'must'], order: ['あなたの順番', 'must'],
 };
 const rtags = (reasons, max = 3) => `<div class="tags">${(reasons || []).slice(0, max).map((x) => {
   const [t, k] = RTAG[x.k] || [x.t, ''];
@@ -738,14 +768,37 @@ function condSummary(D) {
 }
 const WALK_JA = { low: '少なめ', normal: 'ふつう', any: '気にしない' };
 
+// Wait shown on the plan: the REAL current wait (LIVE / 手入力) first; the planned value at
+// the scheduled time only as a secondary hint when it differs. Falls back to 推定 when there is no live data.
+function planWait(it, now) {
+  const w = waitInfo(it.a);
+  const later = it.start - now > 30;
+  if (w.kind !== 'est' && w.wait == null) {
+    return `<span class="tl__wait"><span class="tag tag--bad">${esc(STATUS_JA[w.status] || '休止中')}</span></span>${later ? `<span>${clock(it.start)}頃 ${it.wait}分予想</span>` : ''}`;
+  }
+  if (w.kind !== 'est') {
+    const diff = later && Math.abs(it.wait - w.wait) >= 10;
+    return `<span class="tl__wait">${ic('clock')}いま<b class="${waitClass(w.wait)}">${w.wait}</b>分${kindTag(w.kind)}</span>${diff ? `<span>${clock(it.start)}頃 ${it.wait}分予想</span>` : ''}`;
+  }
+  return `<span class="tl__wait">${ic('clock')}待ち<b>${it.wait}</b>分${kindTag('est')}</span>`;
+}
+function liveAgeText() {
+  if (R.liveStatus === 'loading') return '待ち時間を取得中';
+  if (liveIsFresh()) { const a = Math.round(liveAgeMin()); return `LIVE待ち時間（${a < 1 ? 'たった今' : a + '分前'}）`; }
+  return '推定の待ち時間';
+}
+
 function renderPlan() {
   const el = $('#view-plan');
+  if (R.dragging) { R.pendingRender = true; return; }
   const c = ctx();
   const sim = simulateDay(c);
   const done = doneRides();
   const conflicts = anchorConflicts(c.anchors);
   const D = { plan: S.plan, cond: S.cond, must: mustMap(), prefs: S.prefs };
   const mustIds = Object.keys(mustMap()).filter((id) => attractionById[id]);
+  const h = hours();
+  const flash = R.flash && Date.now() - R.flash.at < 6000 ? R.flash.ids : null;
   let html = `<div class="card condsum">
     <dl class="kv condsum__kv">${condSummary(D).map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
     <button class="btn btn--navy btn--block" data-act="plan-edit">${ic('sliders')}条件を変えてプランを作る</button></div>`;
@@ -756,15 +809,31 @@ function renderPlan() {
   if (sim.missingMust.length) html += `<div class="note note--bad">${ic('alert')}<div><div class="note__t">${sim.missingMust.map((id) => esc(attractionById[id].short)).join('・')} が入りきらない</div><div class="note__s">休止中なら再開後に最優先で案内</div></div></div>`;
   if (conflicts.length) html += `<div class="note note--bad">${ic('alert')}<div><div class="note__t">ごはんとショーの時間が重なっています</div></div></div>`;
 
-  html += `<div class="sec"><h2><span class="sec__en">TIMELINE</span>これから</h2>
-    <button class="btn btn--sm ${R.liveStatus === 'loading' ? 'is-busy' : ''}" data-act="replan" ${R.liveStatus === 'loading' ? 'disabled' : ''}>${ic('refresh')}組み直す</button></div><ol class="tl">`;
+  // Re-plan panel: says exactly what "作り直す" uses (time / waits / done) and what it resets.
+  const custom = !!S.order?.length;
+  const busy = R.liveStatus === 'loading';
+  const startAt = Math.max(c.now, h.open);
+  const rp = R.replanned && Date.now() - R.replanned.at < 60e3 ? R.replanned : null;
+  html += `<div class="sec"><h2><span class="sec__en">TIMELINE</span>これから</h2><span class="sec__sub">${custom ? 'あなたが並べた順' : 'おすすめ順'}</span></div>
+    <div class="card replan">
+      <div class="replan__h"><b>${c.now < h.open ? '開園' : 'いま'} <span class="num">${clock(startAt)}</span> から閉園 <span class="num">${clock(h.close)}</span> までのプラン</b></div>
+      <ul class="replan__uses">
+        <li>${ic('clock')}${esc(liveAgeText())}</li>
+        <li>${ic('check')}済み ${done.length}件は除く</li>
+        <li>${ic('pin')}${esc(position().src === 'gps' ? 'GPSの現在地から' : position().src === 'none' ? '現在地は未設定' : '推定の現在地から')}</li>
+      </ul>
+      ${rp ? `<div class="replan__res">${ic('check')}${esc(rp.text)}</div>` : ''}
+      <button class="btn ${custom ? 'btn--navy' : 'btn--primary'} btn--block ${busy ? 'is-busy' : ''}" data-act="replan" ${busy ? 'disabled' : ''}>${ic('refresh')}${custom ? 'おすすめ順で作り直す' : '最新の待ち時間で作り直す'}</button>
+      <p class="replan__hint">${custom ? '並べ替えた順番はリセットされます。' : 'プランは1分ごとに自動で更新されます。'}${ic('grip')}をドラッグすると乗る順番を入れ替えられます。</p>
+    </div><ol class="tl tl--plan">`;
   for (const it of sim.items) {
     if (it.type === 'free' && it.end - it.start < 10) continue;
     if (it.type === 'ride') {
       const a = it.a;
-      html += `<li class="tl__item ${it.must ? 'tl__item--must' : ''}"><span class="tl__time">${clock(it.start)}</span>
-        <div class="tl__card"><button class="tl__main" data-open="${a.id}"><span class="tl__name">${jw(a.short)}${it.must ? '<span class="tag tag--must">絶対</span>' : ''}</span>
-          <span class="tl__meta"><span>${ic('clock')}待ち${it.wait}分</span>${kindTag(it.waitKind)}<span>${ic('walk')}${it.walk}分</span><span>〜<span class="num">${clock(it.end)}</span></span></span></button>
+      html += `<li class="tl__item tl__item--ride ${it.must ? 'tl__item--must' : ''} ${flash?.has(a.id) ? 'is-changed' : ''}" data-ride="${a.id}"><span class="tl__time">${clock(it.start)}</span>
+        <div class="tl__card"><span class="tl__grip" data-grip="${a.id}" role="button" aria-label="${esc(a.short)} をドラッグして順番を変更">${ic('grip')}</span>
+          <button class="tl__main" data-open="${a.id}"><span class="tl__name">${jw(a.short)}${it.must ? '<span class="tag tag--must">絶対</span>' : ''}</span>
+          <span class="tl__meta">${planWait(it, c.now)}<span>${ic('walk')}${it.walk}分</span><span>〜<span class="num">${clock(it.end)}</span></span></span></button>
           <button class="check" data-done="${a.id}" aria-label="${esc(a.short)} 乗った">${ic('check')}</button></div></li>`;
     } else if (it.type === 'meal' || it.type === 'show') {
       const x = it.anchor;
@@ -792,6 +861,126 @@ function renderPlan() {
   }
   el.innerHTML = html;
   R.lastPlanIds = sim.items.map((i) => i.id).join(',');
+}
+const planRideIds = () => simulateDay(ctx()).items.filter((i) => i.type === 'ride').map((i) => i.id);
+
+// Re-plan: fetch the latest waits, drop any manual order, and report what changed.
+async function replan() {
+  const before = planRideIds();
+  const hadOrder = !!S.order?.length;
+  S.order = null; save();
+  await fetchLive({ manual: false });
+  const after = planRideIds();
+  const added = after.filter((id) => !before.includes(id));
+  const removed = before.filter((id) => !after.includes(id));
+  const common = after.filter((id) => before.includes(id));
+  const prevCommon = before.filter((id) => after.includes(id));
+  const moved = common.filter((id, i) => prevCommon[i] !== id);
+  const parts = [];
+  if (moved.length) parts.push(`順番変更 ${moved.length}件`);
+  if (added.length) parts.push(`追加 ${added.map((id) => attractionById[id].short).join('・')}`);
+  if (removed.length) parts.push(`外れた ${removed.map((id) => attractionById[id].short).join('・')}`);
+  const err = R.liveStatus === 'error';
+  const text = `${clock(nowMin())} に${err ? '推定値で' : '最新の待ち時間で'}作り直しました${parts.length ? '：' + parts.join(' / ') : '（変更なし）'}`;
+  R.replanned = { at: Date.now(), text };
+  R.flash = { at: Date.now(), ids: new Set([...moved, ...added]) };
+  renderPlan();
+  toast(hadOrder && !parts.length ? 'おすすめ順に戻しました（変更なし）' : text.replace(/^\d+:\d+ に/, ''), err ? 'error' : 'ok');
+}
+
+// ---------- drag & drop reordering (touch + mouse, pointer events) ----------
+let drag = null;
+function dragRows() { return [...document.querySelectorAll('#view-plan .tl--plan > li[data-ride]')]; }
+document.addEventListener('pointerdown', (e) => {
+  const g = e.target.closest?.('[data-grip]');
+  if (!g || drag || (e.pointerType === 'mouse' && e.button !== 0)) return;
+  const li = g.closest('li[data-ride]');
+  const rows = dragRows();
+  if (!li || rows.length < 2) return;
+  e.preventDefault();
+  const sy = scrollY;
+  const boxes = rows.map((r) => { const b = r.getBoundingClientRect(); return { top: b.top + sy, bottom: b.bottom + sy, mid: b.top + sy + b.height / 2 }; });
+  const ol = li.parentElement;
+  const mark = document.createElement('div');
+  mark.className = 'tl__drop';
+  ol.appendChild(mark);
+  drag = { li, id: li.dataset.ride, rows, boxes, from: rows.indexOf(li), to: rows.indexOf(li), y0: e.clientY + sy, cy: e.clientY, pid: e.pointerId, ol, mark, dir: 0, raf: 0 };
+  try { g.setPointerCapture(e.pointerId); } catch { /* not supported */ }
+  R.dragging = true;
+  li.classList.add('is-dragging');
+  document.body.classList.add('is-dragging');
+  try { navigator.vibrate?.(12); } catch { /* iOS */ }
+  dragUpdate();
+});
+function dragUpdate() {
+  const d = drag;
+  if (!d) return;
+  const y = d.cy + scrollY, dy = y - d.y0;
+  d.li.style.transform = `translateY(${dy}px)`;
+  const center = d.boxes[d.from].mid + dy;
+  const others = d.boxes.filter((_, i) => i !== d.from);
+  let to = 0;
+  for (const b of others) if (b.mid < center) to++;
+  d.to = to;
+  // drop indicator between rows (in the list's own coordinates)
+  const olTop = d.ol.getBoundingClientRect().top + scrollY;
+  const at = to < others.length ? others[to].top - 4 : others[others.length - 1].bottom + 4;
+  d.mark.style.top = `${at - olTop - 1.5}px`;
+  d.mark.hidden = to === d.from;
+}
+function dragScroll() {
+  if (!drag || !drag.dir) { if (drag) drag.raf = 0; return; }
+  scrollBy(0, drag.dir * 7);
+  dragUpdate();
+  drag.raf = requestAnimationFrame(dragScroll);
+}
+document.addEventListener('pointermove', (e) => {
+  if (!drag || e.pointerId !== drag.pid) return;
+  e.preventDefault();
+  drag.cy = e.clientY;
+  const topEdge = ($('.topbar')?.offsetHeight || 45) + 40, bottomEdge = innerHeight - (($('.tabbar')?.offsetHeight || 60) + 40);
+  drag.dir = e.clientY < topEdge ? -1 : e.clientY > bottomEdge ? 1 : 0;
+  if (drag.dir && !drag.raf) drag.raf = requestAnimationFrame(dragScroll);
+  dragUpdate();
+}, { passive: false });
+function dragEnd(e) {
+  if (!drag || (e && e.pointerId !== drag.pid)) return;
+  const d = drag;
+  drag = null;
+  cancelAnimationFrame(d.raf);
+  d.mark.remove();
+  d.li.classList.remove('is-dragging');
+  d.li.style.transform = '';
+  document.body.classList.remove('is-dragging');
+  R.dragging = false;
+  const ids = d.rows.map((r) => r.dataset.ride);
+  if (e?.type === 'pointerup' && d.to !== d.from) {
+    const rest = ids.filter((id) => id !== d.id);
+    rest.splice(d.to, 0, d.id);
+    return setOrder(rest, d.id);
+  }
+  if (R.pendingRender) { R.pendingRender = false; renderView(); }
+}
+document.addEventListener('pointerup', dragEnd);
+document.addEventListener('pointercancel', dragEnd);
+// iOS: stop the page from scrolling while a row is being dragged
+document.addEventListener('touchmove', (e) => { if (drag) e.preventDefault(); }, { passive: false });
+
+function setOrder(ids, movedId) {
+  const prev = S.order;
+  S.order = ids; save();
+  R.pendingRender = false;
+  R.flash = { at: Date.now(), ids: new Set([movedId]) };
+  renderView();
+  // The engine keeps fixed meals/shows on time: a ride that can't make it before the next one moves after it.
+  const got = planRideIds();
+  const want = ids.filter((id) => got.includes(id));
+  const name = attractionById[movedId]?.short || '';
+  const av = availability(attractionById[movedId], ctx());
+  const msg = got.indexOf(movedId) === want.indexOf(movedId) ? `${name} の順番を変更しました`
+    : !av.ok ? `${name} は${av.reason}のため、再開見込みの時間に入れました`
+    : `${name} は次の予定に間に合わないため、その後に入れました`;
+  toast(msg, 'ok', { label: '元に戻す', fn: () => { S.order = prev; save(); renderAll(); } });
 }
 
 // ---------- condition builder (one screen; edits a draft, applied with one button) ----------
@@ -855,7 +1044,7 @@ function openPlanBuilder(focus) {
 function applyPlanDraft() {
   const D = R.draft;
   if (!D) return;
-  S.plan = D.plan; S.cond = D.cond; S.must = D.must; S.excluded = D.excluded;
+  S.plan = D.plan; S.cond = D.cond; S.must = D.must; S.excluded = D.excluded; S.order = null;
   S.prefs = { ...S.prefs, mealOverrides: D.prefs.mealOverrides, shows: D.prefs.shows };
   for (const id of Object.keys(S.must)) delete S.excluded[id];
   save(); closeSheet(); go('plan');
@@ -1133,8 +1322,10 @@ function go(tab) {
   document.querySelectorAll('.tab').forEach((t) => { t.classList.toggle('is-active', t.dataset.tab === tab); t.setAttribute('aria-current', t.dataset.tab === tab ? 'page' : 'false'); });
   renderView(tab);
   window.scrollTo(0, 0);
+  if (tab === 'map') { if (S.gps) requestFix(); else gpsIfGranted(); }
 }
 function renderView(tab = S.tab) {
+  if (R.dragging) { R.pendingRender = true; return; }
   if (tab !== 'home') renderActionBar(null);
   if (tab === 'home') renderHome();
   else if (tab === 'plan') renderPlan();
@@ -1154,7 +1345,7 @@ async function renderMap() {
     const c = ctx();
     const r = recommend(c);
     mapMod.draw({
-      filter: S.mapFilter, pos: position(), gps: R.gpsPos && S.gps ? R.gpsPos : null,
+      filter: S.mapFilter, pos: position(), gps: R.gpsPos && S.gps && Date.now() - R.gpsPos.at < 5 * 60e3 ? R.gpsPos : null,
       rides: ATTRACTIONS.map((a) => ({ a, pos: coordsOf(a.id), w: waitInfo(a), done: !!S.done[a.id] })),
       food: RESTAURANTS.map((x) => ({ r: x, pos: coordsOf(x.id) })),
       shows: SHOWS.map((s) => ({ s, pos: s.venuePos })),
@@ -1162,6 +1353,14 @@ async function renderMap() {
       icons: { food: ic('food'), show: ic('show') },
       coordsSrc: (() => { const n = Object.keys(R.meta?.coords || {}).filter((k) => attractionById[k]).length; return n >= 15 ? 'api' : n > 0 ? 'partial' : 'approx'; })(),
     });
+    const meOn = !!(S.gps && R.gpsPos);
+    const meBtn = el.querySelector('[data-act="map-me"]');
+    if (meBtn) {
+      meBtn.classList.toggle('is-on', meOn);
+      meBtn.classList.toggle('has-label', !meOn);
+      meBtn.innerHTML = ic('locate') + (meOn ? '' : '<span>現在地を表示</span>');
+      meBtn.setAttribute('aria-label', meOn ? '現在地に移動' : '現在地を表示');
+    }
     const p = r.primary;
     const dest = p?.type === 'ride' ? { name: p.a.short, pos: coordsOf(p.a.id), wait: p.wait, open: `data-open="${p.a.id}"` } : p?.type === 'anchor' ? { name: p.anchor.title + (p.anchor.place ? '・' + p.anchor.place : ''), pos: p.anchor.pos, open: `data-anchor-edit="${p.anchor.id}"` } : null;
     const me = position();
@@ -1267,13 +1466,7 @@ document.addEventListener('click', async (e) => {
     case 'plan-edit': R.draft = null; return openPlanBuilder();
     case 'plan-edit-shows': R.draft = null; return openPlanBuilder('shows');
     case 'plan-apply': return applyPlanDraft();
-    case 'replan': {
-      const before = R.lastPlanIds;
-      await fetchLive({ manual: false });
-      renderPlan();
-      const changed = before !== R.lastPlanIds;
-      return toast(R.liveStatus === 'error' ? '推定値で組み直しました' : changed ? '最新の待ち時間で組み直しました' : '組み直しました（変更なし）', R.liveStatus === 'error' ? 'error' : 'ok');
-    }
+    case 'replan': return replan();
     case 'gps-start': return startGPS(true);
     case 'gps-stop': return stopGPS();
     case 'pick-land': return openLandPicker();
@@ -1283,8 +1476,10 @@ document.addEventListener('click', async (e) => {
       if (!confirm('済みの記録とプランの条件をすべてリセットしますか？')) return;
       S = structuredClone(defaults); save(); closeSheet(); renderAll(); return toast('リセットしました');
     case 'map-me':
-      if (!S.gps) return startGPS(true);
-      return mapMod?.locate(R.gpsPos);
+      if (!S.gps || !R.gpsPos) return startGPS(true);
+      mapMod?.locate(R.gpsPos);
+      if (Date.now() - R.gpsPos.at > 20e3) requestFix({ force: true });
+      return;
     case 'map-fit': return mapMod?.fit();
   }
 });
@@ -1327,11 +1522,14 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     renderClock(); renderStatus(); if ($('#sheet').hidden) renderView();
     if (Date.now() - R.liveReceivedAt > 2 * 60e3) fetchLive();
+    if (S.gps) requestFix();
   }
 });
 // Resume GPS automatically only if the user enabled it before AND the browser already granted permission.
 if (S.gps && navigator.permissions?.query) {
-  navigator.permissions.query({ name: 'geolocation' }).then((p) => { if (p.state === 'granted') startGPS(false); else { S.gps = false; save(); } }).catch(() => {});
+  navigator.permissions.query({ name: 'geolocation' }).then((p) => { if (p.state === 'granted') requestFix({ force: true }); else { S.gps = false; save(); } }).catch(() => {});
 }
+// Throttled position refresh (see requestFix): checks every 20 s, fetches only when due.
+setInterval(() => { if (S.gps) requestFix(); }, 20e3);
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 window.__dlnavi = { S, R, ctx, recommend, simulateDay };
