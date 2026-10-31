@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      BASE: https://693da232.dl-navi-1031.pages.dev
+      BASE: https://896b1555.dl-navi-1031.pages.dev
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
