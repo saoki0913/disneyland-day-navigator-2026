@@ -11,7 +11,8 @@ const SHOTS = process.env.SHOTS || 'screenshots';
 mkdirSync(SHOTS, { recursive: true });
 const fx = (n) => JSON.parse(readFileSync(new URL(`./fixtures/${n}`, import.meta.url)));
 let liveVariant = 0;
-const live = () => { const n = normalizeTPWLive(fx('tpw-live.json')); if (liveVariant === 1) { n.attractions.rise = { ...n.attractions.rise, status: 'OPERATING', wait: 40 }; n.attractions.space = { ...n.attractions.space, wait: 25 }; } return ({ ok: true, ...n, source: 'themeparks.wiki', sourceLabel: 'ThemeParks.wiki', fetchedAt: new Date().toISOString(), errors: [] }); };
+let pauseId = null;
+const live = () => { const n = normalizeTPWLive(fx('tpw-live.json')); if (pauseId && n.attractions[pauseId]) n.attractions[pauseId] = { ...n.attractions[pauseId], status: 'DOWN', wait: null }; if (liveVariant === 1) { n.attractions.rise = { ...n.attractions.rise, status: 'OPERATING', wait: 40 }; n.attractions.space = { ...n.attractions.space, wait: 25 }; } return ({ ok: true, ...n, source: 'themeparks.wiki', sourceLabel: 'ThemeParks.wiki', fetchedAt: new Date().toISOString(), errors: [] }); };
 const meta = { ok: true, coords: normalizeChildren(fx('tpw-children.json')), schedule: normalizeSchedule(fx('tpw-schedule.json')), errors: [] };
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkqPhfDwAEYQHqXc2zYwAAAABJRU5ErkJggg==', 'base64');
 
@@ -462,6 +463,28 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.match(await page.textContent('.next__title'), /レジスタンス/);
     assert.match(await page.textContent('#actionbar'), /レジスタンス/);
     liveVariant = 0;
+  });
+  await step('Pause: a planned ride that goes down leaves the plan (rest closes up) and returns to its place on reopening', async () => {
+    await tab(page, 'plan');
+    const rides = () => page.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride));
+    const seqOpen = () => page.evaluate(() => { const s = window.__dlnavi.S; return s.planSnap.seq.filter((x) => !s.done[x]); });
+    await page.click('#livePill'); await page.waitForTimeout(600); // settle the current pauses first
+    const before = await rides();
+    const seq0 = await seqOpen();
+    const manual = await page.evaluate(() => Object.keys(window.__dlnavi.S.manual || {}));
+    const pick = before.find((x) => x !== 'rise' && x !== 'space' && !manual.includes(x));
+    pauseId = pick;
+    await page.click('#livePill'); await page.waitForTimeout(600);
+    assert.ok(!(await rides()).includes(pauseId), 'paused ride left the timeline');
+    { const a = await rides(); assert.deepEqual(a, before.filter((x) => x !== pauseId), `others keep their order: ${before.join()} → ${a.join()}`); }
+    assert.equal(await page.locator(`.waitlist [data-open="${pick}"]`).count(), 1, 'listed as 再開待ち');
+    assert.match(await page.textContent('.tl__item--now'), /一時休止/);
+    await page.screenshot({ path: `${SHOTS}/03-plan-paused.png`, fullPage: true });
+    pauseId = null;
+    await page.click('#livePill'); await page.waitForTimeout(600);
+    assert.deepEqual(await seqOpen(), seq0, 'sequence unchanged');
+    assert.deepEqual(await rides(), before, 'back in its original place');
+    assert.match(await page.textContent('.tl__item--now'), /再開/);
   });
   await step('Trend: history recorded → sparkline in list + chart in detail', async () => {
     await tab(page, 'explore');
