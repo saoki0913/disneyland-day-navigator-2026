@@ -10,7 +10,7 @@
 // Merging is commutative and idempotent, so two phones that push at the same time
 // still converge: completions are a union (an undo wins only if it is newer), and every
 // setting keeps the most recent change.
-export const SHARE_FIELDS = ['plan', 'cond', 'must', 'excluded', 'order', 'prefs', 'manual'];
+export const SHARE_FIELDS = ['plan', 'cond', 'must', 'excluded', 'order', 'prefs', 'manual', 'planSnap'];
 export const CODE_RE = /^[a-z2-9]{8}$/;
 const ALPHA = 'abcdefghjkmnpqrstuvwxyz23456789';
 

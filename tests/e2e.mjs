@@ -131,7 +131,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     const replanY = await page.evaluate(() => document.querySelector('.replan').getBoundingClientRect().top);
     const tlBottom = await page.evaluate(() => document.querySelector('.tl--plan').getBoundingClientRect().bottom);
     assert.ok(replanY > tlBottom, 're-plan panel is below the timeline');
-    assert.match(await page.textContent('.tl__item--now'), /ここから閉園/);
+    assert.match(await page.textContent('.tl__item--now'), /から閉園までのプラン/);
     const card = await page.textContent('.replan');
     assert.match(card, /LIVE待ち時間/);
     assert.match(card, /済み \d+件は除く/);
@@ -157,14 +157,29 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.equal(after[0], target, `dragged ${target} first, got ${after.join(',')}`);
     assert.match(await page.textContent('#toast'), /順番/);
     assert.match(await page.textContent('.tl__item--now'), /あなたが並べた順/);
-    assert.match(await page.textContent('[data-act="replan"]'), /おすすめ順で作り直す/);
+    assert.match(await page.textContent('.replan [data-act="replan"]'), /おすすめ順で作り直す/);
     await tab(page, 'home');
     assert.equal(await page.getAttribute('#actionbar [data-done]', 'data-done'), target, 'home follows the custom order');
     await tab(page, 'plan');
-    await page.click('[data-act="replan"]'); await page.waitForTimeout(500);
+    await page.click('.replan [data-act="replan"]'); await page.waitForTimeout(500);
     assert.equal(await page.evaluate(() => window.__dlnavi.S.order), null, 'order reset');
     assert.match(await page.textContent('.replan__res'), /作り直しました/);
     await page.screenshot({ path: `${SHOTS}/03-plan-replan.png`, fullPage: true });
+  });
+  await step('Plan stays put on its own; changes only on 更新', async () => {
+    await tab(page, 'plan');
+    const snapOf = () => page.$$eval('.tl--plan > li', (els) => els.map((e) => e.querySelector('.tl__time')?.textContent + (e.dataset.ride || '')).join('|'));
+    const before = await snapOf();
+    const at0 = await page.evaluate(() => window.__dlnavi.S.planSnap.at);
+    await page.evaluate(() => { window.__dlnavi.S.sim.base += 45; });
+    await tab(page, 'home'); await tab(page, 'plan');
+    await page.click('#livePill'); await page.waitForTimeout(500);
+    assert.equal(await snapOf(), before, 'time passing / tab switching / new waits do not reshuffle the plan');
+    assert.equal(await page.evaluate(() => window.__dlnavi.S.planSnap.at), at0, 'saved plan untouched');
+    await page.click('.tl__item--now [data-act="replan"]'); await page.waitForTimeout(600);
+    assert.notEqual(await snapOf(), before, '更新 rebuilds from the current time');
+    await page.evaluate(() => { window.__dlnavi.S.sim.base -= 45; });
+    await page.click('.tl__item--now [data-act="replan"]'); await page.waitForTimeout(600);
   });
   await step('乗った re-plans the rest of the day from that moment', async () => {
     await tab(page, 'plan');
@@ -466,6 +481,10 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await B.page.click('[data-b-set="plan"][data-v="rides"]'); await B.page.click('[data-act="plan-apply"]'); await B.page.waitForTimeout(1200);
     await A.page.evaluate(() => window.__dlnavi.pullShare()); await A.page.waitForTimeout(300);
     assert.equal(await A.page.evaluate(() => window.__dlnavi.S.plan), 'rides');
+    // Both phones show exactly the same plan (the saved plan itself is shared)
+    const tlOf = (p) => p.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride + '@' + e.querySelector('.tl__time').textContent).join(','));
+    await A.page.click('.tab[data-tab="plan"]'); await B.page.click('.tab[data-tab="home"]'); await B.page.click('.tab[data-tab="plan"]'); await A.page.waitForTimeout(200);
+    assert.equal(await tlOf(A.page), await tlOf(B.page), 'identical timelines');
     // A undoes → B drops it
     await A.page.click('.tab[data-tab="plan"]'); await A.page.waitForTimeout(150);
     await A.page.click(`.tl--done [data-done="${rid}"]`); await A.page.waitForTimeout(150);

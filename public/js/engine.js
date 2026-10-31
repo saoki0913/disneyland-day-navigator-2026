@@ -326,7 +326,8 @@ export function recommend(ctx) {
     for (const id of ctx.order) {
       const c = cands.find((x) => x.a.id === id);
       if (!c) continue;
-      c.reasons = [{ k: 'order', t: 'あなたが決めた順番' }, ...c.reasons.filter((x) => x.k !== 'order')];
+      const why = ctx.orderReason || { k: 'order', t: 'あなたが決めた順番' };
+      c.reasons = [why, ...c.reasons.filter((x) => x.k !== why.k)];
       result.primary = { type: 'ride', ...c };
       break;
     }
