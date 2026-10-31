@@ -19,7 +19,7 @@
 - DNS、カスタムドメイン、ルート、アカウント共通の workers.dev サブドメイン（`mogup-backend`）
 - 既存の環境変数・シークレット・課金設定
 
-作業前と作業後に `npx wrangler deployments list` 等ではなく、ダッシュボードかAPIで **上記4つのWorkerの最終更新日時** を記録し、変わっていないことを報告してください（作業前の値：mogup-api 2026-09-25T17:39:21Z / career-compass-web-production 2026-10-30T15:21:15Z / career-compass-web-staging 2026-10-30T15:10:51Z / usa-trip-disney-day-1031 2026-10-31T07:38:10Z）。
+作業前と作業後に、ダッシュボードまたはCloudflare APIで **上記4つのWorkerの最終更新日時（modified_on）** を記録し（読み取りのみ）、変わっていないことを報告してください（作業前の値：mogup-api 2026-09-25T17:39:21Z / career-compass-web-production 2026-10-30T15:21:15Z / career-compass-web-staging 2026-10-30T15:10:51Z / usa-trip-disney-day-1031 2026-10-31T07:38:10Z）。
 新たな費用が発生する操作や、上記に影響しうる操作が必要になったら、実行せずに私に確認してください。
 APIトークンを使う場合、権限は「Account › Cloudflare Pages › Edit」だけで足ります。トークンをリポジトリやログに残さないでください。
 
