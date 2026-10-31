@@ -12,6 +12,7 @@ const KEY = 'dlnavi-1031-v1';
 const defaults = {
   plan: 'balance',
   done: {},            // { rideId | 'meal:lunch' | 'show:fantasmic': timestampMs }
+  doneMin: {},         // { id: park-local minutes when completed } (for the timeline)
   excluded: {},        // rides the user removed for today
   skip: {},            // { rideId: untilMin } — "別の候補" (temporary)
   manual: {},          // { rideId: { wait, at } } — user-entered wait from the official app
@@ -52,7 +53,7 @@ try {
   const m = JSON.parse(localStorage.getItem(KEY + ':meta') || 'null');
   if (m && Date.now() - m.at < 12 * 3600e3) R.meta = m.data;
   const p = JSON.parse(localStorage.getItem(KEY + ':photos') || 'null');
-  if (p && Date.now() - p.at < 3 * 86400e3) R.photos = p.data || {};
+  if (p && Date.now() - p.at < 3 * 86400e3 && p.data && Object.values(p.data)[0]?.source) R.photos = p.data;
 } catch { /* ignore */ }
 
 // =====================================================================
@@ -190,13 +191,17 @@ async function fetchMeta() {
   } catch { /* fallback coords stay in use */ }
 }
 async function fetchPhotos() {
-  if (Object.keys(R.photos).length > 5) return;
-  try {
-    const res = await fetch('/api/photos');
-    const j = await res.json();
-    if (j?.ok) { R.photos = j.photos; localStorage.setItem(KEY + ':photos', JSON.stringify({ at: Date.now(), data: j.photos })); renderAll(); }
-  } catch { /* posters stay */ }
+  if (Object.keys(R.photos).length > 20) return;
+  const sets = await Promise.allSettled(['rides', 'food', 'shows'].map((set) => fetch('/api/photos?set=' + set).then((r) => r.json())));
+  const merged = { ...R.photos };
+  for (const s2 of sets) if (s2.status === 'fulfilled' && s2.value?.ok) Object.assign(merged, s2.value.photos);
+  if (Object.keys(merged).length) {
+    R.photos = merged;
+    localStorage.setItem(KEY + ':photos', JSON.stringify({ at: Date.now(), data: merged }));
+    renderAll();
+  }
 }
+const credit = (key) => { const p = R.photos?.[key]; if (!p) return ''; return `📷 ${[p.author, p.license].filter(Boolean).join(' · ') || p.title} / ${p.source || 'Wikimedia'}`; };
 
 // ---------- GPS ----------
 function startGPS(userInitiated = false) {
@@ -298,21 +303,40 @@ const doneRides = () => Object.keys(S.done).filter((k) => attractionById[k]);
 // =====================================================================
 // Actions
 // =====================================================================
-function markDone(id, opts = {}) {
-  const was = S.done[id];
-  if (was && !opts.force) {
-    delete S.done[id];
-    save(); renderAll();
-    toast('記録を取り消しました');
-    return;
-  }
+function doneName(id) {
+  if (attractionById[id]) return attractionById[id].short;
+  const a = anchors().find((x) => x.id === id);
+  if (a) return a.title + (a.kind === 'meal' && a.place ? `（${a.place}）` : '');
+  if (id.startsWith('show:')) return showById[id.slice(5)]?.short || id;
+  return '予定';
+}
+// Tap = complete immediately (with undo in the toast). Tapping a completed item never deletes it
+// silently: it asks first, and even after reverting the toast offers to restore it.
+function markDone(id) {
+  if (S.done[id]) return openUndoConfirm(id);
   S.done[id] = Date.now();
-  if (attractionById[id] || id.startsWith('show:') || id.startsWith('meal:')) S.lastDone = { id, at: Date.now() };
+  S.doneMin[id] = nowMin();
+  S.lastDone = { id, at: Date.now() };
   delete S.skip[id];
   save(); renderAll();
-  const name = attractionById[id]?.short || anchors().find((a) => a.id === id)?.title || '予定';
   const n = doneRides().length;
-  toast(`✓ ${name} を記録しました${attractionById[id] ? `（${n}施設目）` : ''}`, 'ok', { label: '取り消す', fn: () => { delete S.done[id]; save(); renderAll(); } });
+  toast(`✓ ${doneName(id)} 完了！${attractionById[id] ? `（${n}つ目）` : ''}`, 'ok', { label: '取り消す', fn: () => undoDone(id, true) });
+}
+function undoDone(id, silent = false) {
+  const prev = { at: S.done[id], min: S.doneMin[id] };
+  delete S.done[id]; delete S.doneMin[id];
+  if (S.lastDone?.id === id) S.lastDone = null;
+  save(); renderAll();
+  if (!silent) toast(`↺ ${doneName(id)} を未完了に戻しました`, '', { label: '完了に戻す', fn: () => { S.done[id] = prev.at; S.doneMin[id] = prev.min; save(); renderAll(); } });
+}
+function openUndoConfirm(id) {
+  const m = S.doneMin[id];
+  openSheet(`<div class="sheet__content" style="padding-top:30px;text-align:center">
+    <div style="font-size:44px">✅</div>
+    <h2 class="sheet__title" id="sheetTitle">${esc(doneName(id))}</h2>
+    <p class="para" style="color:var(--muted);font-weight:800">${m != null ? `${clock(m)} に完了` : '完了済み'}</p>
+    <div class="btnrow btnrow--2"><button class="btn btn--ghost" data-close>そのまま</button><button class="btn btn--primary" data-undo="${id}" data-close>↺ 未完了に戻す</button></div>
+  </div>`);
 }
 function skipFor(id, minutes = 20) {
   S.skip[id] = nowMin() + minutes; save(); renderAll();
@@ -468,7 +492,7 @@ function renderNextCard(r, c) {
       { k: 'walk', m: p.walk, t: '🚶' + p.walk }, { k: 'wait', m: p.wait, t: '⏳' + p.wait }, { k: 'ride', m: a.dur, t: '🎢' }, { k: 'slack', m: slack + back, t: next ? '余裕' : '' },
     ], next ? `${next.emoji} ${next.title}` : '閉園', next ? next.start : c.closeMin);
     return `<article class="card next">
-      <div class="next__photo">${rideImg(a)}<span class="next__stamp">NEXT!</span>${R.photos[a.id] ? `<span class="next__credit">写真: Wikipedia</span>` : ''}</div>
+      <div class="next__photo">${rideImg(a)}<span class="next__stamp">NEXT!</span>${R.photos[a.id] ? `<span class="next__credit">${esc(credit(a.id))}</span>` : ''}</div>
       <div class="next__body">
         <div><div class="next__kicker">${esc(landById[a.land]?.ja || '')}</div>
           <h1 class="next__title">次は${esc(a.short)}へ！</h1><div class="next__en">${esc(a.en)}</div></div>
@@ -499,7 +523,7 @@ function renderNextCard(r, c) {
       ? [['📍', s.venue.split('（')[0], ''], ['⏰', `${clock(x.start - x.claim)}〜場所取り`, 'warn']]
       : [['🍽', `${fmtDur(x.end - x.start)}確保`, 'good'], rest.mobile === 'yes' ? ['📱', 'モバイルオーダー可', 'good'] : rest.mobile === 'no' ? ['🪑', 'テーブル席', ''] : ['📱', 'MO要確認', '']];
     return `<article class="card next">
-      <div class="next__photo">${img}<span class="next__stamp">${isShow ? 'SHOWTIME' : 'MEAL TIME'}</span></div>
+      <div class="next__photo">${img}<span class="next__stamp">${isShow ? 'SHOWTIME' : 'MEAL TIME'}</span>${(() => { const k = isShow ? (x.show) : 'food_' + rest.id; return R.photos[k] ? `<span class="next__credit">${esc(credit(k))}</span>` : ''; })()}</div>
       <div class="next__body">
         <div><div class="next__kicker">${isShow ? 'SHOW' : 'DINING'} · ${clock(x.start)}</div><h1 class="next__title">${esc(title)}</h1>${rest ? `<div class="next__en">${esc(rest.en)}</div>` : ''}</div>
         <div class="stats">
@@ -584,8 +608,16 @@ function renderPlan() {
 
   html += `<button class="btn btn--navy ${R.liveStatus === 'loading' ? 'is-busy' : ''}" data-act="replan" ${R.liveStatus === 'loading' ? 'disabled' : ''}>↻ 最新の待ち時間で組み直す</button>`;
 
-  if (done.length) {
-    html += `<div class="h-section"><h2>✓ 体験済み</h2><span class="sub">タップで取り消し</span></div><div class="donelist">${done.map((id) => `<button class="donechip" data-done="${id}">✓ ${esc(attractionById[id].short)}</button>`).join('')}</div>`;
+  const doneIds = Object.keys(S.done).sort((a, b) => (S.doneMin[a] ?? 0) - (S.doneMin[b] ?? 0) || S.done[a] - S.done[b]);
+  if (doneIds.length) {
+    html += `<div class="h-section"><h2>✅ 完了したこと</h2><span class="sub">タップで未完了に戻せます</span></div><ol class="tl tl--done">`;
+    for (const id of doneIds) {
+      const a = attractionById[id];
+      const em = a ? '🎢' : id.startsWith('meal:') ? (anchors().find((x) => x.id === id)?.emoji || '🍽') : (showById[id.slice(5)]?.emoji || '🎆');
+      html += `<li class="tl__item tl__item--done"><span class="tl__time">${S.doneMin[id] != null ? clock(S.doneMin[id]) : '—'}</span><span class="tl__dot">✓</span>
+        <div class="tl__card"><div class="tl__head"><div class="tl__name">${em} ${esc(doneName(id))}</div><button class="check is-done" data-done="${id}">✓ 完了</button></div></div></li>`;
+    }
+    html += `</ol>`;
   }
 
   html += `<div class="h-section"><h2>これからの予定</h2><span class="sub">${clock(Math.max(c.now, c.openMin))}〜 自動</span></div><ol class="tl">`;
@@ -600,7 +632,7 @@ function renderPlan() {
     } else if (it.type === 'meal' || it.type === 'show') {
       const x = it.anchor;
       html += `<li class="tl__item tl__item--${it.type}"><span class="tl__time">${clock(x.start)}</span><span class="tl__dot">${x.emoji}</span>
-        <div class="tl__card"><div class="tl__head"><div class="tl__name">${esc(x.title)}${x.shifted ? ' <span class="tag tag--warn">↪ ずらしました</span>' : ''}</div><button class="check" data-done="${x.id}">✓ ${it.type === 'show' ? '観た' : '済'}</button></div>
+        <div class="tl__card"><div class="tl__head"><div class="tl__name">${esc(x.title)}${x.shifted ? ' <span class="tag tag--warn">↪ ずらしました</span>' : ''}</div><button class="check" data-done="${x.id}">✓ ${it.type === 'show' ? '観た' : '食べた'}</button></div>
           <div class="tl__meta">${x.place && it.type === 'meal' ? '🍴 ' + esc(x.place) + ' · ' : ''}${clock(x.start)}〜${clock(x.end)}${x.claim ? ` · <b style="color:var(--red-d)">⏰${clock(x.start - x.claim)}〜場所取り</b>` : ''}
           <button class="tag tag--gold" data-anchor-edit="${x.id}">✎ 変更</button></div></div></li>`;
     } else if (it.type === 'dropped') {
@@ -613,8 +645,6 @@ function renderPlan() {
     }
   }
   html += `</ol>`;
-  const doneAnchors = c.anchors.filter((a) => a.done);
-  if (doneAnchors.length) html += `<div class="donelist">${doneAnchors.map((a) => `<button class="donechip" style="background:var(--paper)" data-done="${a.id}">✓ ${esc(a.title)} ↺</button>`).join('')}</div>`;
   html += `<p class="footer">時刻・現在地・待ち時間・体験済みから毎回自動で組み直し</p>`;
   el.innerHTML = html;
   R.lastPlanIds = sim.items.map((i) => i.id).join(',');
@@ -657,7 +687,7 @@ function renderExplore() {
       <button class="card item" data-open="${a.id}" type="button">
         <div class="item__img">${rideImg(a)}</div>
         <div class="item__body">
-          <div class="item__top"><div><div class="item__name">${a.must ? '★ ' : ''}${esc(a.ja)}${S.done[a.id] ? ' ✓' : ''}</div><div class="item__en">${esc(a.en)}</div></div>
+          <div class="item__top"><div><div class="item__name">${a.must ? '★ ' : ''}${esc(a.ja)}</div>${S.done[a.id] ? '<span class="tag tag--live">✓ 完了</span>' : ''}<div class="item__en">${esc(a.en)}</div></div>
             <div class="item__wait">${w.wait == null ? `<span class="tag tag--bad">${esc(STATUS_JA[w.status] || '休止')}</span>` : `<b class="${waitClass(w.wait)}">${w.wait}<small>分</small></b><div>${kindTag(w.kind)}</div>`}</div></div>
           <div class="item__meta"><span>${esc(landById[a.land]?.ja)}</span>·<span>徒歩${walk}分</span>·<span>スリル ${stars(a.thrill)}</span></div>
           <div class="item__meta">${rank.has(a.id) ? '<span class="tag tag--gold">今おすすめ</span>' : ''}${/日本未上陸/.test(a.japan) ? '<span class="tag">日本未上陸</span>' : ''}${a.must ? '<span class="tag tag--must">必須</span>' : ''}</div>
@@ -673,7 +703,7 @@ function renderExplore() {
     const f = S.foodFilter;
     list = list.filter(({ r }) => f === 'all' || (f === 'meal' && (r.kind === 'meal' || r.kind === 'cafe')) || (f === 'sweets' && (r.kind === 'sweets' || r.kind === 'cafe')) || (f === 'snack' && r.kind === 'snack') || (f === 'mobile' && r.mobile === 'yes') || (f === 'halloween' && r.halloween.length));
     list.sort((x, y) => (x.d ?? 0) - (y.d ?? 0));
-    html += `<div class="note note--info"><span class="note__icon">ℹ️</span><div>料金・モバイルオーダー対応・限定メニューは<b>事前調査の情報</b>です。当日の販売状況は公式アプリで確認してください。写真は料理の一般的なイメージ（Wikipedia）です。</div></div>`;
+    html += `<div class="note note--info"><span class="note__icon">ℹ️</span><div>料金・モバイルオーダー対応・限定メニューは<b>事前調査の情報</b>です。当日の販売状況は公式アプリで確認してください。</div></div>`;
     html += `<div class="list">${list.map(({ r, walk }) => `
       <button class="card item" data-open-food="${r.id}" type="button">
         <div class="item__img">${foodImg(r)}</div>
@@ -688,7 +718,7 @@ function renderExplore() {
   // halloween
   html += `<div class="note"><span class="note__icon">🎃</span><div><b>今日（10/31）はハロウィン期間の最終日。</b>「〜10/31」と報道された商品は今日が最後のチャンスかもしれません。在庫・販売は当日未確認です。</div></div>`;
   html += `<div class="h-section"><h2>ポップコーンバケット</h2></div><div class="list">${POPCORN.map((p) => `
-    <div class="card card--pad" style="display:grid;grid-template-columns:56px 1fr;gap:12px;align-items:start"><div style="font-size:40px;line-height:1">${p.emoji}</div>
+    <div class="card card--pad" style="display:grid;grid-template-columns:72px 1fr;gap:12px;align-items:start"><div style="width:72px;height:72px;border-radius:14px;overflow:hidden;border:2px solid var(--navy)">${imgFor('popcorn', { name: '', emoji: p.emoji, color: '#e4574c' })}</div>
       <div><div class="item__name">${esc(p.ja)}</div><div class="item__en">${esc(p.en)}</div>
       <div style="font-size:13px;margin-top:6px"><b>価格：</b>${esc(p.price)}<br><b>販売場所：</b>${esc(p.where)}<br><span style="color:var(--muted)">${esc(p.note)}</span></div></div></div>`).join('')}</div>`;
   html += `<div class="h-section"><h2>ハロウィン限定フード</h2><span class="sub">2026年の報道ベース</span></div><div class="card">`;
@@ -765,7 +795,7 @@ function openAttraction(id) {
   const raw = R.live?.attractions?.[a.id];
   const later = [11, 14, 17, 20].map((h) => `${h}時 ${estimateWait(a, h * 60)}分`).join(' / ');
   openSheet(`
-    <div class="sheet__hero">${rideImg(a)}${R.photos[a.id] ? `<a class="next__credit" href="${esc(R.photos[a.id].page)}" target="_blank" rel="noopener">写真: Wikipedia「${esc(R.photos[a.id].title)}」</a>` : ''}</div>
+    <div class="sheet__hero">${rideImg(a)}${R.photos[a.id] ? `<a class="next__credit" href="${esc(R.photos[a.id].page)}" target="_blank" rel="noopener">${esc(credit(a.id))}</a>` : ''}</div>
     <div class="sheet__content">
       <div><div class="next__kicker">${esc(landById[a.land]?.en)}</div><h2 class="sheet__title" id="sheetTitle">${esc(a.ja)}</h2><div class="next__en">${esc(a.en)}</div></div>
       <div class="stats">
@@ -788,7 +818,7 @@ function openAttraction(id) {
         <div class="formrow" style="margin-top:8px"><input type="number" inputmode="numeric" min="0" max="300" step="5" id="manualWait" placeholder="分" value="${S.manual[a.id] && Date.now() - S.manual[a.id].at < 30 * 60e3 ? S.manual[a.id].wait : ''}"><button class="btn btn--navy btn--sm" data-manual-save="${a.id}">保存</button>${S.manual[a.id] ? `<button class="btn btn--ghost btn--sm" data-manual-clear="${a.id}">消去</button>` : ''}</div></div>
       <div class="btnrow btnrow--2">
         <a class="btn btn--ghost" href="${routeUrl(pos)}" target="_blank" rel="noopener">🧭 ルート（Googleマップ）</a>
-        <button class="btn btn--primary" data-done="${a.id}" data-close>${S.done[a.id] ? '↺ 体験済みを取り消す' : '✓ 乗り終わった'}</button>
+        ${S.done[a.id] ? `<button class="btn btn--mint" data-done="${a.id}">✓ 完了済み（${S.doneMin[a.id] != null ? clock(S.doneMin[a.id]) : ''}）</button>` : `<button class="btn btn--primary" data-done="${a.id}" data-close>✓ 乗り終わった</button>`}
       </div>
       ${a.must ? '' : `<button class="btn btn--ghost btn--sm" data-exclude="${a.id}" data-close>${S.excluded[a.id] ? '今日の候補に戻す' : '今日はパス（おすすめから外す）'}</button>`}
     </div>`);
@@ -800,7 +830,7 @@ function openFood(id) {
   const pos = coordsOf(r.id);
   const walk = walkMin(c.pos, pos);
   openSheet(`
-    <div class="sheet__hero">${foodImg(r)}${R.photos['food_' + r.id] ? `<span class="next__credit">料理のイメージ写真（Wikipedia）・実物とは異なります</span>` : ''}</div>
+    <div class="sheet__hero">${foodImg(r)}${R.photos['food_' + r.id] ? `<a class="next__credit" href="${esc(R.photos['food_' + r.id].page)}" target="_blank" rel="noopener">${esc(credit('food_' + r.id))}</a>` : ''}</div>
     <div class="sheet__content">
       <div><div class="next__kicker">${esc(landById[r.land]?.en)} · ${esc(r.style)}</div><h2 class="sheet__title" id="sheetTitle">${r.emoji} ${esc(r.ja)}</h2><div class="next__en">${esc(r.en)}</div></div>
       <p class="para">${esc(r.desc)}</p>
@@ -934,6 +964,7 @@ document.addEventListener('click', async (e) => {
   if (d.open) return openAttraction(d.open);
   if (d.openFood) return openFood(d.openFood);
   if (d.done) return markDone(d.done);
+  if (d.undo) return undoDone(d.undo);
   if (d.skip) { skipFor(d.skip); const el = $('#alts'); return; }
   if (d.plan) return setPlan(d.plan);
   if (d.xtab) { S.exploreTab = d.xtab; save(); return renderExplore(); }

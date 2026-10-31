@@ -27,8 +27,8 @@ async function newCtx({ liveMode = 'ok', sim = '10:00', geo = null, photos = 'ok
   });
   await ctx.route('**/api/live', (r) => liveMode === 'ok' ? r.fulfill({ json: live() }) : r.fulfill({ status: 502, json: { ok: false, errors: ['themeparks.wiki: HTTP 503', 'queue-times.com: timeout'] } }));
   await ctx.route('**/api/meta', (r) => r.fulfill({ json: meta }));
-  await ctx.route('**/api/photos', (r) => photos === 'ok'
-    ? r.fulfill({ json: { ok: true, photos: { rise: { src: 'https://upload.wikimedia.org/test/rise.png', page: 'https://en.wikipedia.org/wiki/x', title: 'Rise' }, indy: { src: 'https://upload.wikimedia.org/test/broken.png', page: '', title: 'Indy' } } } })
+  await ctx.route('**/api/photos*', (r) => photos === 'ok'
+    ? r.fulfill({ json: { ok: true, photos: { rise: { src: 'https://upload.wikimedia.org/test/rise.png', page: 'https://commons.wikimedia.org/wiki/File:x', title: 'Rise', author: 'Test', license: 'CC BY 4.0', source: 'Wikimedia Commons' }, indy: { src: 'https://upload.wikimedia.org/test/broken.png', page: '', title: 'Indy', source: 'Wikimedia Commons' } } } })
     : r.fulfill({ status: 502, json: { ok: false } }));
   await ctx.route('https://upload.wikimedia.org/test/rise.png', (r) => r.fulfill({ body: PNG, contentType: 'image/png' }));
   await ctx.route('https://upload.wikimedia.org/test/broken.png', (r) => r.fulfill({ status: 404, body: '' }));
@@ -80,7 +80,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
       await page.click(`[data-plan="${id}"]`);
       await page.waitForTimeout(200);
       assert.ok(await page.locator(`[data-plan="${id}"].is-active`).count() === 1);
-      const tl = await page.textContent('.tl');
+      const tl = await page.textContent('ol.tl:not(.tl--done)');
       assert.match(tl, /レジスタンスの台頭/, `${id} rise`);
       assert.match(tl, /ミレニアム・ファルコン/, `${id} falcon`);
       await page.screenshot({ path: `${SHOTS}/03-plan-${id}.png`, fullPage: true });
@@ -88,32 +88,45 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.match(await page.textContent('#toast'), /プランB/);
   });
   await step('11. Timeline: meals/shows appear once each, in time order, no overlap with rides', async () => {
-    const items = await page.$$eval('.tl__item', (els) => els.map((e) => ({ t: e.querySelector('.tl__time').textContent, cls: e.className, name: e.querySelector('.tl__name')?.textContent || '' })));
+    const items = await page.$$eval('ol.tl:not(.tl--done) .tl__item', (els) => els.map((e) => ({ t: e.querySelector('.tl__time').textContent, cls: e.className, name: e.querySelector('.tl__name')?.textContent || '' })));
     const toMin = (s) => { const [h, m] = s.split(':').map(Number); return h * 60 + m; };
     for (let i = 1; i < items.length; i++) assert.ok(toMin(items[i].t) >= toMin(items[i - 1].t), `order ${items[i - 1].t} > ${items[i].t}`);
     const fant = items.filter((i) => /ファンタズミック/.test(i.name));
     assert.equal(fant.length, 1, 'Fantasmic once');
   });
-  await step('9. "乗り終わった" records progress, survives reload', async () => {
+  await step('9. Tap = complete; item stays visible as 完了; undo needs confirmation; survives reload', async () => {
     await tab(page, 'home');
     const first = await page.getAttribute('.next [data-done]', 'data-done');
     await page.click('.next [data-done]');
     await page.waitForTimeout(300);
-    assert.match(await page.textContent('#toast'), /記録しました/);
+    assert.match(await page.textContent('#toast'), /完了！/);
     assert.match(await page.textContent('.progress__count'), /^1/);
     await page.reload(); await page.waitForSelector('.next__title'); await page.waitForTimeout(300);
     assert.match(await page.textContent('.progress__count'), /^1/);
-    await tab(page, 'plan');
-    assert.match(await page.textContent('#view-plan'), /体験済み/);
-    await tab(page, 'home');
     assert.notEqual(await page.getAttribute('.next [data-done]', 'data-done'), first, 'next recommendation changes');
+    await tab(page, 'plan');
+    const doneRow = page.locator(`.tl--done [data-done="${first}"]`);
+    assert.equal(await doneRow.count(), 1, 'completed item still listed');
+    await doneRow.click(); await page.waitForTimeout(200);
+    assert.equal(await page.isVisible('#sheet'), true, 'confirmation sheet');
+    await page.screenshot({ path: `${SHOTS}/15-undo-confirm.png` });
+    await page.click('#sheet button:has-text("そのまま")'); await page.waitForTimeout(150);
+    assert.equal(await page.locator(`.tl--done [data-done="${first}"]`).count(), 1, 'still done after "そのまま"');
+    // revert then restore from the toast
+    await page.locator(`.tl--done [data-done="${first}"]`).click(); await page.waitForTimeout(150);
+    await page.click(`[data-undo="${first}"]`); await page.waitForTimeout(200);
+    assert.equal(await page.locator(`.tl--done [data-done="${first}"]`).count(), 0);
+    assert.match(await page.textContent('#toast'), /未完了に戻しました/);
+    await page.click('#toastAct'); await page.waitForTimeout(200);
+    assert.equal(await page.locator(`.tl--done [data-done="${first}"]`).count(), 1, 'restored from toast');
+    await page.screenshot({ path: `${SHOTS}/03-plan-done.png`, fullPage: true });
   });
   await step('10. Re-optimise after check-in keeps the remaining must-rides', async () => {
     await tab(page, 'plan');
     await page.click('[data-act="replan"]');
     await page.waitForTimeout(500);
     assert.match(await page.textContent('#toast'), /組み直/);
-    const tl = await page.textContent('.tl');
+    const tl = await page.textContent('ol.tl:not(.tl--done)');
     const st = await page.evaluate(() => window.__dlnavi.S.done);
     for (const id of ['rise', 'falcon']) if (!st[id]) assert.match(tl, id === 'rise' ? /レジスタンス/ : /ファルコン/);
   });
@@ -168,7 +181,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.uncheck('[data-show-toggle="cavalcade"]'); await page.waitForTimeout(200);
     await page.click('[data-pick-show="fantasmic"][data-time="21:00"]'); await page.waitForTimeout(200);
     await tab(page, 'plan');
-    const tl = await page.textContent('.tl');
+    const tl = await page.textContent('ol.tl:not(.tl--done)');
     assert.doesNotMatch(tl, /カヴァルケード/);
     const fItem = await page.locator('.tl__item', { hasText: 'ファンタズミック' }).first().textContent();
     assert.match(fItem, /21:00/);
@@ -186,7 +199,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.equal(await page.locator('.rest.is-active[data-rest="ronto"]').count(), 1);
     await page.screenshot({ path: `${SHOTS}/14-meal-editor.png` });
     await page.click('.sheet .btn--navy[data-close]'); await page.waitForTimeout(150);
-    assert.match(await page.textContent('.tl'), /ロント・ロースターズ/);
+    assert.match(await page.textContent('ol.tl:not(.tl--done)'), /ロント・ロースターズ/);
   });
   await step('Map renders markers and next-destination card', async () => {
     await tab(page, 'map'); await page.waitForTimeout(1500);
