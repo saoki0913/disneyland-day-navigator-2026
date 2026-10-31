@@ -9,6 +9,13 @@ export function distanceM(a, b) {
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * toRad) * Math.cos(b.lat * toRad) * Math.sin(dLon / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(h));
 }
+// Ignore GPS noise and avoid repainting more often than once every 12 seconds.
+export function gpsNeedsRedraw(last, next, elapsedMs) {
+  if (!last) return true;
+  if (elapsedMs < 12000) return false;
+  const jitter = Math.max(25, Math.min(80, Math.max(last.acc || 0, next.acc || 0) * 0.75));
+  return distanceM(last, next) >= jitter || (Number.isFinite(last.acc) && Number.isFinite(next.acc) && last.acc - next.acc >= 25);
+}
 // Walking-time ESTIMATE: straight line × 1.4 detour factor at 70 m/min (crowded park pace), min 2 min.
 export const DETOUR = 1.4, PACE = 70;
 export function walkMin(a, b) {
@@ -28,6 +35,11 @@ export const parseHHMM = (s) => {
   return h * 60 + (m || 0);
 };
 
+// A manually chosen planning clock keeps advancing after the user selects a start time.
+export function movingPlanMin(override, nowMs) {
+  if (!override || !Number.isFinite(override.base) || !Number.isFinite(override.setAt)) return null;
+  return override.base + Math.max(0, nowMs - override.setAt) / 60000;
+}
 // ---------- waits ----------
 export function curveAt(min) {
   const h = min / 60;

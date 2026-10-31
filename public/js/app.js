@@ -2,7 +2,7 @@ import {
   TRIP, LANDS, landById, ATTRACTIONS, attractionById, RESTAURANTS, restaurantById, POPCORN, SHOWS, showById, PLANS, PRIORITY,
 } from './data.js';
 import {
-  recommend, simulateDay, buildAnchors, anchorConflicts, crowdRatio, walkMin, distanceM, hhmm, parseHHMM, estimateWait, availability, DEFAULT_MUST,
+  recommend, simulateDay, buildAnchors, anchorConflicts, crowdRatio, walkMin, distanceM, hhmm, parseHHMM, estimateWait, availability, DEFAULT_MUST, gpsNeedsRedraw, movingPlanMin,
 } from './engine.js';
 
 // =====================================================================
@@ -24,6 +24,7 @@ const defaults = {
   landAt: 0,
   lastDone: null,      // { id, at }
   sim: null,           // { base: minutes, setAt: ms } — time simulation for testing
+  planTime: null,      // { base, setAt } manual starting time (moving clock)
   pin: null,           // { id, until } destination chosen from an alert
   a2hsDismissed: false,
   exploreTab: 'rides', exploreFilter: 'all', exploreSort: 'reco', foodFilter: 'all',
@@ -49,6 +50,7 @@ const R = {
   live: null, liveStatus: 'idle', liveError: null, liveReceivedAt: 0,
   meta: null, photos: {},
   gpsPos: null, gpsErr: null, gpsWatch: null,
+  gpsRendered: null, gpsRenderedAt: 0,
   lastPlanIds: null,
   hist: {},            // { rideId: [[min, wait|null], ...] } today's observed waits (this device)
   alerts: [],          // [{ id, type:'reopen'|'drop', from, to, at }]
@@ -81,6 +83,8 @@ function laParts(d = new Date()) {
 }
 function nowMin() {
   if (S.sim) return S.sim.base + (Date.now() - S.sim.setAt) / 60000;
+  const selectedTime = movingPlanMin(S.planTime, Date.now());
+  if (selectedTime != null) return selectedTime;
   const p = laParts();
   if (p.date < TRIP.date) return TRIP.openMin - 60; // before the trip day: preview as morning
   if (p.date > TRIP.date) return 24 * 60;
@@ -89,6 +93,7 @@ function nowMin() {
 function dayPhase() {
   const p = laParts();
   if (S.sim) return 'sim';
+  if (S.planTime) return 'today';
   if (p.date < TRIP.date) return 'before';
   if (p.date > TRIP.date) return 'after';
   return 'today';
@@ -245,26 +250,38 @@ const credit = (key) => { const p = R.photos?.[key]; if (!p) return ''; return `
 
 // ---------- GPS ----------
 function startGPS(userInitiated = false) {
-  if (!('geolocation' in navigator)) { R.gpsErr = 'この端末・ブラウザは位置情報に対応していません'; renderAll(); return; }
+  if (!('geolocation' in navigator)) { R.gpsErr = 'この端末・ブラウザは位置情報に対応していません'; renderView(); return; }
   if (R.gpsWatch != null) navigator.geolocation.clearWatch(R.gpsWatch);
   R.gpsErr = null;
   if (userInitiated) toast('位置情報の許可を確認しています…');
   R.gpsWatch = navigator.geolocation.watchPosition((p) => {
+    const at = Date.now();
+    const next = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy, at };
+    if (![next.lat, next.lon, next.acc].every(Number.isFinite)) return;
     const first = !R.gpsPos;
-    R.gpsPos = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy, at: Date.now() };
+    R.gpsPos = next;
     if (!S.gps) { S.gps = true; save(); }
-    if (first && userInitiated) toast(`現在地を取得しました（精度 約${Math.round(p.coords.accuracy)}m）`, 'ok');
-    renderAll();
+    if (first && userInitiated) toast(`現在地を取得しました（精度 約${Math.round(next.acc)}m）`, 'ok');
+    // Never rebuild the open editing sheet. GPS noise should not repaint the page.
+    if (gpsNeedsRedraw(R.gpsRendered, next, at - R.gpsRenderedAt)) {
+      R.gpsRendered = next; R.gpsRenderedAt = at;
+      renderView();
+    }
   }, (err) => {
     R.gpsErr = err.code === 1 ? '位置情報が許可されていません（設定から許可するか、エリアを手動で選んでください）' : err.code === 3 ? '位置情報の取得がタイムアウトしました' : '位置情報を取得できませんでした';
-    if (err.code === 1) { S.gps = false; save(); if (R.gpsWatch != null) navigator.geolocation.clearWatch(R.gpsWatch); R.gpsWatch = null; }
+    if (err.code === 1) {
+      S.gps = false; save();
+      if (R.gpsWatch != null) navigator.geolocation.clearWatch(R.gpsWatch);
+      R.gpsWatch = null; R.gpsPos = null; R.gpsRendered = null; R.gpsRenderedAt = 0;
+    }
     if (userInitiated) toast(R.gpsErr, 'error');
-    renderAll();
+    renderView();
   }, { enableHighAccuracy: true, maximumAge: 30000, timeout: 20000 });
 }
 function stopGPS() {
   if (R.gpsWatch != null) navigator.geolocation.clearWatch(R.gpsWatch);
-  R.gpsWatch = null; R.gpsPos = null; S.gps = false; save(); renderAll();
+  R.gpsWatch = null; R.gpsPos = null; R.gpsRendered = null; R.gpsRenderedAt = 0;
+  R.gpsErr = null; S.gps = false; save(); renderView();
   toast('位置情報の利用を停止しました');
 }
 
@@ -433,6 +450,7 @@ function renderStatus() {
   const phase = dayPhase();
   let msg = '', err = false;
   if (phase === 'sim') msg = `テスト時刻 ${clock(nowMin())}`;
+  else if (S.planTime) msg = `指定時刻 ${clock(nowMin())} から案内中 · プランで変更できます`;
   else if (phase === 'before') msg = '当日の朝としてプレビュー中';
   else if (phase === 'after') msg = '10/31の営業は終了しました';
   if (R.liveStatus === 'error' && !R.live?.ok) { msg = (msg ? msg + ' / ' : '') + '待ち時間は推定'; err = true; }
@@ -746,7 +764,17 @@ function renderPlan() {
   const conflicts = anchorConflicts(c.anchors);
   const D = { plan: S.plan, cond: S.cond, must: mustMap(), prefs: S.prefs };
   const mustIds = Object.keys(mustMap()).filter((id) => attractionById[id]);
-  let html = `<div class="card condsum">
+  let html = `<div class="card plan-start">
+    <div class="kicker">START TIME</div>
+    <label class="plan-start__label" for="planTimeInput">この時刻から残りのプランを作る</label>
+    <div class="plan-start__row">
+      <input type="time" id="planTimeInput" value="${clock(c.now)}" aria-label="プランの開始時刻">
+      <button class="btn btn--primary" data-act="plan-time-set">${ic('refresh')}この時刻から組み直す</button>
+    </div>
+    <div class="plan-start__bottom"><span>${S.planTime ? '指定時刻から案内中（時間とともに進みます）' : '現在時刻から自動で計画中'}</span>
+      <button class="linkbtn" data-act="plan-time-auto">実際の現在時刻を使う</button></div>
+    <p class="plan-start__hint">済みの記録を残したまま、これからの予定を再計算します。</p>
+  </div><div class="card condsum">
     <dl class="kv condsum__kv">${condSummary(D).map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
     <button class="btn btn--navy btn--block" data-act="plan-edit">${ic('sliders')}条件を変えてプランを作る</button></div>`;
   html += `<div class="kpis">
@@ -801,10 +829,10 @@ function draftCtx(D) {
   const showTimes = {};
   for (const s of SHOWS) showTimes[s.id] = showTimesFor(s.id).times;
   const anchorsD = buildAnchors(D.plan, { ...D.prefs, showTimes }, S.done);
-  return ctx({ planId: D.plan, cond: D.cond, must: D.must, excluded: D.excluded, anchors: anchorsD });
+  return ctx({ planId: D.plan, cond: D.cond, must: D.must, excluded: D.excluded, anchors: anchorsD, now: D.startMode === 'custom' ? D.startMin : nowMin() });
 }
 function openPlanBuilder(focus) {
-  if (!R.draft) R.draft = structuredClone({ plan: S.plan, cond: S.cond, must: mustMap(), excluded: S.excluded, prefs: { ...S.prefs, showTimes: undefined } });
+  if (!R.draft) R.draft = structuredClone({ plan: S.plan, cond: S.cond, must: mustMap(), excluded: S.excluded, prefs: { ...S.prefs, showTimes: undefined }, startMode: S.planTime ? 'custom' : 'auto', startMin: Math.floor(nowMin()) });
   const D = R.draft;
   const sim = simulateDay(draftCtx(D));
   const mustIds = Object.keys(D.must);
@@ -814,6 +842,11 @@ function openPlanBuilder(focus) {
   openSheet(`<div class="sheet__content">
     <div><div class="kicker">Plan builder</div><h2 class="sheet__title" id="sheetTitle">プランの条件</h2></div>
     <div class="form">
+      <div class="field"><div class="field__h"><b>開始時刻</b><span>途中からでもOK</span></div>
+        <div class="plan-start__row"><input type="time" data-b-start value="${clock(D.startMode === 'custom' ? D.startMin : nowMin())}" aria-label="プランの開始時刻">
+          <button class="btn btn--sm btn--navy" data-act="b-start-now">実際の現在時刻を使う</button></div>
+        <div class="plan-start__hint">${D.startMode === 'custom' ? '入力した時刻から計画' : '現在時刻から計画'} · 完了済みの記録は保持</div>
+      </div>
       <div class="field"><div class="field__h"><b>ペース</b><span>1日に乗る数</span></div>
         <div class="opts">${opt('plan', 'relax', 'ゆったり', '6前後')}${opt('plan', 'balance', 'ふつう', '9前後')}${opt('plan', 'rides', 'たくさん', '12以上')}</div></div>
       <div class="field"><div class="field__h"><b>混雑</b><span>並んでもいい時間</span></div>
@@ -857,6 +890,8 @@ function applyPlanDraft() {
   if (!D) return;
   S.plan = D.plan; S.cond = D.cond; S.must = D.must; S.excluded = D.excluded;
   S.prefs = { ...S.prefs, mealOverrides: D.prefs.mealOverrides, shows: D.prefs.shows };
+  S.planTime = D.startMode === 'custom' ? { base: D.startMin, setAt: Date.now() } : null;
+  if (D.startMode === 'custom') S.sim = null;
   for (const id of Object.keys(S.must)) delete S.excluded[id];
   save(); closeSheet(); go('plan');
   toast(`プランを作りました（乗り物 ${doneRides().length + simulateDay(ctx()).rides}）`, 'ok');
@@ -1264,6 +1299,19 @@ document.addEventListener('click', async (e) => {
   }
   switch (d.act) {
     case 'refresh': return fetchLive({ manual: true });
+    case 'plan-time-set': {
+      const raw = $('#planTimeInput')?.value;
+      const mins = parseHHMM(raw);
+      if (!raw || !Number.isFinite(mins) || mins < 0 || mins >= 1440) return toast('開始時刻を正しく入力してください', 'error');
+      S.planTime = { base: mins, setAt: Date.now() }; S.sim = null; save(); renderAll();
+      return toast(`${raw}から残りのプランを組み直しました`, 'ok');
+    }
+    case 'plan-time-auto':
+      S.planTime = null; S.sim = null; save(); renderAll();
+      return toast('実際の現在時刻から組み直しました', 'ok');
+    case 'b-start-now':
+      if (R.draft) { R.draft.startMode = 'auto'; return openPlanBuilder(); }
+      return;
     case 'plan-edit': R.draft = null; return openPlanBuilder();
     case 'plan-edit-shows': R.draft = null; return openPlanBuilder('shows');
     case 'plan-apply': return applyPlanDraft();
@@ -1295,6 +1343,11 @@ document.addEventListener('change', (e) => {
   if (d.gpsToggle !== undefined) { if (t.checked) startGPS(true); else stopGPS(); setTimeout(() => { if (!$('#sheet').hidden) openSettings(); }, 50); }
   if (R.draft) {
     const D = R.draft;
+    if (d.bStart !== undefined) {
+      const mins = parseHHMM(t.value);
+      if (!t.value || !Number.isFinite(mins) || mins < 0 || mins >= 1440) return toast('開始時刻を正しく入力してください', 'error');
+      D.startMin = mins; D.startMode = 'custom'; return openPlanBuilder();
+    }
     if (d.bMealOn) { const o = D.prefs.mealOverrides[d.bMealOn] = { ...(D.prefs.mealOverrides[d.bMealOn] || {}) }; o.off = !t.checked; return openPlanBuilder(); }
     if (d.bMealRest) { D.prefs.mealOverrides[d.bMealRest] = { ...(D.prefs.mealOverrides[d.bMealRest] || {}), restaurant: t.value }; return openPlanBuilder(); }
     if (d.bMealAt) { D.prefs.mealOverrides[d.bMealAt] = { ...(D.prefs.mealOverrides[d.bMealAt] || {}), at: Number(t.value) }; return openPlanBuilder(); }
@@ -1322,7 +1375,7 @@ fetchLive();
 setInterval(() => { if (document.visibilityState === 'visible' && shouldPoll()) fetchLive(); }, 3 * 60e3);
 setInterval(() => { renderClock(); renderStatus(); }, 15e3);
 // Re-render the current view every minute so countdowns/plans follow the clock (skip while a sheet is open).
-setInterval(() => { if ($('#sheet').hidden && S.tab !== 'map') renderView(); }, 60e3);
+setInterval(() => { if ($('#sheet').hidden && S.tab !== 'map' && document.activeElement?.tagName !== 'INPUT') renderView(); }, 60e3);
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     renderClock(); renderStatus(); if ($('#sheet').hidden) renderView();
