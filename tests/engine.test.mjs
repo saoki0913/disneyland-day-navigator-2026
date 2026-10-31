@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { recommend, simulateDay, buildAnchors, anchorConflicts, crowdRatio, walkMin, distanceM } from '../public/js/engine.js';
+import { recommend, simulateDay, buildAnchors, anchorConflicts, crowdRatio, walkMin, distanceM, gpsNeedsRedraw, movingPlanMin } from '../public/js/engine.js';
 import { normalizeTPWLive } from '../lib/server.js';
 import { ATTRACTIONS } from '../public/js/data.js';
 
@@ -197,4 +197,21 @@ test('rideRatios: a ride busier than usual stays busier in the near-future estim
   const far = waitFor(a, now + 400, { now, live: {}, crowd: 1, rideRatio: rr, liveAt: now }).wait;
   assert.ok(busy > plain, `${busy} > ${plain}`);
   assert.equal(far, waitFor(a, now + 400, { now, live: {}, crowd: 1 }).wait, 'fades back to the crowd ratio');
+});
+
+test('selected planning time advances with the clock and can be reset', () => {
+  const setting = { base: 930, setAt: 1000000 };
+  assert.equal(movingPlanMin(setting, 1000000), 930);
+  assert.equal(movingPlanMin(setting, 1000000 + 10 * 60000), 940);
+  assert.equal(movingPlanMin(null, 1000000), null);
+});
+test('GPS noise and too-frequent callbacks never repaint the page', () => {
+  const a = { lat: 33.81185, lon: -117.9214, acc: 15 };
+  const jitter = { ...a, lat: 33.81186 };
+  const moved = { ...a, lat: 33.81230 };
+  assert.equal(gpsNeedsRedraw(null, a, 0), true);
+  assert.equal(gpsNeedsRedraw(a, jitter, 20000), false);
+  assert.equal(gpsNeedsRedraw(a, moved, 100), false);
+  assert.equal(gpsNeedsRedraw(a, moved, 20000), true);
+  assert.equal(gpsNeedsRedraw({ ...a, acc: 90 }, { ...jitter, acc: 15 }, 20000), true);
 });

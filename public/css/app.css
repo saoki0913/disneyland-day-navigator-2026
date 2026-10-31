@@ -463,3 +463,20 @@ body.is-dragging { -webkit-user-select: none; user-select: none; cursor: grabbin
 .tl__drop::before { content: ''; position: absolute; left: -5px; top: -3.5px; width: 10px; height: 10px; border-radius: 50%; background: var(--red); }
 .tl__item.is-changed .tl__card { animation: tlflash 2.4s ease-out 1; }
 @keyframes tlflash { 0%, 30% { background: var(--mustard-l); box-shadow: 0 0 0 3px var(--mustard); } 100% { box-shadow: none; } }
+
+/* Manual start time for resuming a Disneyland plan mid-visit. */
+.plan-start { padding: 14px; }
+.plan-start__label { display: block; font-weight: 700; margin: 6px 0 10px; }
+.plan-start__row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.plan-start__row input[type="time"] { flex: 1 1 120px; min-width: 0; min-height: 42px; padding: 8px 10px; font: inherit; color: inherit; background: #fff; border: 1px solid #bbb; border-radius: 10px; }
+.plan-start__row .btn { flex: 1 1 auto; }
+.plan-start__bottom { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-top: 10px; font-size: 12px; }
+.plan-start__hint { color: #6b6b6b; font-size: 12px; line-height: 1.5; margin-top: 7px; }
+.replan__custom { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12.5px; font-weight: 700; color: var(--mid); background: var(--mustard-l); border-radius: 6px; padding: 6px 8px; }
+.replan__custom { flex-wrap: nowrap; }
+.replan__custom > span { flex: 1; min-width: 0; line-height: 1.4; }
+.replan__custom .linkbtn { flex: none; font-size: 12.5px; }
+.replan__time { border-top: 1px dashed var(--line); padding-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.replan__time label { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+.replan__time label span { font-size: 12px; color: var(--muted); }
+.replan__time .plan-start__row input[type="time"] { min-height: 36px; padding: 4px 10px; }
