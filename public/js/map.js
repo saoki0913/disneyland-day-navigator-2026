@@ -22,7 +22,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const cls = (w) => (w == null ? 'is-off' : w <= 20 ? 'is-good' : w <= 50 ? 'is-mid' : 'is-bad');
 
 export function coordsNote() {
-  return coordsSrc === 'api' ? '' : coordsSrc === 'partial' ? '<br>※一部の施設位置は概略です' : '<br>※施設位置は概略（APIの座標を取得できていません）';
+  return coordsSrc === 'api' ? '' : ' · 位置は概略';
 }
 
 export async function draw(opts) {
@@ -35,7 +35,6 @@ export async function draw(opts) {
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     }).addTo(map);
-    L.control.zoom({ position: 'topright' }).addTo(map);
     map.fitBounds(PARK_BOUNDS);
     lastFitted = false;
   }
@@ -44,7 +43,7 @@ export async function draw(opts) {
   if (!lastFitted) { map.fitBounds(PARK_BOUNDS); lastFitted = true; }
   if (!draw.fittedOnce) {
     draw.fittedOnce = true;
-    setTimeout(() => { map.invalidateSize(); map.fitBounds(PARK_BOUNDS, { paddingTopLeft: [0, 50], paddingBottomRight: [0, 170] }); }, 150);
+    setTimeout(() => { map.invalidateSize(); map.fitBounds(PARK_BOUNDS, { paddingTopLeft: [0, 50], paddingBottomRight: [0, 70] }); }, 150);
   } else setTimeout(() => map.invalidateSize(), 100);
   if (layer) layer.remove();
   layer = L.layerGroup().addTo(map);
@@ -55,24 +54,24 @@ export async function draw(opts) {
       if (!pos) continue;
       const isNext = a.id === opts.nextId;
       if (isNext) nextPos = pos;
-      const label = done ? '✓' : w.wait == null ? '休' : w.wait;
-      const icon = L.divIcon({ className: '', html: `<div class="mk mk--ride ${done ? 'is-done' : cls(w.wait)} ${isNext ? 'is-next' : ''}">${label}</div>`, iconSize: [34, 34], iconAnchor: [17, 17] });
+      const label = done ? '済' : w.wait == null ? '休' : w.wait;
+      const icon = L.divIcon({ className: '', html: `<div class="mk mk--ride ${done ? 'is-done' : cls(w.wait)} ${isNext ? 'is-next' : ''}">${label}</div>`, iconSize: isNext ? [38, 38] : [30, 30], iconAnchor: isNext ? [19, 19] : [15, 15] });
       const m = L.marker([pos.lat, pos.lon], { icon, zIndexOffset: isNext ? 1000 : 0, title: a.short }).addTo(layer);
-      m.bindPopup(`<b>${esc(a.ja)}</b><br>${w.wait == null ? '休止中' : `待ち${w.wait}分（${w.kind === 'live' ? 'LIVE' : w.kind === 'manual' ? '手入力' : '推定'}）`}${done ? ' · 体験済み' : ''}<br><button class="linkbtn" data-open="${a.id}">詳細を見る →</button>`);
+      m.bindPopup(`<b>${esc(a.ja)}</b><br>${w.wait == null ? '休止中' : `待ち${w.wait}分（${w.kind === 'live' ? 'LIVE' : w.kind === 'manual' ? '手入力' : '推定'}）`}${done ? ' · 体験済み' : ''}<br><button class="linkbtn" data-open="${a.id}">くわしく</button>`);
     }
   }
   if (f === 'all' || f === 'food') {
     for (const { r, pos } of opts.food) {
       if (!pos) continue;
-      const icon = L.divIcon({ className: '', html: `<div class="mk mk--food">${r.emoji}</div>`, iconSize: [30, 30], iconAnchor: [15, 15] });
+      const icon = L.divIcon({ className: '', html: `<div class="mk mk--food">${opts.icons?.food || ''}</div>`, iconSize: [24, 24], iconAnchor: [12, 12] });
       L.marker([pos.lat, pos.lon], { icon, title: r.ja }).addTo(layer)
-        .bindPopup(`<b>${esc(r.ja)}</b><br>${esc(r.menu[0]?.name || '')}<br><button class="linkbtn" data-open-food="${r.id}">詳細を見る →</button>`);
+        .bindPopup(`<b>${esc(r.ja)}</b><br>${esc(r.menu[0]?.name || '')}<br><button class="linkbtn" data-open-food="${r.id}">くわしく</button>`);
     }
   }
   if (f === 'all' || f === 'shows') {
     for (const { s, pos } of opts.shows) {
-      const icon = L.divIcon({ className: '', html: `<div class="mk mk--show">${s.emoji}</div>`, iconSize: [30, 30], iconAnchor: [15, 15] });
-      L.marker([pos.lat, pos.lon], { icon, title: s.short }).addTo(layer).bindPopup(`<b>${esc(s.ja)}</b><br>${esc(s.venue)}`);
+      const icon = L.divIcon({ className: '', html: `<div class="mk mk--show">${opts.icons?.show || ''}</div>`, iconSize: [24, 24], iconAnchor: [12, 12] });
+      L.marker([pos.lat, pos.lon], { icon, title: s.short }).addTo(layer).bindPopup(`<b>${esc(s.ja)}</b><br>${esc(s.venue)}<br><button class="linkbtn" data-open-show="${s.id}">くわしく</button>`);
     }
   }
   // me + straight line to next
@@ -87,8 +86,8 @@ export async function draw(opts) {
   }
   const from = opts.pos?.lat != null ? opts.pos : null;
   if (from && nextPos) {
-    lineLayer = L.polyline([[from.lat, from.lon], [nextPos.lat, nextPos.lon]], { color: '#c23b32', weight: 3, dashArray: '6 8', opacity: 0.9 }).addTo(map);
+    lineLayer = L.polyline([[from.lat, from.lon], [nextPos.lat, nextPos.lon]], { color: '#c8372d', weight: 3, dashArray: '6 8', opacity: 0.9 }).addTo(map);
   }
 }
 export function locate(g) { if (map && g) map.setView([g.lat, g.lon], 18); }
-export function fit() { if (map) map.fitBounds(PARK_BOUNDS, { paddingTopLeft: [0, 50], paddingBottomRight: [0, 170] }); }
+export function fit() { if (map) map.fitBounds(PARK_BOUNDS, { paddingTopLeft: [0, 50], paddingBottomRight: [0, 70] }); }

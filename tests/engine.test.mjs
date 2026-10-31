@@ -132,3 +132,37 @@ test('a pinned ride becomes the primary recommendation', () => {
   const r2 = recommend({ ...c, pin: { id: 'matterhorn', until: 500 } }); // expired
   assert.notEqual(r2.primary.a.id, 'matterhorn');
 });
+
+// ---------- plan conditions (builder) ----------
+test('a user-chosen "絶対乗る" ride is planned and tagged must', () => {
+  const c = { ...base({ now: 480 }), must: { rise: true, falcon: true, matterhorn: true } };
+  const sim = simulateDay(c);
+  const m = sim.items.find((i) => i.id === 'matterhorn');
+  assert.ok(m, 'matterhorn planned');
+  assert.equal(m.must, true);
+  assert.deepEqual(sim.missingMust, []);
+});
+
+test('removing Star Wars from must no longer forces it', () => {
+  const r = recommend({ ...base({ now: 600 }), must: {} });
+  assert.ok(!r.primary.reasons?.some((x) => x.k === 'must'));
+  assert.deepEqual(simulateDay({ ...base({ now: 480 }), must: {} }).missingMust, []);
+});
+
+test('"乗らない" rides are never planned', () => {
+  const sim = simulateDay({ ...base({ now: 480 }), excluded: { haunted: true, indy: true } });
+  assert.ok(!sim.items.some((i) => i.id === 'haunted' || i.id === 'indy'));
+});
+
+test('lower wait tolerance plans shorter average waits', () => {
+  const avg = (maxWait) => {
+    const rides = simulateDay({ ...base({ now: 480 }), cond: { maxWait, walk: 'normal' } }).items.filter((i) => i.type === 'ride' && !i.must);
+    return rides.reduce((s, i) => s + i.wait, 0) / Math.max(1, rides.length);
+  };
+  assert.ok(avg(30) <= avg(90), `30:${avg(30)} 90:${avg(90)}`);
+});
+
+test('"歩く量 少なめ" plans less total walking than "気にしない"', () => {
+  const walk = (w) => simulateDay({ ...base({ now: 480 }), cond: { maxWait: 60, walk: w } }).items.filter((i) => i.type === 'ride').reduce((s, i) => s + i.walk, 0);
+  assert.ok(walk('low') <= walk('any'), `low:${walk('low')} any:${walk('any')}`);
+});

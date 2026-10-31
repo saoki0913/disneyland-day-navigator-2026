@@ -1,7 +1,7 @@
 // Offline shell: cache static assets (network-first, cache fallback). API calls always go to the network.
-const V = 'dlnavi-v2';
+const V = 'dlnavi-v3';
 const SHELL = ['/', '/index.html', '/css/app.css', '/js/app.js', '/js/data.js', '/js/engine.js', '/js/map.js', '/icon.svg', '/manifest.webmanifest',
-  '/fonts/fredoka-latin-500-normal.woff2', '/fonts/fredoka-latin-600-normal.woff2', '/fonts/fredoka-latin-700-normal.woff2', '/fonts/pacifico-latin-400-normal.woff2',
+  '/fonts/oswald-latin-500-normal.woff2', '/fonts/oswald-latin-600-normal.woff2',
   '/vendor/leaflet/leaflet.js', '/vendor/leaflet/leaflet.css'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(V).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (e) => { e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== V).map((k) => caches.delete(k)))).then(() => self.clients.claim())); });

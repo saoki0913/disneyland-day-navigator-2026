@@ -3,66 +3,57 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#e4574c">
+<meta name="theme-color" content="#f2e8d5">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="10.31 Navi">
 <meta name="description" content="2026年10月31日 ディズニーランド・パーク当日ナビ（個人用・非公式）">
 <title>10.31 Disneyland Day Navi</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/icon-180.png">
-<link rel="preload" href="/fonts/fredoka-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="/fonts/pacifico-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/oswald-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
 <div id="app">
   <header class="topbar">
-    <div class="topbar__left">
-      <div class="topbar__logo">Park Day</div>
-      <div class="topbar__clock"><span id="clock">--:--</span><span class="topbar__tz">10/31 SAT · 現地</span></div>
-    </div>
-    <div class="topbar__right">
-      <button class="pill" id="livePill" type="button" aria-label="待ち時間データの状態">
-        <span class="pill__dot"></span><span id="livePillText">確認中</span>
-      </button>
-      <button class="iconbtn" id="settingsBtn" type="button" aria-label="設定">
-        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Zm7.4-2.5a7.6 7.6 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.7 7.7 0 0 0-1.7-1L15 3h-4l-.4 2.9a7.7 7.7 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1L11 21h4l.4-2.9c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5-2.2-1.6Z"/></svg>
-      </button>
-    </div>
+    <span class="topbar__clock" id="clock">--:--</span>
+    <span class="topbar__date">10/31 SAT</span>
+    <span class="topbar__sp"></span>
+    <button class="pill" id="livePill" type="button" aria-label="待ち時間を更新">
+      <span class="pill__dot"></span><span id="livePillText">確認中</span>
+    </button>
+    <button class="iconbtn" id="settingsBtn" type="button" aria-label="設定">
+      <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
+    </button>
   </header>
 
   <div id="banner" class="banner" hidden></div>
 
   <main id="views">
-    <section class="view" id="view-home" data-view="home" aria-label="ホーム"></section>
+    <section class="view" id="view-home" data-view="home" aria-label="いま"></section>
     <section class="view" id="view-plan" data-view="plan" aria-label="プラン" hidden></section>
     <section class="view view--map" id="view-map" data-view="map" aria-label="マップ" hidden></section>
     <section class="view" id="view-explore" data-view="explore" aria-label="探す" hidden></section>
-    <section class="view" id="view-shows" data-view="shows" aria-label="ショー" hidden></section>
   </main>
 
   <nav class="tabbar" aria-label="メインメニュー">
     <button class="tab is-active" data-tab="home" type="button">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.8 9.6 8.6l-6.2.5 4.7 4-1.4 6.1L12 16l5.3 3.2-1.4-6.1 4.7-4-6.2-.5Z"/></svg>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5Z"/></svg>
       <span>いま</span>
     </button>
     <button class="tab" data-tab="plan" type="button">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v2H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2V3h-2v2H9V3H7Zm-2 7h14v9H5v-9Zm2 2v2h2v-2H7Zm4 0v2h2v-2h-2Zm4 0v2h2v-2h-2Z"/></svg>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg>
       <span>プラン</span>
     </button>
     <button class="tab" data-tab="map" type="button">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7Zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5Z"/></svg>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Z"/><path d="M9 4v14M15 6v14"/></svg>
       <span>マップ</span>
     </button>
     <button class="tab" data-tab="explore" type="button">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 3a7 7 0 1 0 4.2 12.6l5.1 5.1 1.4-1.4-5.1-5.1A7 7 0 0 0 10 3Zm0 2a5 5 0 1 1 0 10 5 5 0 0 1 0-10Z"/></svg>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
       <span>探す</span>
-    </button>
-    <button class="tab" data-tab="shows" type="button">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 13.5 7 18 4.5 16 9.5 21 11l-5 1.5L18 17l-4.5-2.5L12 20l-1.5-5.5L6 17l2-4.5L3 11l5-1.5L6 4.5 10.5 7Z"/></svg>
-      <span>ショー</span>
     </button>
   </nav>
 

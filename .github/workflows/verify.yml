@@ -14,9 +14,9 @@ jobs:
           node-version: '22'
           cache: 'npm'
       - run: npm ci
-      - name: 60 unit tests
+      - name: Unit tests
         run: npm test
-      - name: Install browser for 29 E2E checks
+      - name: Install browser for E2E checks
         run: |
           npm install --no-save playwright
           npx playwright install --with-deps chromium
