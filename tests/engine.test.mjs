@@ -175,7 +175,7 @@ test('order: the plan follows the user order when rides fit', () => {
   const order = [auto[2], auto[0], auto[1], ...auto.slice(3)];
   const got = simulateDay({ ...c, order }).items.filter((i) => i.type === 'ride').map((i) => i.id);
   assert.equal(got[0], auto[2], 'dragged ride goes first');
-  assert.deepEqual([...got].sort(), [...auto].sort(), 'same rides, different order');
+  for (const id of order.slice(0, 3)) assert.ok(got.includes(id), `${id} stays in the day`);
   const r = recommend({ ...c, order });
   assert.equal(r.primary.a.id, auto[2]);
   assert.equal(r.primary.reasons[0].k, 'order');
@@ -303,3 +303,52 @@ test('extra attractions (e.g. Pooh) are matched from live names, not auto-planne
   const sim2 = simulateDay({ ...c, order: ['pooh'] });
   assert.ok(sim2.items.some((i) => i.id === 'pooh'), 'planned once the user adds it');
 });
+
+// ---------- route optimiser ----------
+{
+  const opt = await import('../public/js/engine.js');
+  const TOMORROW = { lat: 33.8117, lon: -117.9175 };
+  const seqOf = (sim) => [...sim.items.filter((i) => ['ride', 'meal', 'show'].includes(i.type)).map((i) => i.id), ...(sim.waiting || [])];
+  const walkOf = (c, seq) => opt.planFromOrder(c, seq).items.reduce((s, i) => s + (i.walk || 0), 0);
+
+  test('must-ride added mid-day does not jump to the front, and nothing optional is dropped for it', () => {
+    const c = { ...base({ now: 760, pos: TOMORROW }), must: { rise: true, falcon: true, haunted: true } };
+    const sim = simulateDay(c);
+    assert.equal(sim.items.filter((i) => i.type === 'dropped').length, 0, 'cavalcade / snack stay');
+    const rides = sim.items.filter((i) => i.type === 'ride').map((i) => i.id);
+    assert.ok(rides.length >= 3);
+    assert.notDeepEqual(rides.slice(0, 3).sort(), ['falcon', 'haunted', 'rise'], 'musts are not simply stacked first');
+    const seq = opt.insertMissing(c, seqOf(sim), sim.missingMust);
+    const r = opt.planFromOrder(c, opt.optimizeOrder(c, seq).seq);
+    for (const id of ['rise', 'falcon', 'haunted']) assert.ok(r.items.some((i) => i.id === id && !i.over), `${id} fits the day`);
+  });
+
+  test('optimizeOrder never makes the plan worse, keeps every item, and cuts walking on a zig-zag', () => {
+    const c = base({ now: 600, pos: TOMORROW });
+    // deliberately zig-zag between Tomorrowland, Frontierland, Toontown and Adventureland
+    const zig = ['space', 'thunder', 'mmrr', 'indy', 'startours', 'haunted', 'matterhorn', 'jungle'];
+    const o = opt.optimizeOrder(c, zig);
+    assert.ok(o.cost <= o.before);
+    assert.deepEqual([...o.seq].sort(), [...zig].sort());
+    assert.ok(walkOf(c, o.seq) < walkOf(c, zig), `walk ${walkOf(c, zig)} → ${walkOf(c, o.seq)}`);
+  });
+
+  test('optimizeOrder: locked rides keep their slot, done items stay in front', () => {
+    const c = base({ now: 600, pos: TOMORROW, done: { buzz: true } });
+    const seq = ['buzz', 'space', 'thunder', 'mmrr', 'indy', 'startours'];
+    const o = opt.optimizeOrder(c, seq, { mmrr: true });
+    assert.equal(o.seq[0], 'buzz');
+    assert.equal(o.seq.filter((x) => x !== 'buzz').indexOf('mmrr'), 2);
+  });
+
+  test('pickNext re-chooses only the next stop, from the current position; the rest keeps its order', () => {
+    const FRONTIER = { lat: 33.8125, lon: -117.9210 };
+    // midday, when waits are flat: walking decides (no meals/shows/musts in the way)
+    const c = { ...base({ now: 780, pos: FRONTIER }), anchors: [], must: {} };
+    const seq = ['space', 'startours', 'buzz', 'thunder'];
+    const out = opt.pickNext(c, seq);
+    assert.equal(out[0], 'thunder', 'the ride next to you goes first');
+    assert.deepEqual(out.slice(1), seq.filter((x) => x !== out[0]));
+    assert.deepEqual(opt.pickNext(c, seq, { space: true }), seq, 'a locked first ride is never replaced');
+  });
+}

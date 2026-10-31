@@ -563,3 +563,38 @@ body.is-dragging { -webkit-user-select: none; user-select: none; cursor: grabbin
 .nextstop__t { display: flex; flex-direction: column; gap: 1px; line-height: 1.35; }
 .nextstop__t b { font-size: 16px; }
 .nextstop__t small { font-size: 12.5px; color: var(--muted); font-weight: 700; display: flex; align-items: center; gap: 3px; }
+
+/* ---- plan: stamp + position chip (no sentences), move badges, suggestion, first-time coach ---- */
+.tl__now { flex-direction: row; align-items: center; gap: 6px; }
+.tl__upd, .tl__here { display: inline-flex; align-items: center; gap: 4px; min-height: 32px; padding: 2px 10px; border-radius: 16px; border: 1px solid var(--line); background: #fff; font: inherit; font-size: 13px; font-weight: 800; color: var(--ink); cursor: pointer; margin: 0; }
+.tl__upd { color: var(--red); }
+.tl__upd.is-busy .ico { animation: spin 1s linear infinite; }
+.tl__here { max-width: 60%; color: var(--mid); }
+.tl__here span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl__here.is-unset { border-style: dashed; color: var(--muted); }
+.tl__item--now.is-fresh .tl__now { background: none; padding: 4px 2px; }
+.tl__item--now.is-fresh .tl__upd { background: var(--good-l); border-color: var(--good); color: var(--good); }
+@keyframes spin { to { transform: rotate(360deg); } }
+.mv { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; margin-right: 4px; border-radius: 9px; font-size: 12px; font-weight: 900; line-height: 1; vertical-align: 1px; animation: mvpop .35s ease-out; }
+.mv .ico { width: 12px; height: 12px; }
+.mv--up { background: var(--good-l); color: var(--good); }
+.mv--down { background: #eef0f3; color: var(--muted); }
+.mv--new { background: var(--mustard-l); color: var(--mid); }
+@keyframes mvpop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.sugg { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 10px; border: 1.5px solid var(--good); background: var(--good-l); }
+.sugg__gain { flex: none; display: inline-flex; align-items: baseline; gap: 1px; color: var(--good); font-weight: 900; }
+.sugg__gain .ico { align-self: center; margin-right: 3px; }
+.sugg__gain b { font-size: 20px; }
+.sugg__gain small { font-size: 11px; }
+.sugg__seq { flex: 1; min-width: 0; display: flex; align-items: center; gap: 2px; overflow: hidden; white-space: nowrap; font-size: 12px; font-weight: 700; color: var(--mid); }
+.sugg__chip { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; background: #fff; border-radius: 4px; padding: 2px 5px; }
+.sugg__arr .ico { width: 12px; height: 12px; }
+.sugg .alert__x { flex: none; }
+/* first time only: the grip and lock of the first ride gently show they can be used */
+.tl--coach .tl__item--ride:first-of-type .tl__grip, .tl--coach .tl__item--ride:nth-child(2) .tl__grip { animation: coachx 1.2s ease-in-out 3; }
+.tl--coach .tl__item--ride:nth-child(2) .tl__lock { animation: coachy 1.2s ease-in-out .6s 3; }
+@keyframes coachx { 0%, 100% { transform: translateY(0); } 30% { transform: translateY(-4px); } 60% { transform: translateY(4px); } }
+@keyframes coachy { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.25); color: var(--red); } }
+@media (prefers-reduced-motion: reduce) { .mv, .tl--coach .tl__grip, .tl--coach .tl__lock, .tl__upd.is-busy .ico { animation: none; } }
+.tl__time .mv { display: flex; width: 22px; margin: 4px 0 0 auto; }
+.sugg__chip { max-width: 100%; }

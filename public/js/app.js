@@ -3,6 +3,7 @@ import {
 } from './data.js';
 import {
   recommend, simulateDay, planFromOrder, syncSequence, applyLocks, fitShows, buildAnchors, anchorConflicts, crowdRatio, rideRatios, walkMin, distanceM, hhmm, parseHHMM, estimateWait, availability, DEFAULT_MUST, gpsNeedsRedraw, movingPlanMin,
+  optimizeOrder, insertMissing, pickNext, planCost, planMinutes,
 } from './engine.js';
 import { SHARE_FIELDS, mergeDocs, sameDoc, newCode, CODE_RE } from './share.js';
 
@@ -217,7 +218,7 @@ async function fetchLive({ manual = false } = {}) {
     R.live = j; R.liveReceivedAt = Date.now(); R.liveStatus = j.stale ? 'stale' : 'ok'; R.liveError = j.stale ? (j.errors || []).join(' / ') : null;
     localStorage.setItem(KEY + ':live', JSON.stringify({ at: R.liveReceivedAt, data: j }));
     if (manual) toast(j.stale ? '最新取得に失敗：前回の値を表示中' : `待ち時間を更新しました（${j.sourceLabel}）`, j.stale ? 'error' : 'ok');
-    if (!j.stale) syncPaused();
+    if (!j.stale) { syncPaused(); checkSuggest(); }
     R.livePrimed = true;
   } catch (e) {
     R.liveStatus = 'error';
@@ -247,8 +248,8 @@ function syncPaused() {
   if (quiet) return;
   const names = (ids) => ids.map((id) => attractionById[id].short).join('・');
   const parts = [];
-  if (paused.length) parts.push(`${names(paused)} が一時休止 → プランから外して前後を詰めました`);
-  if (back.length) parts.push(`${names(back)} が再開 → 元の位置に戻しました`);
+  if (paused.length) parts.push(`${names(paused)} 一時休止`);
+  if (back.length) parts.push(`${names(back)} 再開`);
   R.replanned = { at: Date.now(), text: `${clock(nowMin())} ${parts.join(' / ')}` };
   R.flash = { at: Date.now(), ids: new Set(back) };
   if (paused.length) paused.forEach((id) => R.noteSeen.add(`${id}:tmp`)); // already announced here
@@ -501,11 +502,11 @@ function markDone(id) {
   // Pressing "乗った" on the day means it really is now: drop a manually chosen start time
   // so the rest of the plan restarts from this moment and this place.
   if (S.planTime && !S.sim && laParts().date === TRIP.date) S.planTime = null;
-  relayout('乗った');
-  R.replanned = { at: Date.now(), text: `${clock(nowMin())} ${doneName(id)} 完了 → 順番はそのまま、時刻を更新` };
+  if (S.gps) requestFix({ force: true });
+  nextFromHere('乗った');
   renderAll();
-  // Fresh waits for the re-plan (the edge cache makes this cheap); rebuild once more with them.
-  if (Date.now() - R.liveReceivedAt > 60e3 && shouldPoll()) fetchLive().then(() => { if (S.done[id]) { relayout('乗った'); renderAll(); } });
+  // Fresh waits for the re-plan (the edge cache makes this cheap); time it again with them.
+  if (Date.now() - R.liveReceivedAt > 60e3 && shouldPoll()) fetchLive().then(() => { if (S.done[id]) { relayout('乗った'); checkSuggest(); renderAll(); } });
   const n = doneRides().length;
   toast(`${doneName(id)} 完了${attractionById[id] ? `（${n}つ目）` : ''}`, 'ok', { label: '取り消す', fn: () => undoDone(id, true) });
 }
@@ -530,10 +531,15 @@ function skipFor(id, minutes = 20) {
     const prev = planSeq();
     const open = prev.filter((x) => !S.done[x]);
     const i = open.indexOf(id);
-    if (i >= 0 && i < open.length - 1) {
-      [open[i], open[i + 1]] = [open[i + 1], open[i]];
+    // move it behind the next ride that is actually shown (not a meal/show, not one waiting to reopen),
+    // and keep it out of gap suggestions for a while
+    const waiting = new Set(S.planSnap.waiting || []);
+    const j = open.findIndex((x, k) => k > i && attractionById[x] && !waiting.has(x));
+    if (i >= 0 && j > i) {
+      open.splice(i, 1); open.splice(j, 0, id);
+      S.skip[id] = nowMin() + minutes;
       layoutPlan([...prev.filter((x) => S.done[x]), ...open], '並べ替え'); renderAll();
-      return toast(`${itemLabel(id)} を1つ後ろにしました`, '', { label: '戻す', fn: () => { layoutPlan(prev, '並べ替え'); renderAll(); } });
+      return toast(`${itemLabel(id)} を後ろへ`, '', { label: '戻す', fn: () => { delete S.skip[id]; layoutPlan(prev, '並べ替え'); renderAll(); } });
     }
   }
   S.skip[id] = nowMin() + minutes; save(); renderAll();
@@ -685,6 +691,7 @@ function renderHome() {
   html += renderNextCard(r, c);
   // 2) progress: one slim band; tap to open the details
   html += progressBand(c, done);
+  html += suggestCard();
   if (c.now < h.open) {
     html += `<div class="card cdrow">${ic('clock')}<span>開園 <b class="num">${clock(h.open)}</b> まで <b>${fmtDur(h.open - c.now)}</b> · 入口に <span class="num">${clock(h.open - 40)}</span> 着が目安</span></div>`;
   }
@@ -896,27 +903,100 @@ function layoutPlan(seq, why, opts = {}) {
   const base = Math.max(c.now, c.openMin);
   seq = syncSequence(seq, c.anchors.filter((a) => !a.done && !dropped.includes(a.id) && (seq.includes(a.id) || a.end > base)), prevStarts);
   const r = planFromOrder(c, seq);
-  S.planSnap = { at: Date.now(), base: Math.round(Math.max(c.now, c.openMin)), why, seq, dropped, items: r.items.map(snapItem), waiting: r.waiting, missingMust: r.missingMust, late: r.late };
+  S.planSnap = { at: Date.now(), made: S.planSnap?.made ?? Math.round(c.now), base: Math.round(Math.max(c.now, c.openMin)), why, seq, dropped, items: r.items.map(snapItem), waiting: r.waiting, missingMust: r.missingMust, late: r.late };
   save();
   return S.planSnap;
 }
-// Full re-optimisation (first plan, 更新, conditions, start time): recommended order, locked rides keep their place.
+// Full re-optimisation (first plan, 更新, conditions, start time): the draft decides WHICH rides fit the
+// day, the route optimiser decides the ORDER (short walks, rides grouped by area, must-rides wherever they
+// fit best). Locked rides keep their place.
 function buildPlan(why = '') {
   const c = ctx({ order: S.order, orderReason: null });
   const sim = simulateDay(c);
-  const fresh = [...sim.items.filter((i) => SEQ_TYPES.includes(i.type)).map((i) => i.id), ...(sim.waiting || [])];
+  const c2 = ctx({ order: null, orderReason: null });
   const prev = S.planSnap?.seq || [];
-  let seq = applyLocks(fresh, prev, S.locks, S.done);
-  if (seq.join() !== fresh.join()) {
-    const c2 = ctx({ order: null, orderReason: null });
-    seq = fitShows(c2, seq);
-    // re-optimising means it must fit: rides pushed past closing by a locked ride drop out (locked / must stay)
-    const over = new Set(planFromOrder(c2, seq).items.filter((i) => i.over && !S.locks?.[i.id] && !mustMap()[i.id]).map((i) => i.id));
-    seq = seq.filter((id) => !over.has(id));
-  }
-  for (const id of Object.keys(S.locks || {})) if (S.locks[id] && !seq.includes(id) && !S.done[id] && prev.includes(id)) seq.push(id);
+  const dropped = sim.items.filter((i) => i.type === 'dropped').map((i) => i.id);
   const starts = Object.fromEntries(sim.items.filter((i) => i.id).map((i) => [i.id, i.start]));
-  return layoutPlan(seq, why, { starts, dropped: sim.items.filter((i) => i.type === 'dropped').map((i) => i.id) });
+  const base = Math.max(c2.now, c2.openMin);
+  let seq = [...sim.items.filter((i) => SEQ_TYPES.includes(i.type)).map((i) => i.id), ...(sim.waiting || [])];
+  seq = syncSequence(seq, c2.anchors.filter((a) => !a.done && !dropped.includes(a.id) && a.end > base), starts);
+  seq = insertMissing(c2, seq, sim.missingMust || []);
+  seq = applyLocks(seq, prev, S.locks, S.done);
+  for (const id of Object.keys(S.locks || {})) if (S.locks[id] && !seq.includes(id) && !S.done[id] && prev.includes(id)) seq.push(id);
+  // a ride chosen as "first" in the condition builder stays first
+  const first = S.order?.[0];
+  const locks = { ...S.locks, ...(first && seq.find((x) => !S.done[x]) === first ? { [first]: true } : {}) };
+  seq = fitShows(c2, seq);
+  seq = optimizeOrder(c2, seq, locks).seq;
+  seq = fitShows(c2, seq);
+  // it must fit: rides pushed past closing drop out (locked / must stay and are flagged)
+  const over = new Set(planFromOrder(c2, seq).items.filter((i) => i.over && !S.locks?.[i.id] && !mustMap()[i.id]).map((i) => i.id));
+  seq = seq.filter((id) => !over.has(id));
+  R.suggest = null;
+  const snap = layoutPlan(seq, why, { starts, dropped });
+  snap.made = Math.round(nowMin());
+  save();
+  return snap;
+}
+// After 乗った / a new position: pick only the NEXT stop again from here; the rest keeps its order.
+function nextFromHere(why) {
+  if (!S.planSnap?.items) { buildPlan(why); return; }
+  const before = planSeq();
+  const c = ctx({ order: null, orderReason: null });
+  const seq = pickNext(c, before, S.locks);
+  layoutPlan(seq, why);
+  markMoves(before, seq);
+  checkSuggest();
+}
+// Show which rows moved (↑ earlier / ↓ later) for a few seconds — no sentence needed.
+function markMoves(before, after) {
+  const b = before.filter((x) => !S.done[x]), a = after.filter((x) => !S.done[x]);
+  const map = {};
+  a.forEach((id, i) => {
+    const j = b.indexOf(id);
+    if (j < 0) map[id] = 'new';
+    else if (j > i) map[id] = 'up';
+    else if (i - j >= 2) map[id] = 'down'; // a one-step shift caused by another ride jumping ahead is noise
+  });
+  R.moves = Object.keys(map).length ? { at: Date.now(), map } : null;
+  if (R.moves) R.flash = { at: Date.now(), ids: new Set(Object.keys(map)) };
+}
+// A clearly better order (≥ 15 min less walking/waiting) is OFFERED, never applied on its own.
+const SUGGEST_MIN = 15;
+function checkSuggest() {
+  R.suggest = null;
+  if (!S.planSnap?.items || R.dragging || R.planEdit) return;
+  const c = ctx({ order: null, orderReason: null });
+  if (c.now < c.openMin || c.now >= c.closeMin - 30) return;
+  const cur = planSeq();
+  const o = optimizeOrder(c, cur, S.locks);
+  if (o.seq.join() === cur.join() || o.cost >= o.before) return;
+  // shown in real minutes; a big drop in penalties means something that was late / not fitting now fits
+  const gain = Math.round(planMinutes(c, cur) - planMinutes(c, o.seq));
+  const fixes = o.before - o.cost - Math.max(0, gain) >= 300;
+  if (gain < SUGGEST_MIN && !fixes) return;
+  const sig = o.seq.filter((x) => !S.done[x]).join();
+  if (S.suggestOff === sig) return;
+  R.suggest = { seq: o.seq, from: cur, gain, fixes, sig };
+}
+function applySuggest() {
+  const sg = R.suggest; if (!sg) return;
+  const sn = editSnapshot();
+  layoutPlan(sg.seq, '提案');
+  markMoves(sg.from, sg.seq);
+  R.suggest = null; R.replanned = { at: Date.now() };
+  renderAll();
+  toast(sg.gain >= 1 ? `−${sg.gain}分` : '並べ替えました', 'ok', { label: '元に戻す', fn: () => restoreEdit(sn) });
+}
+function suggestCard() {
+  const sg = R.suggest; if (!sg) return '';
+  const cur = sg.from.filter((x) => !S.done[x]), nxt = sg.seq.filter((x) => !S.done[x]);
+  const first = nxt.find((id, i) => cur[i] !== id);
+  const gain = sg.gain >= 1 ? `<b class="num">−${sg.gain}</b><small>分</small>` : ic('check');
+  return `<div class="card sugg" role="status"><span class="sugg__gain">${ic('refresh')}${gain}</span>
+    <span class="sugg__seq"><span class="mv mv--up">↑</span><span class="sugg__chip">${esc(itemLabel(first))}</span></span>
+    <button class="btn btn--sm btn--primary" data-act="suggest-apply" aria-label="${sg.gain >= 1 ? sg.gain + '分短い' : '間に合う'}順番にする">反映</button>
+    <button class="alert__x" data-act="suggest-off" aria-label="今の順番のまま">${ic('x')}</button></div>`;
 }
 const planSeq = () => S.planSnap?.seq || (S.planSnap?.items ? S.planSnap.items.filter((i) => SEQ_TYPES.includes(i.type)).map((i) => i.id) : []);
 // Recalculate times only — keeps the order exactly (乗った, edits, meal/show settings).
@@ -1001,11 +1081,12 @@ function renderPlan() {
   const mustIds = Object.keys(mustMap()).filter((id) => attractionById[id]);
   const h = hours();
   const flash = R.flash && Date.now() - R.flash.at < 6000 ? R.flash.ids : null;
-  const custom = !!S.order?.length || (S.planSnap?.why === '並べ替え' || S.planSnap?.why === '追加' || S.planSnap?.why === '削除');
   const busy = R.liveStatus === 'loading';
   const startAt = snap.base;
-  const ageMin = Math.round((Date.now() - snap.at) / 60000);
   const rp = R.replanned && Date.now() - R.replanned.at < 90e3 ? R.replanned : null;
+  const moves = R.moves && Date.now() - R.moves.at < 8000 ? R.moves.map : {};
+  const mv = (id) => moves[id] === 'up' ? '<span class="mv mv--up" aria-label="前へ">↑</span>' : moves[id] === 'down' ? '<span class="mv mv--down" aria-label="後ろへ">↓</span>' : moves[id] === 'new' ? `<span class="mv mv--new" aria-label="追加">${ic('plus')}</span>` : '';
+  const coach = !S.seenCoach && sim.items.some((i) => i.type === 'ride');
   const reopened = sim.waiting.filter((id) => liveMap()[id]?.status === 'OPERATING');
   // 1) One-line summary, then the timeline right away — the plan itself is the first thing you see.
   let html = `<div class="planhead"><div class="planhead__t"><b class="num">${clock(startAt)}→${clock(h.close)}</b>
@@ -1020,14 +1101,18 @@ function renderPlan() {
   if (reopened.length) html += `<div class="alert" role="alert"><div class="alert__body"><div class="alert__t">${reopened.map((id) => esc(attractionById[id].short)).join('・')} 再開</div><div class="alert__s">元の位置に戻します</div></div><button class="btn btn--sm btn--primary" data-act="sync-paused">戻す</button></div>`;
   const edit = R.planEdit;
   const rm = (id, name) => `<button class="tl__rm" data-rm="${id}" aria-label="${esc(name)} をプランから外す">${ic('x')}</button>`;
-  html += `<ol class="tl tl--plan ${edit ? 'tl--edit' : ''}">
+  html += suggestCard();
+  const here = position();
+  const hereLabel = here.src === 'gps' ? 'GPS' : here.src === 'land' ? landById[S.land]?.ja : here.src === 'last' ? (attractionById[S.lastDone?.id]?.short || doneName(S.lastDone?.id)) : here.src === 'entrance' || here.src === 'outside' ? '入口' : '？';
+  html += `<ol class="tl tl--plan ${edit ? 'tl--edit' : ''} ${coach ? 'tl--coach' : ''}">
     <li class="tl__item tl__item--now ${rp ? 'is-fresh' : ''}"><span class="tl__time">${clock(startAt)}</span>
-      <div class="tl__now">${rp ? `<span class="tl__res">${ic('check')}<span>${esc(rp.text)}</span><button class="linkbtn tl__upd" data-act="replan">${ic('refresh')}更新</button></span>` : `<span>${clock(startAt)} から閉園までのプラン<button class="linkbtn tl__upd" data-act="replan">${ic('refresh')}更新</button></span><small>${ageMin < 1 ? 'たった今作成' : `${fmtDur(ageMin)}前に作成`} · ${custom ? 'あなたが並べた順' : 'おすすめ順'} · 「乗った」では順番はそのまま · ${ic('grip')}で入れ替え · ${ic('lock')}で固定</small>`}</div></li>`;
+      <div class="tl__now"><button class="tl__upd ${busy ? 'is-busy' : ''}" data-act="replan" aria-label="最新の待ち時間と現在地で作り直す（${clock(snap.made ?? startAt)} 作成）">${ic('refresh')}<span class="num">${clock(snap.made ?? startAt)}</span></button>
+        <button class="tl__here ${here.src === 'none' ? 'is-unset' : ''}" data-act="pick-land" aria-label="現在地：${esc(here.label)}">${ic(here.src === 'gps' ? 'locate' : 'pin')}<span>${esc(hereLabel)}</span></button></div></li>`;
   for (const it of sim.items) {
     if (it.type === 'free' && it.end - it.start < 10) continue;
     if (it.type === 'ride') {
       const a = it.a;
-      html += `<li class="tl__item tl__item--ride ${it.must ? 'tl__item--must' : ''} ${flash?.has(a.id) ? 'is-changed' : ''} ${it.end < c.now - 5 ? 'is-past' : ''}" data-ride="${a.id}" data-drag="${a.id}"><span class="tl__time">${clock(it.start)}</span>
+      html += `<li class="tl__item tl__item--ride ${it.must ? 'tl__item--must' : ''} ${flash?.has(a.id) ? 'is-changed' : ''} ${it.end < c.now - 5 ? 'is-past' : ''}" data-ride="${a.id}" data-drag="${a.id}"><span class="tl__time">${clock(it.start)}${mv(a.id)}</span>
         <div class="tl__card"><span class="tl__grip" data-grip="${a.id}" role="button" aria-label="${esc(a.short)} をドラッグして順番を変更">${ic('grip')}</span>
           <button class="tl__main" data-open="${a.id}"><span class="tl__name">${jw(a.short)}${it.must ? '<span class="tag tag--must">絶対</span>' : ''}${it.over ? '<span class="tag tag--bad">閉園に間に合わない</span>' : ''}</span>
           <span class="tl__meta">${planWait(it, c.now)}<span>${ic('walk')}${it.walk}分</span><span>〜<span class="num">${clock(it.end)}</span></span></span></button>
@@ -1037,7 +1122,7 @@ function renderPlan() {
       const x = it.anchor;
       const isMeal = it.type === 'meal';
       const lateTag = x.late === 'miss' ? '<span class="tag tag--bad">間に合わない</span>' : x.late === 'short' ? '<span class="tag tag--warn">場所取り短め</span>' : '';
-      html += `<li class="tl__item tl__item--${it.type} ${flash?.has(x.id) ? 'is-changed' : ''} ${x.late === 'miss' ? 'tl__item--late' : ''}" data-drag="${x.id}"><span class="tl__time">${clock(x.start)}</span>
+      html += `<li class="tl__item tl__item--${it.type} ${flash?.has(x.id) ? 'is-changed' : ''} ${x.late === 'miss' ? 'tl__item--late' : ''}" data-drag="${x.id}"><span class="tl__time">${clock(x.start)}${mv(x.id)}</span>
         <div class="tl__card"><span class="tl__grip" data-grip="${x.id}" role="button" aria-label="${esc(x.title)} をドラッグして順番を変更">${ic('grip')}</span><button class="tl__main" data-anchor-edit="${x.id}"><span class="tl__name">${jw(x.title)}${isMeal ? '' : '<span class="tag">時刻固定</span>'}${x.shifted ? '<span class="tag tag--warn">時間をずらした</span>' : ''}${lateTag}</span>
           <span class="tl__meta">${it.type === 'meal' ? `<span>${ic('food')}${esc(x.place)}</span>` : ''}<span><span class="num">${clock(x.start)}–${clock(x.end)}</span></span>${x.claim && x.late !== 'miss' ? `<span style="color:var(--red)">場所取り <span class="num">${clock(it.claimFrom ?? x.start - x.claim)}</span>〜</span>` : ''}</span></button>
           ${edit ? rm(x.id, x.title) : `<button class="check" data-done="${x.id}" aria-label="${esc(x.title)} 完了">${ic('check')}</button>`}</div></li>`;
@@ -1064,16 +1149,9 @@ function renderPlan() {
   // 2) Below the plan: re-plan options and the conditions summary.
   html += `<div class="sec"><h2><span class="sec__en">REPLAN</span>作り直す</h2></div>
     <div class="card replan">
-      <ul class="replan__uses">
-        <li>${ic('clock')}${esc(liveAgeText())}</li>
-        <li>${ic('check')}済み ${done.length}件は除く</li>
-        <li>${ic('pin')}${esc(position().src === 'gps' ? 'GPSの現在地から' : position().src === 'none' ? '現在地は未設定' : '推定の現在地から')}</li>
-      </ul>
-      ${rp ? `<div class="replan__res">${ic('check')}${esc(rp.text)}</div>` : ''}
-      <button class="btn ${custom ? 'btn--navy' : ''} btn--block ${busy ? 'is-busy' : ''}" data-act="replan" ${busy ? 'disabled' : ''}>${ic('refresh')}${custom ? 'おすすめ順で作り直す' : '最新の待ち時間で作り直す'}</button>
-      <p class="replan__hint">プランの順番は勝手には変わりません。「乗った」では時刻だけ更新します。並べ直すのはこのボタンと条件を変えたときだけで、${ic('lock')}固定した乗り物はその位置のまま残ります。</p>
+      <button class="btn btn--navy btn--block ${busy ? 'is-busy' : ''}" data-act="replan" ${busy ? 'disabled' : ''}>${ic('refresh')}今から作り直す</button>
       <div class="replan__time">
-        <label for="planTimeInput"><b>別の時刻から作る</b><span>遅れて入園・休憩のあとなど</span></label>
+        <label for="planTimeInput"><b>別の時刻から</b></label>
         <div class="plan-start__row"><input type="time" id="planTimeInput" value="${clock(startAt)}" aria-label="プランの開始時刻">
           <button class="btn btn--sm btn--navy" data-act="plan-time-set">この時刻から作る</button></div>
       </div>
@@ -1096,32 +1174,34 @@ function renderPlan() {
   }
   el.innerHTML = html;
   R.lastPlanIds = sim.items.map((i) => i.id).join(',');
+  if (coach) { S.seenCoach = true; save(); }
 }
 const planRideIds = () => planItems().filter((i) => i.type === 'ride').map((i) => i.id);
 
-// Re-plan: fetch the latest waits, drop any manual order, and report what changed.
+// One fresh GPS fix (if GPS is on), at most `ms` long — the plan is built from where you really are.
+function freshFix(ms = 4000) {
+  if (!S.gps || !('geolocation' in navigator)) return Promise.resolve();
+  return new Promise((done) => {
+    const t = setTimeout(done, ms);
+    navigator.geolocation.getCurrentPosition((p) => {
+      clearTimeout(t);
+      R.gpsPos = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy, at: Date.now() };
+      R.gpsRendered = R.gpsPos; R.gpsRenderedAt = R.gpsPos.at;
+      done();
+    }, () => { clearTimeout(t); done(); }, { enableHighAccuracy: true, maximumAge: 20e3, timeout: ms });
+  });
+}
+// Re-plan: latest waits + current position, drop any manual order; changes are shown as ↑↓ on the rows.
 async function replan() {
-  const before = planRideIds();
-  const hadOrder = !!S.order?.length;
+  const before = planSeq();
   S.order = null; save();
-  await fetchLive({ manual: false });
+  await Promise.all([fetchLive({ manual: false }), freshFix()]);
   buildPlan('更新');
-  const after = planRideIds();
-  const added = after.filter((id) => !before.includes(id));
-  const removed = before.filter((id) => !after.includes(id));
-  const common = after.filter((id) => before.includes(id));
-  const prevCommon = before.filter((id) => after.includes(id));
-  const moved = common.filter((id, i) => prevCommon[i] !== id);
-  const parts = [];
-  if (moved.length) parts.push(`順番変更 ${moved.length}件`);
-  if (added.length) parts.push(`追加 ${added.map((id) => attractionById[id].short).join('・')}`);
-  if (removed.length) parts.push(`外れた ${removed.map((id) => attractionById[id].short).join('・')}`);
+  markMoves(before, planSeq());
   const err = R.liveStatus === 'error';
-  const text = `${clock(nowMin())} に${err ? '推定値で' : '最新の待ち時間で'}作り直しました${parts.length ? '：' + parts.join(' / ') : '（変更なし）'}`;
-  R.replanned = { at: Date.now(), text };
-  R.flash = { at: Date.now(), ids: new Set([...moved, ...added]) };
-  renderPlan();
-  toast(hadOrder && !parts.length ? 'おすすめ順に戻しました（変更なし）' : text.replace(/^\d+:\d+ に/, ''), err ? 'error' : 'ok');
+  R.replanned = { at: Date.now() };
+  renderAll();
+  toast(err ? '推定値で作り直しました' : '作り直しました', err ? 'error' : 'ok');
 }
 
 // ---------- drag & drop reordering (touch + mouse, pointer events) ----------
@@ -1241,9 +1321,7 @@ function bestSlot(seq, id) {
   let best = null;
   for (let i = 0; i <= open.length; i++) {
     const o = [...open.slice(0, i), id, ...open.slice(i)];
-    const r = planFromOrder(c, o);
-    const last = r.items.filter((x) => x.type !== 'free').at(-1);
-    const cost = r.late.length * 1e5 + (r.missingMust?.length || 0) * 1e4 + (last ? last.end : 0);
+    const cost = planCost(c, [...seq.filter((x) => S.done[x]), ...o]);
     if (!best || cost < best.cost) best = { cost, o };
   }
   return [...seq.filter((x) => S.done[x]), ...best.o];
@@ -1993,7 +2071,7 @@ document.addEventListener('click', async (e) => {
   }
   if (d.fq !== undefined) { S.foodQ = S.foodQ === d.fq ? '' : d.fq; save(); return renderExplore(); }
   if (d.mf) { S.mapFilter = d.mf; save(); document.querySelectorAll('[data-mf]').forEach((b) => b.classList.toggle('is-active', b.dataset.mf === d.mf)); return renderMap(); }
-  if (d.land) { S.land = d.land; S.landAt = Date.now(); save(); renderAll(); return toast(`現在地：${landById[d.land].ja}`, 'ok'); }
+  if (d.land) { S.land = d.land; S.landAt = Date.now(); save(); if (S.planSnap?.items) nextFromHere('現在地'); renderAll(); return toast(landById[d.land].ja, 'ok'); }
   if (d.rideSt) {
     const id = d.rideSt, must = mustMap();
     delete must[id]; delete S.excluded[id];
@@ -2104,6 +2182,8 @@ document.addEventListener('click', async (e) => {
     case 'gps-start': return startGPS(true);
     case 'gps-stop': return stopGPS();
     case 'pick-land': return openLandPicker();
+    case 'suggest-apply': return applySuggest();
+    case 'suggest-off': S.suggestOff = R.suggest?.sig; R.suggest = null; save(); return renderAll();
     case 'sim-set': { const m = parseHHMM($('#simAt').value); S.sim = { base: m, setAt: Date.now() }; buildPlan('テスト時刻'); closeSheet(); renderAll(); return toast(`${hhmm(m)} として表示中`, 'ok'); }
     case 'sim-off': S.sim = null; buildPlan('テスト時刻'); closeSheet(); renderAll(); return toast('現在時刻に戻しました');
     case 'reset':
@@ -2220,4 +2300,4 @@ document.addEventListener('visibilitychange', () => {
   // Back after 30 s or more: a quick, quiet reload is fine if a new version is out.
   checkForUpdate({ allowAutoReload: hiddenAt && Date.now() - hiddenAt > 30e3 });
 });
-window.__dlnavi = { S, R, ctx, recommend, simulateDay, pullShare, renderMap: () => renderMap() };
+window.__dlnavi = { S, R, ctx, recommend, simulateDay, pullShare, renderMap: () => renderMap(), layoutPlan, checkSuggest, renderAll: () => renderAll() };

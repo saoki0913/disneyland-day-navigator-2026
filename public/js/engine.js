@@ -195,8 +195,9 @@ function scoreRide(a, c, plan, ctx) {
   const reasons = [];
   const must = isMust(a, ctx);
   if (must) {
-    s += 40;
-    // urgency grows as the day runs out
+    // Must-rides only need to FIT the day; the route optimiser decides where. A small bonus keeps them
+    // in the draft, and urgency only grows when the day is running out.
+    s += 12;
     const left = ctx.closeMin - ctx.now;
     if (left < 6 * 60) s += 25;
     if (left < 3 * 60) s += 40;
@@ -281,9 +282,12 @@ export function recommend(ctx) {
         : now + walk <= ctx.closeMin - 2;
       // Soft deadline for must-rides: shorter spot-claiming for shows, or a meal up to 30 min later.
       const softDl = next ? (next.kind === 'show' ? next.start - 5 : next.start + 30) : -1;
-      if (isMust(a, ctx) && k > 0 && ok) {
+      // Only when the day is running out: earlier, a must-ride simply waits for a slot that fits
+      // (the route optimiser places it), instead of jumping to the front and pushing plans away.
+      const urgent = ctx.closeMin - now < 5 * 60;
+      if (isMust(a, ctx) && urgent && k > 0 && ok) {
         bumps = upcoming.slice(0, k).map((x) => x.id);
-      } else if (isMust(a, ctx) && next && !next.flex && finish + backToAnchor <= softDl) {
+      } else if (isMust(a, ctx) && urgent && next && !next.flex && finish + backToAnchor <= softDl) {
         c.soft = next.kind === 'show' ? 'claim' : 'meal';
       } else {
         if (isMust(a, ctx)) result.blocked.push({ a, reason: next ? `${next.title}（${hhmm(next.start)}）までに間に合わない` : '閉園までに間に合わない', temporary: true, fit: true });
@@ -567,6 +571,139 @@ function stripDown(live, ctx) {
     out[k] = { ...v, wait: null };
   }
   return out;
+}
+
+// ---------- route optimisation ----------
+// Cost of a sequence in "minutes you'd rather not spend": walking (weighted by the walk condition),
+// queueing, meals pushed late, shows reached late, rides that no longer fit before closing.
+// Lower is better. Free time costs nothing — it is what a good route buys you.
+/** Real minutes spent walking + queueing in a sequence (what the user would actually save). */
+export function planMinutes(ctx, seq) {
+  return planFromOrder(ctx, seq).items.reduce((t, it) => t + (it.walk || 0) + (it.type === 'ride' && !it.over ? it.wait : 0), 0);
+}
+export function planCost(ctx, seq) {
+  const r = planFromOrder(ctx, seq);
+  const plan = effectivePlan(ctx);
+  const walkCost = 1.3 * (WALK_W[ctx.cond?.walk] ?? 1);
+  const orig = Object.fromEntries((ctx.anchors || []).map((a) => [a.id, a]));
+  let cost = 0;
+  for (const it of r.items) {
+    if (it.type === 'ride') {
+      cost += it.walk * walkCost + it.wait;
+      if (!it.must && it.wait > plan.maxWait) cost += (it.wait - plan.maxWait);
+      if (it.over) cost += it.must ? 5000 : 400;
+      else if (it.must) {
+        // keep a safety margin: a must-ride planned into the last 90 minutes may slip out if waits rise
+        const tail = it.end - (ctx.closeMin - 90);
+        if (tail > 0) cost += tail * 2;
+      }
+    } else if (it.type === 'meal') {
+      cost += it.walk * walkCost + Math.max(0, it.start - (orig[it.id]?.start ?? it.start)) * 1.5;
+    } else if (it.type === 'show') {
+      cost += it.walk * walkCost + (it.anchor.late === 'miss' ? 3000 : it.anchor.late === 'short' ? 40 : 0);
+    }
+  }
+  return cost + (r.missingMust?.length || 0) * 5000;
+}
+
+// Locked rides keep their index in the open part; everything else is free to be re-merged around them.
+function splitLocks(open, locks) {
+  const fixedAt = new Map();
+  open.forEach((id, i) => { if (locks?.[id] && attractionById[id]) fixedAt.set(i, id); });
+  return { fixedAt, free: open.filter((id, i) => !fixedAt.has(i)) };
+}
+function mergeLocks(free, fixedAt, n) {
+  const out = []; let k = 0;
+  for (let i = 0; i < n; i++) out.push(fixedAt.has(i) ? fixedAt.get(i) : free[k++]);
+  while (k < free.length) out.push(free[k++]);
+  return out.filter(Boolean);
+}
+
+/**
+ * Re-order the rides of a plan for the shortest walk + wait (relocation + segment reversal, a few passes).
+ * Meals/shows keep their relative order; locked rides keep their slot; done items stay in front.
+ * Returns { seq, cost, before }.
+ */
+export function optimizeOrder(ctx, seq, locks = {}) {
+  const done = seq.filter((id) => ctx.done?.[id]);
+  const open = seq.filter((id) => !ctx.done?.[id]);
+  const { fixedAt, free } = splitLocks(open, locks);
+  const n = open.length;
+  const full = (f) => [...done, ...mergeLocks(f, fixedAt, n)];
+  let best = free, bestCost = planCost(ctx, full(free));
+  const before = bestCost;
+  for (let pass = 0; pass < 6; pass++) {
+    let improved = false;
+    // 1) move one ride to another position
+    for (const id of [...best]) {
+      if (!attractionById[id]) continue;
+      const rest = best.filter((x) => x !== id);
+      for (let i = 0; i <= rest.length; i++) {
+        const f = [...rest.slice(0, i), id, ...rest.slice(i)];
+        const c = planCost(ctx, full(f));
+        if (c < bestCost - 0.5) { best = f; bestCost = c; improved = true; }
+      }
+    }
+    // 2) reverse a run of rides (fixes zig-zags: A→B→C becomes C→B→A when that walks less)
+    for (let i = 0; i < best.length; i++) {
+      for (let j = i + 2; j < Math.min(best.length, i + 7); j++) {
+        const seg = best.slice(i, j + 1);
+        if (!seg.every((x) => attractionById[x])) break;
+        const f = [...best.slice(0, i), ...seg.reverse(), ...best.slice(j + 1)];
+        const c = planCost(ctx, full(f));
+        if (c < bestCost - 0.5) { best = f; bestCost = c; improved = true; }
+      }
+    }
+    if (!improved) break;
+  }
+  return { seq: full(best), cost: bestCost, before };
+}
+
+/** Put each missing must-ride where it costs least (it must be IN the day; where is up to the route). */
+export function insertMissing(ctx, seq, ids) {
+  let out = [...seq];
+  for (const id of ids) {
+    if (out.includes(id)) continue;
+    const done = out.filter((x) => ctx.done?.[x]);
+    const open = out.filter((x) => !ctx.done?.[x]);
+    let best = null;
+    for (let i = 0; i <= open.length; i++) {
+      const o = [...done, ...open.slice(0, i), id, ...open.slice(i)];
+      const c = planCost(ctx, o);
+      if (!best || c < best.c) best = { c, o };
+    }
+    out = best.o;
+  }
+  return out;
+}
+
+/**
+ * After "乗った": choose only the NEXT stop again (from where you are now, with today's waits) among the
+ * rides planned before the next meal/show. Everything after it keeps its order. Locked rides never move.
+ * Returns the new sequence (same array contents) — unchanged when nothing is clearly better (≥ minGain min).
+ */
+export function pickNext(ctx, seq, locks = {}, minGain = 3) {
+  const done = seq.filter((id) => ctx.done?.[id]);
+  const open = seq.filter((id) => !ctx.done?.[id]);
+  const first = open.findIndex((id) => attractionById[id] && availability(attractionById[id], ctx).ok);
+  if (first < 0) return seq;
+  // only rides before the first meal/show (and before any locked ride) are candidates
+  const cands = [];
+  for (let i = first; i < open.length && cands.length < 5; i++) {
+    const id = open[i];
+    if (!attractionById[id] || locks[id]) break;
+    if (availability(attractionById[id], ctx).ok) cands.push(i);
+  }
+  if (cands.length < 2 || locks[open[first]]) return seq;
+  const cur = planCost(ctx, seq);
+  let best = { c: cur - minGain, s: seq };
+  for (const i of cands.slice(1)) {
+    const o = [...open]; const [id] = o.splice(i, 1); o.splice(first, 0, id);
+    const s = [...done, ...o];
+    const c = planCost(ctx, s);
+    if (c < best.c) best = { c, s };
+  }
+  return best.s;
 }
 
 export const _test = { scoreRide, stripDown };

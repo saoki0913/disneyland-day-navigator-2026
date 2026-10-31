@@ -145,11 +145,12 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     const replanY = await page.evaluate(() => document.querySelector('.replan').getBoundingClientRect().top);
     const tlBottom = await page.evaluate(() => document.querySelector('.tl--plan').getBoundingClientRect().bottom);
     assert.ok(replanY > tlBottom, 're-plan panel is below the timeline');
-    assert.match(await page.textContent('.tl__item--now'), /から閉園までのプラン/);
-    const card = await page.textContent('.replan');
-    assert.match(card, /LIVE待ち時間/);
-    assert.match(card, /済み \d+件は除く/);
-    assert.match(card, /最新の待ち時間で作り直す/);
+    // no sentences: a time stamp (= re-plan button) and where you are
+    assert.match(await page.textContent('.tl__item--now .tl__upd'), /^\s*\d{1,2}:\d{2}\s*$/);
+    assert.equal(await page.locator('.tl__item--now [data-act="pick-land"]').count(), 1, 'position chip');
+    assert.ok((await page.textContent('.tl__item--now')).trim().length <= 30, 'no explanatory text in the plan header');
+    assert.equal(await page.locator('.replan__hint, .replan__uses').count(), 0);
+    assert.match(await page.textContent('.replan [data-act="replan"]'), /作り直す/);
   });
   await step('Plan: drag & drop changes the ride order (and the home "next")', async () => {
     await tab(page, 'plan');
@@ -170,14 +171,14 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     const after = await page.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride));
     assert.equal(after[0], target, `dragged ${target} first, got ${after.join(',')}`);
     assert.match(await page.textContent('#toast'), /順番/);
-    assert.match(await page.textContent('.tl__item--now'), /あなたが並べた順/);
-    assert.match(await page.textContent('.replan [data-act="replan"]'), /おすすめ順で作り直す/);
+
     await tab(page, 'home');
     assert.equal(await page.getAttribute('#actionbar [data-done]', 'data-done'), target, 'home follows the custom order');
     await tab(page, 'plan');
     await page.click('.replan [data-act="replan"]'); await page.waitForTimeout(500);
     assert.equal(await page.evaluate(() => window.__dlnavi.S.order), null, 'order reset');
-    assert.match(await page.textContent('.replan__res'), /作り直しました/);
+    assert.match(await page.textContent('#toast'), /作り直しました/);
+    assert.equal(await page.locator('.tl__item--now.is-fresh').count(), 1, 'fresh stamp');
     await page.screenshot({ path: `${SHOTS}/03-plan-replan.png`, fullPage: true });
   });
   await step('Lock: a locked ride keeps its place when the plan is re-optimised (更新)', async () => {
@@ -223,9 +224,11 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     const ids0 = await page.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride));
     await page.click(`.tl--plan [data-done="${first}"]`); await page.waitForTimeout(300);
     const now = await page.evaluate(() => window.__dlnavi.S.doneMin);
-    assert.match(await page.textContent('.tl__item--now'), /完了 → 順番はそのまま、時刻を更新/);
     const ids1 = await page.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride));
-    assert.deepEqual(ids1, ids0.filter((x) => x !== first), '乗った keeps the order of the rest');
+    // only the NEXT stop may be re-chosen from here; everything after it keeps its order
+    const rest0 = ids0.filter((x) => x !== first);
+    assert.deepEqual([...ids1].sort(), [...rest0].sort(), 'same rides');
+    assert.deepEqual(ids1.slice(1), rest0.filter((x) => x !== ids1[0]), '乗った keeps the order of the rest');
     const t0 = await page.textContent('.tl__item--now .tl__time');
     const t1 = await page.textContent('.tl--plan > li[data-ride] .tl__time');
     const toMin = (x) => { const [h, m] = x.split(':').map(Number); return h * 60 + m; };
@@ -479,6 +482,31 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.match(await page.textContent('#actionbar'), /レジスタンス/);
     liveVariant = 0;
   });
+  await step('Suggestion: a clearly better order is offered (not applied), 反映 shows ↑↓ on the rows', async () => {
+    await tab(page, 'plan');
+    const zig = ['space', 'thunder', 'mmrr', 'indy', 'startours', 'haunted', 'matterhorn', 'jungle'];
+    await page.evaluate((z) => { const d = window.__dlnavi; const seq = d.S.planSnap.seq; const done = seq.filter((x) => d.S.done[x]); const anchors = seq.filter((x) => !d.S.done[x] && x.includes(':')); d.layoutPlan([...done, ...z.filter((x) => !d.S.done[x]), ...anchors], '並べ替え'); d.checkSuggest(); d.renderAll(); }, zig);
+    await page.waitForTimeout(150);
+    const before = await page.evaluate(() => window.__dlnavi.S.planSnap.seq.join());
+    assert.equal(await page.locator('#view-plan .sugg').count(), 1, 'suggestion card');
+    assert.match(await page.textContent('#view-plan .sugg__gain'), /−\d+/);
+    assert.equal(await page.evaluate(() => window.__dlnavi.S.planSnap.seq.join()), before, 'not applied on its own');
+    await page.screenshot({ path: `${SHOTS}/03-plan-suggest.png` });
+    await page.click('#view-plan [data-act="suggest-apply"]'); await page.waitForTimeout(200);
+    assert.notEqual(await page.evaluate(() => window.__dlnavi.S.planSnap.seq.join()), before);
+    assert.ok(await page.locator('#view-plan .mv').count() >= 1, 'moved rows marked');
+    assert.equal(await page.locator('#view-plan .sugg').count(), 0);
+    await page.screenshot({ path: `${SHOTS}/03-plan-moved.png` });
+    await page.click('#toastAct'); await page.waitForTimeout(200); // 元に戻す
+    assert.equal(await page.evaluate(() => window.__dlnavi.S.planSnap.seq.join()), before, 'undo');
+    await page.click('.replan [data-act="replan"]'); await page.waitForTimeout(600);
+  });
+  await step('Position chip: pick the area you are in from the plan header', async () => {
+    await tab(page, 'plan');
+    await page.click('.tl__item--now [data-act="pick-land"]'); await page.waitForTimeout(200);
+    await page.click('#sheet [data-land="frontier"]'); await page.waitForTimeout(250);
+    assert.match(await page.textContent('.tl__item--now [data-act="pick-land"]'), /フロンティア/);
+  });
   await step('Pause: a planned ride that goes down leaves the plan (rest closes up) and returns to its place on reopening', async () => {
     await tab(page, 'plan');
     const rides = () => page.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride));
@@ -493,13 +521,13 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.ok(!(await rides()).includes(pauseId), 'paused ride left the timeline');
     { const a = await rides(); assert.deepEqual(a, before.filter((x) => x !== pauseId), `others keep their order: ${before.join()} → ${a.join()}`); }
     assert.equal(await page.locator(`.waitlist [data-open="${pick}"]`).count(), 1, 'listed as 再開待ち');
-    assert.match(await page.textContent('.tl__item--now'), /一時休止/);
+    assert.match(await page.textContent('#toast'), /一時休止/);
     await page.screenshot({ path: `${SHOTS}/03-plan-paused.png`, fullPage: true });
     pauseId = null;
     await page.click('#livePill'); await page.waitForTimeout(600);
     assert.deepEqual(await seqOpen(), seq0, 'sequence unchanged');
     assert.deepEqual(await rides(), before, 'back in its original place');
-    assert.match(await page.textContent('.tl__item--now'), /再開/);
+    assert.match(await page.textContent('#toast'), /再開/);
   });
   await step('Trend: history recorded → sparkline in list + chart in detail', async () => {
     await tab(page, 'explore');
