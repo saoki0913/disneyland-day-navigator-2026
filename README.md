@@ -26,7 +26,7 @@ API トークンを使う場合の最小権限：`Account › Cloudflare Pages �
 
 ## GitHub push → Cloudflare Pages 自動デプロイ（無料・既存サービス分離）
 
-- GitHub の本番ブランチ `main` への **push** で `.github/workflows/verify.yml` が起動し、単体テスト73件とモバイルE2E41件を実行します。
+- GitHub の本番ブランチ `main` への **push** で `.github/workflows/verify.yml` が起動し、単体テスト76件とモバイルE2E43件を実行します。
 - **検証が成功した最新コミットのみ** `.github/workflows/deploy-pages.yml` が起動して、本番 `https://dl-navi-1031.pages.dev` にデプロイします。失敗したテストや古いコミットは公開されません。GitHub Actions の `workflow_dispatch` からプレビュー/本番を手動選択することもできます。
 - Cloudflare と GitHub のネイティブ Git 連携は使いません（Cloudflare Git installation が 8000011 で失敗するため）。代わりに公式サポートの `wrangler pages deploy public --project-name dl-navi-1031 --branch main` を使います。
 - **初回に1回だけ必要**：Cloudflare ダッシュボードの API Tokens で、対象アカウントの `Account › Cloudflare Pages › Edit` のみを許可したトークンを発行し、この GitHub リポジトリの `Settings › Secrets and variables › Actions › New repository secret` に **`CLOUDFLARE_API_TOKEN`** として保存します。Cloudflare のアカウントIDはワークフローで既存の対象アカウントに固定しているため、Secret は不要です。トークンを git、チャット、ログに貼らないでください。
@@ -70,7 +70,8 @@ API トークンを使う場合の最小権限：`Account › Cloudflare Pages �
   15分以上古いデータは使わず推定に切り替え、バナーで明示。
 - **ショー時刻**：APIから取得できればそれを使用（「APIの公式時刻」）。取得できない場合は事前情報として「要確認」と表示。手動修正可。
 - **座標**：ThemeParks.wiki の施設座標を使用。取得できない場合は概略位置であることを表示。
-- **徒歩時間**：直線距離×1.4 ÷ 分速70m の目安。実際の道順は Google マップへ。
+- **徒歩時間**：直線距離×1.4 ÷ 分速70m の目安。
+- **道案内（ルート）**：アプリ内マップで園内の歩道に沿ったルートを表示（OpenStreetMap データ、FOSSGIS の徒歩ルーター。`/api/route` 経由で出発地と目的地の座標だけを送り、1日キャッシュ）。残り距離・次の曲がり角を表示し、外れたら引き直し、着いたら自動で終了。取得できないときは直線で案内。案内中でマップを表示している間だけ現在地を約10秒ごとに取得し、それ以外は通常の頻度（マップ60秒・他3分）。
 - **一時休止**：休止中（DOWN）のアトラクションはタイムラインから外して「再開待ち」に表示し、再開を検知したら自動でプランに戻す。
 - **位置情報**：「現在地を使う／現在地を表示」を押した時（または既に許可済みの場合）のみ取得し、端末内の計算にのみ使用（サーバー送信なし）。常時追跡（watchPosition）はせず、画面表示中だけ1回取得をマップでは60秒、他のタブでは3分に1回まで。
 - **写真**：Wikimedia Commons（実物の写真・作者とライセンス表示）→ Wikipedia → イラストタイル。
@@ -90,9 +91,9 @@ API トークンを使う場合の最小権限：`Account › Cloudflare Pages �
 ## テスト
 
 ```bash
-npm test                               # 73 unit tests（エンジン・API正規化・写真選定）
+npm test                               # 76 unit tests（エンジン・API正規化・写真選定）
 npx wrangler pages dev public --port 8788 &
-node tests/e2e.mjs http://127.0.0.1:8788   # 41 browser E2E steps（iPhoneサイズ）
+node tests/e2e.mjs http://127.0.0.1:8788   # 43 browser E2E steps（iPhoneサイズ）
 ```
 
 ## コスト

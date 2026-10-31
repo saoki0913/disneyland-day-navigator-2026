@@ -8,6 +8,7 @@ let L = null, map = null, coordsSrc = 'approx', leafletP = null;
 let markers = new Map(); // key -> { m, html, lat, lon, popup }
 let me = null;           // { dot, ring }
 let line = null;
+let routeLine = null, destMk = null; // in-app walking guidance
 let busy = false, busyAt = 0, pending = null;
 const PARK_BOUNDS = [[33.8095, -117.9248], [33.8168, -117.9160]];
 const FIT_PAD = { paddingTopLeft: [0, 50], paddingBottomRight: [0, 70] };
@@ -43,7 +44,7 @@ export function coordsNote() {
 function ensureMap(el) {
   if (map && map.getContainer() === el) return;
   if (map) { try { map.remove(); } catch { /* detached */ } }
-  markers = new Map(); me = null; line = null; busy = false; pending = null;
+  markers = new Map(); me = null; line = null; routeLine = null; destMk = null; busy = false; pending = null;
   map = L.map(el, { zoomControl: false, attributionControl: true, minZoom: 14, maxZoom: 19, zoomSnap: 0.25 });
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
@@ -129,7 +130,7 @@ function apply(opts) {
 
   // straight dotted line from the current position to the next destination
   const from = opts.pos?.lat != null ? opts.pos : null;
-  if (from && nextPos) {
+  if (from && nextPos && !opts.nav) {
     const ll = [[from.lat, from.lon], [nextPos.lat, nextPos.lon]];
     if (line) line.setLatLngs(ll);
     else line = L.polyline(ll, { color: '#c8372d', weight: 3, dashArray: '6 8', opacity: 0.9, interactive: false }).addTo(map);
@@ -158,4 +159,22 @@ export function fitTo(points) {
   if (pts.length === 1) return map.setView(pts[0], Math.max(map.getZoom(), 17));
   map.fitBounds(pts, { paddingTopLeft: [40, 70], paddingBottomRight: [60, 110], maxZoom: 18 });
 }
+// Walking route for in-app guidance: solid blue along paths, dotted when it is only a straight line.
+export function setRoute(r) {
+  if (!map || !L) return;
+  if (!r?.coords?.length) {
+    if (routeLine) { routeLine.remove(); routeLine = null; }
+    if (destMk) { destMk.remove(); destMk = null; }
+    return;
+  }
+  const style = r.straight ? { color: '#2b7bf3', weight: 4, dashArray: '2 9', opacity: 0.95 } : { color: '#2b7bf3', weight: 6, opacity: 0.85, dashArray: null };
+  if (routeLine) { routeLine.setLatLngs(r.coords); routeLine.setStyle(style); }
+  else routeLine = L.polyline(r.coords, { ...style, interactive: false, className: 'navline', lineCap: 'round', lineJoin: 'round' }).addTo(map);
+  const d = r.dest;
+  if (valid(d)) {
+    if (destMk) destMk.setLatLng([d.lat, d.lon]);
+    else destMk = L.marker([d.lat, d.lon], { icon: L.divIcon({ className: '', html: `<div class="mk mk--dest">${r.icon || ''}</div>`, iconSize: [34, 34], iconAnchor: [17, 17] }), zIndexOffset: 1500, keyboard: false }).addTo(map);
+  }
+}
+export function follow(g) { if (map && valid(g)) map.panTo([g.lat, g.lon], { animate: true }); }
 export function fit() { if (map) map.fitBounds(PARK_BOUNDS, FIT_PAD); }
