@@ -1,5 +1,6 @@
 // Lazy-loaded Leaflet map (self-hosted Leaflet, OpenStreetMap tiles).
 let L = null, map = null, layer = null, meLayer = null, lineLayer = null, lastFitted = false, coordsSrc = 'approx';
+let lastMarkerKey = null, cachedNextPos = null;
 const PARK_BOUNDS = [[33.8095, -117.9248], [33.8168, -117.9160]];
 
 function loadLeaflet() {
@@ -29,7 +30,9 @@ export async function draw(opts) {
   L = await loadLeaflet();
   coordsSrc = opts.coordsSrc;
   const el = document.getElementById('map');
-  if (!map || map.getContainer() !== el) {
+  const newMap = !map || map.getContainer() !== el;
+  if (newMap) {
+    lastMarkerKey = null; cachedNextPos = null;
     map = L.map(el, { zoomControl: false, attributionControl: true, minZoom: 14, maxZoom: 19, zoomSnap: 0.25 });
     map.setView([33.8125, -117.9200], 16);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -39,16 +42,24 @@ export async function draw(opts) {
     lastFitted = false;
   }
   window.__map = map;
-  map.invalidateSize();
-  if (!lastFitted) { map.fitBounds(PARK_BOUNDS); lastFitted = true; }
-  if (!draw.fittedOnce) {
-    draw.fittedOnce = true;
-    setTimeout(() => { map.invalidateSize(); map.fitBounds(PARK_BOUNDS, { paddingTopLeft: [0, 50], paddingBottomRight: [0, 70] }); }, 150);
-  } else setTimeout(() => map.invalidateSize(), 100);
-  if (layer) layer.remove();
-  layer = L.layerGroup().addTo(map);
-  const f = opts.filter;
-  let nextPos = null;
+  if (newMap) {
+    map.invalidateSize();
+    if (!lastFitted) { map.fitBounds(PARK_BOUNDS); lastFitted = true; }
+    setTimeout(() => { if (map.getContainer() === el) { map.invalidateSize(); map.fitBounds(PARK_BOUNDS, { paddingTopLeft: [0, 50], paddingBottomRight: [0, 70] }); } }, 150);
+  }
+  // Rebuild ride markers only if the displayed data changed, not when GPS jitters.
+  const markerKey = JSON.stringify([
+    opts.filter, opts.nextId, opts.coordsSrc,
+    opts.rides.map(({ a, pos, w, done }) => [a.id, pos?.lat, pos?.lon, w.wait, w.kind, done]),
+    opts.food.map(({ r, pos }) => [r.id, pos?.lat, pos?.lon]),
+    opts.shows.map(({ s, pos }) => [s.id, pos?.lat, pos?.lon]),
+  ]);
+  let nextPos = cachedNextPos;
+  if (newMap || markerKey !== lastMarkerKey) {
+    if (layer) layer.remove();
+    layer = L.layerGroup().addTo(map);
+    const f = opts.filter;
+    nextPos = null;
   if (f === 'all' || f === 'rides') {
     for (const { a, pos, w, done } of opts.rides) {
       if (!pos) continue;
@@ -73,6 +84,9 @@ export async function draw(opts) {
       const icon = L.divIcon({ className: '', html: `<div class="mk mk--show">${opts.icons?.show || ''}</div>`, iconSize: [24, 24], iconAnchor: [12, 12] });
       L.marker([pos.lat, pos.lon], { icon, title: s.short }).addTo(layer).bindPopup(`<b>${esc(s.ja)}</b><br>${esc(s.venue)}<br><button class="linkbtn" data-open-show="${s.id}">くわしく</button>`);
     }
+  }
+    cachedNextPos = nextPos;
+    lastMarkerKey = markerKey;
   }
   // me + straight line to next
   if (meLayer) meLayer.remove();
