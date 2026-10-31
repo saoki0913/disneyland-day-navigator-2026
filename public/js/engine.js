@@ -131,7 +131,7 @@ export function buildAnchors(planId, prefs = {}, done = {}) {
     const r = restaurantById[ov.restaurant || m.restaurant];
     out.push({
       id: 'meal:' + m.id, kind: 'meal', title: m.ja, place: r?.ja, restaurant: r?.id,
-      start: ov.at ?? m.at, end: (ov.at ?? m.at) + m.dur, claim: 0,
+      start: ov.at ?? m.at, end: (ov.at ?? m.at) + (ov.dur ?? m.dur), claim: 0,
       pos: r?.pos, emoji: r?.emoji || '🍽️', done: !!done['meal:' + m.id], flex: m.id === 'snack',
     });
   }
