@@ -1,9 +1,6 @@
 name: Verify deployed Disneyland Navi
 on:
-  push:
-    branches: ['claude/vibrant-dijkstra-lbpi65']
-    paths:
-      - '.github/workflows/verify-deployed.yml'
+  workflow_dispatch:
 jobs:
   verify-preview:
     runs-on: ubuntu-latest
@@ -28,7 +25,7 @@ jobs:
             assert.equal(r.status,200,path);
             return r;
           };
-          for(const path of ["/","/css/app.css","/js/app.js","/js/data.js","/vendor/leaflet/leaflet.js","/fonts/fredoka-latin-500-normal.woff2","/icon-180.png"]){
+          for(const path of ["/","/css/app.css","/js/app.js","/js/data.js","/vendor/leaflet/leaflet.js","/fonts/oswald-latin-500-normal.woff2","/icon-180.png"]){
             const r=await check(path);
             const a=await r.arrayBuffer();
             assert.ok(a.byteLength>100, path+" "+a.byteLength);
@@ -62,7 +59,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: deployed-preview-iphone-screenshots
+          name: deployed-production-iphone-screenshots
           path: screenshots/
           if-no-files-found: ignore
           retention-days: 1
