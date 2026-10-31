@@ -1,0 +1,34 @@
+name: Verify Disneyland Navi
+on:
+  push:
+    branches: ['claude/vibrant-dijkstra-lbpi65']
+  workflow_dispatch:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - name: 60 unit tests
+        run: npm test
+      - name: Install browser for 29 E2E checks
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+      - name: Start local Pages and run iPhone-sized E2E
+        run: |
+          npx wrangler pages dev public --port 8788 > /tmp/pages-dev.log 2>&1 &
+          for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8788/ > /dev/null && break; sleep 2; done
+          node tests/e2e.mjs http://127.0.0.1:8788
+      - name: Upload browser screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: navigator-e2e-screenshots
+          path: screenshots/
+          if-no-files-found: ignore
