@@ -70,3 +70,35 @@ test('Commons picker: rejects other parks, logos, small, non-matching; prefers D
 test('photo sets stay under the 50-subrequest free-plan limit (incl. Wikipedia fallbacks)', () => {
   for (const [set, q] of Object.entries(PHOTO_QUERIES)) assert.ok(Object.keys(q).length * 2 <= 50, set);
 });
+
+// ---------- shared plan (two phones) ----------
+import { mergeDocs, newCode, CODE_RE } from '../public/js/share.js';
+import { handleShareGet, handleSharePost } from '../lib/share-server.js';
+test('share: merge is a union of done records, undo wins only when newer, settings last-writer-wins', () => {
+  const a = { done: { space: 100, rise: 200 }, doneMin: { space: 600, rise: 640 }, doneDel: {}, f: { plan: { at: 10, v: 'relax' }, order: { at: 50, v: ['indy'] } } };
+  const b = { done: { haunted: 150 }, doneMin: { haunted: 620 }, doneDel: { rise: 300 }, f: { plan: { at: 20, v: 'rides' } } };
+  const m = mergeDocs(a, b);
+  assert.deepEqual(Object.keys(m.done).sort(), ['haunted', 'space']);
+  assert.equal(m.f.plan.v, 'rides');
+  assert.deepEqual(m.f.order.v, ['indy']);
+  assert.deepEqual(mergeDocs(a, b), mergeDocs(b, a), 'commutative');
+  assert.deepEqual(mergeDocs(m, m), m, 'idempotent');
+  const redo = mergeDocs(m, { done: { rise: 400 }, doneMin: { rise: 700 } });
+  assert.equal(redo.done.rise, 400, 'done again after undo');
+  assert.ok(CODE_RE.test(newCode()));
+});
+test('share API: two phones converge through the KV room', async () => {
+  const store = new Map();
+  const env = { SHARE: { get: async (k) => (store.has(k) ? JSON.parse(store.get(k)) : null), put: async (k, v) => { store.set(k, v); } } };
+  const ctx = (method, body) => ({ params: { code: 'abcd2345' }, env, request: new Request('https://x/api/share/abcd2345', { method, body: body ? JSON.stringify(body) : undefined }) });
+  let r = await (await handleShareGet(ctx('GET'))).json();
+  assert.equal(r.exists, false);
+  await handleSharePost(ctx('POST', { doc: { done: { space: 1 }, doneMin: { space: 600 }, f: { plan: { at: 5, v: 'rides' } } } }));
+  r = await (await handleSharePost(ctx('POST', { doc: { done: { indy: 2 }, doneMin: { indy: 630 } } }))).json();
+  assert.deepEqual(Object.keys(r.doc.done).sort(), ['indy', 'space']);
+  assert.equal(r.doc.f.plan.v, 'rides');
+  const bad = await handleShareGet({ ...ctx('GET'), params: { code: '../x' } });
+  assert.equal(bad.status, 400);
+  const off = await handleShareGet({ ...ctx('GET'), env: {} });
+  assert.equal(off.status, 503);
+});

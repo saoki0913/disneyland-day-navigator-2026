@@ -86,7 +86,9 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
       assert.ok(await page.locator(`[data-b-set="plan"][data-v="${id}"].is-active`).count() === 1);
       await page.click('[data-act="plan-apply"]'); await page.waitForTimeout(200);
       const tl = await page.textContent('ol.tl:not(.tl--done)');
-      assert.match(tl, /レジスタンスの台頭/, `${id} rise`);
+      // rise is DOWN in the fixture → not in the timeline but listed as 再開待ち
+      assert.doesNotMatch(tl, /レジスタンスの台頭/, `${id} rise not planned while down`);
+      assert.match(await page.textContent('.waitlist'), /レジスタンスの台頭/, `${id} rise waiting`);
       assert.match(tl, /ミレニアム・ファルコン/, `${id} falcon`);
       await page.screenshot({ path: `${SHOTS}/03-plan-${id}.png`, fullPage: true });
     }
@@ -216,7 +218,8 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.match(await page.textContent('#toast'), /作り直しました/);
     const tl = await page.textContent('ol.tl:not(.tl--done)');
     const st = await page.evaluate(() => window.__dlnavi.S.done);
-    for (const id of ['rise', 'falcon']) if (!st[id]) assert.match(tl, id === 'rise' ? /レジスタンス/ : /ファルコン/);
+    if (!st.falcon) assert.match(tl, /ファルコン/);
+    if (!st.rise) assert.match(await page.textContent('.waitlist'), /レジスタンス/);
   });
   await step('"別の候補" skips the current suggestion and shows feedback', async () => {
     await tab(page, 'home');
@@ -251,6 +254,29 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.click('[data-xtab="halloween"]'); await page.waitForTimeout(150);
     assert.match(await page.textContent('#view-explore'), /ヴァンパイア・ミッキー/);
     await page.screenshot({ path: `${SHOTS}/07-halloween.png`, fullPage: true });
+  });
+  await step('Food search: keyword → matching shops nearest first, menu hits highlighted, map', async () => {
+    await page.click('[data-xtab="food"]'); await page.waitForTimeout(150);
+    await page.fill('#foodQ', 'チキン'); await page.waitForTimeout(150);
+    const names = await page.$$eval('#foodList [data-open-food]', (els) => els.map((e) => e.dataset.openFood));
+    assert.ok(names.includes('plazainn'), names.join(','));
+    assert.ok(await page.locator('#foodList .fhit mark').count() >= 1, 'menu hit highlighted');
+    assert.match(await page.textContent('.fbar'), /「チキン」\d+件/);
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'foodQ', 'typing keeps focus');
+    await page.click('[data-fq="アイス"]'); await page.waitForTimeout(150);
+    assert.ok(await page.locator('#foodList [data-open-food]').count() >= 1, 'synonym search (アイス → サンデー/ドールホイップ)');
+    await page.screenshot({ path: `${SHOTS}/06-food-search.png` });
+    await page.fill('#foodQ', 'ぜったいない料理'); await page.waitForTimeout(150);
+    assert.match(await page.textContent('#foodList'), /見つかりませんでした/);
+    await page.fill('#foodQ', 'チキン'); await page.waitForTimeout(150);
+    await page.click('[data-act="food-map"]'); await page.waitForTimeout(1500);
+    assert.match(await page.textContent('#mapFoodChip'), /「チキン」の店/);
+    assert.equal(await page.locator('.mk--food').count(), names.length, 'only matching shops on the map');
+    await page.click('#mapFoodChip'); await page.waitForTimeout(300);
+    await page.click('[data-mf="rides"]'); await page.waitForTimeout(200);
+    await tab(page, 'explore');
+    await page.fill('#foodQ', ''); await page.waitForTimeout(100);
+    await page.click('[data-xtab="rides"]'); await page.waitForTimeout(150);
   });
   await step('Detail sheet opens with description, Japan diff, manual wait input', async () => {
     await page.click('[data-xtab="rides"]'); await page.waitForTimeout(150);
@@ -409,6 +435,47 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
   });
   await step('No JS errors in manual-time builder', async () => assert.deepEqual(errors, []));
   await ctx.close();
+}
+
+// ---------- B3: two phones share one plan ----------
+{
+  const A = await newCtx();
+  const B = await newCtx();
+  await step('Two phones: link join, 乗った and undo sync both ways, settings follow the newest change', async () => {
+    await A.page.click('#settingsBtn'); await A.page.waitForTimeout(150);
+    await A.page.click('[data-act="share-open"]'); await A.page.waitForTimeout(150);
+    await A.page.click('[data-act="share-start"]'); await A.page.waitForTimeout(800);
+    const code = await A.page.textContent('.sharecode b');
+    assert.match(code, /^[a-z2-9]{8}$/);
+    await A.page.screenshot({ path: `${SHOTS}/19-share.png` });
+    await A.page.click('.sheet__close');
+    await B.page.goto(base + '/#share=' + code); await B.page.waitForSelector('[data-share-join]');
+    await B.page.click('[data-share-join]'); await B.page.waitForTimeout(800);
+    assert.equal(await B.page.evaluate(() => window.__dlnavi.S.share.code), code);
+    assert.match(await B.page.textContent('.planhead'), /共有中/);
+    // A rides something → B sees it
+    await A.page.click('.tab[data-tab="home"]'); await A.page.waitForTimeout(150);
+    const rid = await A.page.getAttribute('#actionbar [data-done]', 'data-done');
+    await A.page.click('#actionbar [data-done]'); await A.page.waitForTimeout(1200);
+    await B.page.evaluate(() => window.__dlnavi.pullShare()); await B.page.waitForTimeout(300);
+    assert.ok(await B.page.evaluate((id) => !!window.__dlnavi.S.done[id], rid), 'B got A\'s 乗った');
+    assert.match(await B.page.textContent('#toast'), /相手の端末/);
+    assert.equal(await B.page.locator(`.tl--done [data-done="${rid}"]`).count(), 1);
+    // B changes the pace → A follows
+    await B.page.click('[data-act="plan-edit"]'); await B.page.waitForTimeout(150);
+    await B.page.click('[data-b-set="plan"][data-v="rides"]'); await B.page.click('[data-act="plan-apply"]'); await B.page.waitForTimeout(1200);
+    await A.page.evaluate(() => window.__dlnavi.pullShare()); await A.page.waitForTimeout(300);
+    assert.equal(await A.page.evaluate(() => window.__dlnavi.S.plan), 'rides');
+    // A undoes → B drops it
+    await A.page.click('.tab[data-tab="plan"]'); await A.page.waitForTimeout(150);
+    await A.page.click(`.tl--done [data-done="${rid}"]`); await A.page.waitForTimeout(150);
+    await A.page.click(`[data-undo="${rid}"]`); await A.page.waitForTimeout(1200);
+    await B.page.evaluate(() => window.__dlnavi.pullShare()); await B.page.waitForTimeout(300);
+    assert.ok(await B.page.evaluate((id) => !window.__dlnavi.S.done[id], rid), 'undo synced');
+    await B.page.screenshot({ path: `${SHOTS}/19-share-partner.png`, fullPage: true });
+    assert.deepEqual([...A.errors, ...B.errors], []);
+  });
+  await A.ctx.close(); await B.ctx.close();
 }
 
 // ---------- C: GPS allowed ----------

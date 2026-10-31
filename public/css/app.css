@@ -493,3 +493,26 @@ body.is-dragging { -webkit-user-select: none; user-select: none; cursor: grabbin
 .tl__now small { font-size: 11.5px; font-weight: 700; color: var(--muted); }
 .tl__now .ico { vertical-align: -2px; margin: 0 1px; }
 .tl__item--now.is-fresh .tl__now { flex-direction: row; align-items: center; gap: 5px; color: var(--good); background: var(--good-l); border-radius: 6px; padding: 6px 8px; line-height: 1.4; }
+
+/* ---------- two-person sharing ---------- */
+.sharechip { color: var(--good); border-color: var(--good); }
+.sharechip.is-err { color: var(--red); border-color: var(--red); }
+.sharecard { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
+.sharecard__t { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.sharecard__t > .ico { font-size: 22px; color: var(--navy); }
+.sharecard__t small { display: block; font-size: 12px; color: var(--muted); font-weight: 600; line-height: 1.4; }
+.sharecode { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px; border: var(--bw) dashed var(--navy); border-radius: var(--r); background: var(--card-2); }
+.sharecode span { font-size: 12px; color: var(--muted); font-weight: 700; }
+.sharecode b { font-size: 30px; letter-spacing: .14em; }
+.waitlist .row { min-height: 52px; }
+
+/* ---------- food search ---------- */
+.fsearch { display: flex; align-items: center; gap: 6px; padding: 0 10px; height: 44px; border: var(--bw) solid var(--navy); border-radius: 22px; background: var(--card); }
+.fsearch .ico { font-size: 18px; color: var(--muted); }
+.fsearch input { flex: 1; min-width: 0; border: 0; background: transparent; font: inherit; font-size: 16px; outline: none; color: var(--ink); }
+.fsearch button { color: var(--muted); font-size: 18px; display: grid; place-items: center; width: 28px; height: 28px; }
+.fhits { display: flex; flex-direction: column; gap: 2px; margin-top: 3px; }
+.fhit { display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; color: var(--ink); font-weight: 700; }
+.fhit span:last-child { color: var(--muted); font-weight: 600; white-space: nowrap; }
+.fhit mark { background: var(--mustard-l); color: inherit; border-radius: 3px; padding: 0 1px; }
+.fbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12.5px; color: var(--muted); font-weight: 700; }

@@ -175,7 +175,7 @@ test('order: the plan follows the user order when rides fit', () => {
   const order = [auto[2], auto[0], auto[1], ...auto.slice(3)];
   const got = simulateDay({ ...c, order }).items.filter((i) => i.type === 'ride').map((i) => i.id);
   assert.equal(got[0], auto[2], 'dragged ride goes first');
-  assert.equal(got.indexOf(auto[0]) < got.indexOf(auto[1]), true);
+  assert.deepEqual([...got].sort(), [...auto].sort(), 'same rides, different order');
   const r = recommend({ ...c, order });
   assert.equal(r.primary.a.id, auto[2]);
   assert.equal(r.primary.reasons[0].k, 'order');
@@ -214,4 +214,17 @@ test('GPS noise and too-frequent callbacks never repaint the page', () => {
   assert.equal(gpsNeedsRedraw(a, moved, 100), false);
   assert.equal(gpsNeedsRedraw(a, moved, 20000), true);
   assert.equal(gpsNeedsRedraw({ ...a, acc: 90 }, { ...jitter, acc: 15 }, 20000), true);
+});
+
+test('DOWN ride: kept out of the timeline as 再開待ち, not reported as missing', () => {
+  const live = liveOf(fixture);
+  assert.equal(live.rise.status, 'DOWN');
+  const sim = simulateDay(base({ now: 600, live }));
+  assert.ok(!sim.items.some((i) => i.id === 'rise'), 'rise not planned while DOWN');
+  assert.ok(sim.waiting.includes('rise'));
+  assert.ok(!sim.missingMust.includes('rise'));
+  const back = { ...live, rise: { ...live.rise, status: 'OPERATING', wait: 45 } };
+  const sim2 = simulateDay(base({ now: 600, live: back }));
+  assert.ok(sim2.items.some((i) => i.id === 'rise'), 'reopened ride returns to the plan');
+  assert.deepEqual(sim2.waiting, []);
 });

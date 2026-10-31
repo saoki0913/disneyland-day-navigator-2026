@@ -434,16 +434,22 @@ export function simulateDay(ctx) {
     items.push({ type: a.kind, id: a.id, anchor: a, start: a.start, end: a.end });
   }
   items.sort((x, y) => x.start - y.start);
-  const missingMust = Object.keys(mustOf(ctx)).filter((id) => !done[id] && !ctx.excluded?.[id]);
-  return { items, missingMust, rides: items.filter((i) => i.type === 'ride').length };
+  // Rides that are temporarily DOWN right now: kept out of the timeline, listed separately.
+  const waiting = ctx.now >= ctx.openMin
+    ? ATTRACTIONS.filter((a) => ctx.live?.[a.id]?.status === 'DOWN' && !done[a.id] && !ctx.excluded?.[a.id]).map((a) => a.id)
+    : [];
+  const missingMust = Object.keys(mustOf(ctx)).filter((id) => !done[id] && !ctx.excluded?.[id] && !waiting.includes(id));
+  return { items, missingMust, waiting, rides: items.filter((i) => i.type === 'ride').length };
 }
 
-// For future times, a ride that is DOWN now is assumed to reopen (temporary).
-// Long-term closures (REFURBISHMENT, or CLOSED during operating hours) stay closed.
+// For future times we don't know WHEN a DOWN ride reopens, so it stays out of the plan
+// ("再開待ち") until live data says it is operating again — then it comes back automatically.
+// Long-term closures (REFURBISHMENT, or CLOSED during operating hours) stay closed too.
 function stripDown(live, ctx) {
   if (!live) return live;
   const out = {};
   for (const [k, v] of Object.entries(live)) {
+    if (v.status === 'DOWN' && ctx.now >= ctx.openMin) { out[k] = { ...v, wait: null }; continue; }
     if (v.status === 'DOWN') continue;
     if (v.status === 'CLOSED' && ctx.now < ctx.openMin) continue;
     out[k] = { ...v, wait: null };

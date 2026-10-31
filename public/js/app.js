@@ -4,6 +4,7 @@ import {
 import {
   recommend, simulateDay, buildAnchors, anchorConflicts, crowdRatio, rideRatios, walkMin, distanceM, hhmm, parseHHMM, estimateWait, availability, DEFAULT_MUST, gpsNeedsRedraw, movingPlanMin,
 } from './engine.js';
+import { SHARE_FIELDS, mergeDocs, sameDoc, newCode, CODE_RE } from './share.js';
 
 // =====================================================================
 // State (persisted in localStorage — never sent anywhere)
@@ -13,6 +14,9 @@ const defaults = {
   plan: 'balance',
   done: {},            // { rideId | 'meal:lunch' | 'show:fantasmic': timestampMs }
   doneMin: {},         // { id: park-local minutes when completed } (for the timeline)
+  doneDel: {},         // { id: ms } "未完了に戻す" — kept so a shared partner's phone also drops it
+  fieldAt: {},         // { field: ms } last local change of each shared setting (two-phone sync)
+  share: null,         // { code } two-person shared plan (null = this phone only)
   excluded: {},        // rides the user removed for today
   skip: {},            // { rideId: untilMin } — "別の候補" (temporary)
   manual: {},          // { rideId: { wait, at } } — user-entered wait from the official app
@@ -28,7 +32,7 @@ const defaults = {
   pin: null,           // { id, until } destination chosen from an alert
   order: null,         // [rideId, ...] ride order chosen by drag & drop on the plan (null → recommended order)
   a2hsDismissed: false,
-  exploreTab: 'rides', exploreFilter: 'all', exploreSort: 'reco', foodFilter: 'all',
+  exploreTab: 'rides', exploreFilter: 'all', exploreSort: 'reco', foodFilter: 'all', foodQ: '',
   mapFilter: 'rides',
   tab: 'home',
 };
@@ -44,7 +48,22 @@ function deepMerge(a, b) {
   }
   return a;
 }
-function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch { /* storage full / private mode */ } }
+// save(): persist, and remember WHEN each shared setting last changed on this phone so that
+// two phones sharing a plan can merge (newest change wins per setting).
+let snap = null;
+const snapOf = () => Object.fromEntries([...SHARE_FIELDS, 'done', 'doneDel'].map((k) => [k, JSON.stringify(S[k] ?? null)]));
+function save() {
+  const cur = snapOf();
+  let changed = false;
+  if (snap) {
+    for (const k of SHARE_FIELDS) if (cur[k] !== snap[k]) { S.fieldAt[k] = Date.now(); changed = true; }
+    if (cur.done !== snap.done || cur.doneDel !== snap.doneDel) changed = true;
+  }
+  snap = cur;
+  try { localStorage.setItem(KEY, JSON.stringify(S)); } catch { /* storage full / private mode */ }
+  if (changed && S.share) schedulePush();
+}
+snap = snapOf();
 
 // Runtime (not persisted except caches)
 const R = {
@@ -52,6 +71,7 @@ const R = {
   meta: null, photos: {},
   gpsPos: null, gpsErr: null, gpsBusy: false,
   dragging: false, pendingRender: false, flash: null, replanned: null,
+  shareAt: 0, shareErr: null, shareBusy: false, sharePushTimer: 0,
   gpsRendered: null, gpsRenderedAt: 0,
   lastPlanIds: null,
   hist: {},            // { rideId: [[min, wait|null], ...] } today's observed waits (this device)
@@ -355,6 +375,8 @@ const IC = {
   sliders: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
   ride: '<path d="M3 19c2.5-8 5.5-13 9-13s6.5 5 9 13M3 19h18"/>',
   grip: '<path d="M5 8h14M5 12h14M5 16h14"/>',
+  users: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2.5"/><path d="M15.5 14.2c3 .2 5.5 2.7 5.5 5.8"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
 };
 const ic = (k) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${IC[k] || ''}</svg>`;
 
@@ -444,9 +466,10 @@ function markDone(id) {
 function undoDone(id, silent = false) {
   const prev = { at: S.done[id], min: S.doneMin[id] };
   delete S.done[id]; delete S.doneMin[id];
+  S.doneDel[id] = Date.now();
   if (S.lastDone?.id === id) S.lastDone = null;
   save(); renderAll();
-  if (!silent) toast(`${doneName(id)} を未完了に戻しました`, '', { label: '完了に戻す', fn: () => { S.done[id] = prev.at; S.doneMin[id] = prev.min; save(); renderAll(); } });
+  if (!silent) toast(`${doneName(id)} を未完了に戻しました`, '', { label: '完了に戻す', fn: () => { S.done[id] = Date.now(); S.doneMin[id] = prev.min; save(); renderAll(); } });
 }
 function openUndoConfirm(id) {
   const m = S.doneMin[id];
@@ -823,6 +846,7 @@ function renderPlan() {
   let html = `<div class="planhead"><div class="planhead__t"><b class="num">${clock(startAt)}→${clock(h.close)}</b>
       <span>乗り物 <b class="num">${done.length + sim.rides}</b></span><span>絶対 <b class="num">${mustIds.length - sim.missingMust.length}/${mustIds.length}</b></span>
       <span class="planhead__src">${esc(liveIsFresh() ? 'LIVE' : '推定')}</span></div>
+    ${S.share ? `<button class="btn btn--sm sharechip ${R.shareErr ? 'is-err' : ''}" data-act="share-open" aria-label="2人で共有中">${ic('users')}共有中</button>` : ''}
     <button class="btn btn--sm" data-act="plan-edit">${ic('sliders')}条件</button></div>`;
   if (sim.missingMust.length) html += `<div class="note note--bad">${ic('alert')}<div><div class="note__t">${sim.missingMust.map((id) => esc(attractionById[id].short)).join('・')} が入りきらない</div><div class="note__s">休止中なら再開後に最優先で案内</div></div></div>`;
   if (conflicts.length) html += `<div class="note note--bad">${ic('alert')}<div><div class="note__t">ごはんとショーの時間が重なっています</div></div></div>`;
@@ -854,6 +878,17 @@ function renderPlan() {
   }
   html += `</ol>`;
 
+  // Rides that are temporarily down: out of the timeline until they reopen (then they come back automatically).
+  if (sim.waiting?.length) {
+    const must = mustMap();
+    html += `<div class="sec"><h2><span class="sec__en">PAUSED</span>再開待ち</h2><span class="sec__sub">再開したら自動でプランに戻ります</span></div>
+      <div class="card rows waitlist">${sim.waiting.map((id) => {
+        const a = attractionById[id];
+        return `<button class="row" type="button" data-open="${id}"><span class="row__body"><span class="row__name">${jw(a.short)}${must[id] ? '<span class="tag tag--must">絶対</span>' : ''}</span>
+          <span class="row__meta"><span class="tag tag--bad">一時休止</span>${must[id] ? '<span>再開したら最優先で案内</span>' : '<span>再開を待っています</span>'}</span></span><span class="row__chev">${ic('chev')}</span></button>`;
+      }).join('')}</div>`;
+  }
+
   // 2) Below the plan: re-plan options and the conditions summary.
   html += `<div class="sec"><h2><span class="sec__en">REPLAN</span>作り直す</h2></div>
     <div class="card replan">
@@ -873,7 +908,10 @@ function renderPlan() {
     </div>
     <div class="card condsum">
     <dl class="kv condsum__kv">${condSummary(D).map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
-    <button class="btn btn--navy btn--block" data-act="plan-edit">${ic('sliders')}条件を変えてプランを作る</button></div>`;
+    <button class="btn btn--navy btn--block" data-act="plan-edit">${ic('sliders')}条件を変えてプランを作る</button></div>
+    <div class="card sharecard"><div class="sharecard__t">${ic('users')}<div><b>${S.share ? '2人で共有中' : '2人で同じプランを使う'}</b>
+      <small>${S.share ? esc(shareStatus()) : '片方が「乗った」や順番を変えると、もう1台も自動で更新'}</small></div></div>
+      <button class="btn btn--sm ${S.share ? '' : 'btn--navy'}" data-act="share-open">${S.share ? '管理' : '始める'}</button></div>`;
 
   const doneIds = Object.keys(S.done).sort((a, b) => (S.doneMin[a] ?? 0) - (S.doneMin[b] ?? 0) || S.done[a] - S.done[b]);
   if (doneIds.length) {
@@ -1126,20 +1164,12 @@ function renderExplore() {
     return;
   }
   if (tab === 'food') {
+    const q = S.foodQ || '';
+    html += `<label class="fsearch">${ic('search')}<input id="foodQ" type="search" enterkeyhint="search" autocomplete="off" placeholder="食べたいもの（例：チキン、アイス、コーヒー）" value="${esc(q)}" aria-label="食べたいもので探す">${q ? `<button type="button" data-fq="" aria-label="消す">${ic('x')}</button>` : ''}</label>`;
+    html += `<div class="chips">${FOOD_SUGGEST.map((w) => `<button class="chip ${q === w ? 'is-active' : ''}" data-fq="${w}">${w}</button>`).join('')}</div>`;
     const filters = [['all', 'すべて'], ['meal', '食事'], ['sweets', 'スイーツ'], ['snack', '軽食'], ['mobile', 'モバイルオーダー'], ['halloween', '限定あり']];
     html += `<div class="chips">${filters.map(([k, n]) => `<button class="chip ${S.foodFilter === k ? 'is-active' : ''}" data-ff="${k}">${n}</button>`).join('')}</div>`;
-    let list = RESTAURANTS.map((r) => ({ r, walk: walkMin(c.pos, coordsOf(r.id)), d: c.pos ? distanceM(c.pos, coordsOf(r.id)) : 0 }));
-    const f = S.foodFilter;
-    list = list.filter(({ r }) => f === 'all' || (f === 'meal' && (r.kind === 'meal' || r.kind === 'cafe')) || (f === 'sweets' && (r.kind === 'sweets' || r.kind === 'cafe')) || (f === 'snack' && r.kind === 'snack') || (f === 'mobile' && r.mobile === 'yes') || (f === 'halloween' && r.halloween.length));
-    list.sort((x, y) => (x.d ?? 0) - (y.d ?? 0));
-    html += `<div class="card rows">${list.map(({ r, walk }) => `
-      <button class="row" data-open-food="${r.id}" type="button">
-        <span class="row__thumb">${foodImg(r)}</span>
-        <span class="row__body"><span class="row__name">${jw(r.ja)}</span>
-          <span class="row__meta"><span>${esc(r.menu[0]?.name || '')}</span></span>
-          <span class="row__meta"><span>${ic('walk')}${walk}分</span>${r.mobile === 'yes' ? '<span class="tag tag--live">モバイルオーダー</span>' : ''}${r.halloween.length ? '<span class="tag tag--warn">限定</span>' : ''}</span></span>
-        <span class="row__chev">${ic('chev')}</span></button>`).join('')}</div>
-      <p class="footer">料金・限定メニューは事前調査の情報です</p>`;
+    html += `<div id="foodList">${foodListHtml(c)}</div>`;
     el.innerHTML = html;
     return;
   }
@@ -1186,6 +1216,78 @@ function renderExplore() {
     <button class="row" data-open-food="${r.id}"><span class="row__body"><span class="row__name">${esc(h.name)}</span><span class="row__meta">${esc(r.ja)}</span></span><span class="row__chev">${ic('chev')}</span></button>`).join('');
   html += `</div><p class="footer">出典：Disney Parks Blog ほか各種報道（2026年8〜10月）</p>`;
   el.innerHTML = html;
+}
+
+// ---------- food search: "what do I want to eat" → shops nearest to me first ----------
+const FOOD_SUGGEST = ['チキン', 'アイス', '甘いもの', 'コーヒー', 'スープ', 'ミッキー型', 'ポップコーン', 'お酒', '軽食'];
+const FOOD_SYN = {
+  アイス: ['アイス', 'サンデー', 'ソフト', 'ホイップ', 'sundae', 'whip', 'icecream'],
+  ソフトクリーム: ['ソフト', 'ホイップ', 'whip'],
+  甘いもの: ['kind:sweets', 'ケーキ', 'カップケーキ', 'マカロン', 'ベニエ', 'サンデー', 'チョコ', 'パイ'], スイーツ: ['kind:sweets', 'ケーキ', 'ベニエ', 'サンデー'], デザート: ['kind:sweets', 'ケーキ', 'サンデー'],
+  コーヒー: ['kind:cafe', 'coffee', 'カフェ', 'ラテ'], カフェ: ['kind:cafe', 'カフェ'],
+  ドリンク: ['ドリンク', 'drink', 'カクテル', 'マティーニ', 'kind:cafe'], お酒: ['アルコール', 'マティーニ', 'カクテル', 'ビール', 'beer', 'martini'],
+  パン: ['ベーカリー', 'bakery', 'トースト', 'ブレッド', 'ビスケット', 'サンド'],
+  ミッキー型: ['ミッキー', 'mickey'], ミッキー: ['ミッキー', 'mickey'],
+  チキン: ['チキン', 'chicken'], 肉: ['チキン', 'ビーフ', 'ポーク', '串', 'bbq', 'バーベキュー', 'ラップ', 'バーガー', 'burger'],
+  ごはん: ['kind:meal'], ご飯: ['kind:meal'], 食事: ['kind:meal'], がっつり: ['kind:meal'],
+  軽食: ['kind:snack', 'コーンドッグ', 'ラップ', '串'], スナック: ['kind:snack'],
+  スープ: ['スープ', 'チャウダー', 'ガンボ', 'soup', 'chowder', 'gumbo'],
+  ハロウィン: ['halloween'], 限定: ['halloween'], ベジ: ['ベジ', 'veg', 'グリーン'],
+};
+const fnorm = (t) => String(t || '').toLowerCase().normalize('NFKC').replace(/[ぁ-ゖ]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) + 0x60)).replace(/[\s・･\-ー’'.&]/g, '');
+const KIND_TAG = { meal: 'kind:meal', cafe: 'kind:cafe kind:meal', sweets: 'kind:sweets', snack: 'kind:snack' };
+const foodIndex = new Map(RESTAURANTS.map((r) => [r.id, {
+  all: fnorm([r.ja, r.en, r.style, r.desc, ...r.menu.flatMap((m) => [m.name, m.en]), ...r.halloween.flatMap((h) => [h.name, h.en])].join(' ')) + ' ' + (KIND_TAG[r.kind] || '') + (r.halloween.length ? ' halloween' : ''),
+  items: [...r.menu.map((m) => ({ ...m, h: false })), ...r.halloween.map((h) => ({ name: h.name, en: h.en, price: '限定', h: true }))].map((m) => ({ ...m, key: fnorm(m.name + ' ' + m.en) })),
+}]));
+function foodTerms(q) {
+  return String(q || '').split(/[\s　、,]+/).filter(Boolean).map((t) => {
+    const syn = FOOD_SYN[t] || FOOD_SYN[t.replace(/[がをのも]$/, '')] || [];
+    return [...new Set([fnorm(t), ...syn.map((x) => (x.startsWith('kind:') ? x : fnorm(x)))])].filter(Boolean);
+  });
+}
+function foodSearch(q, pos) {
+  const terms = foodTerms(q);
+  const f = S.foodFilter;
+  const out = [];
+  for (const r of RESTAURANTS) {
+    if (!(f === 'all' || (f === 'meal' && (r.kind === 'meal' || r.kind === 'cafe')) || (f === 'sweets' && (r.kind === 'sweets' || r.kind === 'cafe')) || (f === 'snack' && r.kind === 'snack') || (f === 'mobile' && r.mobile === 'yes') || (f === 'halloween' && r.halloween.length))) continue;
+    const ix = foodIndex.get(r.id);
+    if (terms.length && !terms.every((alts) => alts.some((a) => ix.all.includes(a)))) continue;
+    const hits = terms.length ? ix.items.filter((m) => terms.some((alts) => alts.some((a) => !a.startsWith('kind:') && m.key.includes(a)))) : [];
+    const p = coordsOf(r.id);
+    out.push({ r, hits, walk: walkMin(pos, p), d: pos ? distanceM(pos, p) : null });
+  }
+  out.sort((x, y) => (x.d ?? 1e9) - (y.d ?? 1e9) || (y.hits.length - x.hits.length));
+  return out;
+}
+const markHit = (text, q) => {
+  let h = esc(text);
+  for (const t of String(q || '').split(/[\s　、,]+/).filter((x) => x.length >= 2)) h = h.split(esc(t)).join(`<mark>${esc(t)}</mark>`);
+  return h;
+};
+function foodListHtml(c) {
+  const q = (S.foodQ || '').trim();
+  const pos = position();
+  const list = foodSearch(q, c.pos);
+  R.foodHits = q ? list.map((x) => x.r.id) : null;
+  const where = pos.src === 'gps' ? '現在地（GPS）から近い順' : pos.src === 'none' ? '現在地が未設定のため距離は目安' : `${pos.src === 'land' ? landById[S.land]?.ja : '推定の現在地'}から近い順`;
+  let html = `<div class="fbar"><span>${q ? `「${esc(q)}」${list.length}件 · ` : ''}${esc(where)}</span><span style="display:flex;gap:6px">${pos.src === 'gps' ? '' : `<button class="btn btn--sm btn--navy" data-act="gps-start">${ic('locate')}現在地</button>`}${q && list.length ? `<button class="btn btn--sm" data-act="food-map">${ic('pin')}マップ</button>` : ''}</span></div>`;
+  if (q && /ポップコーン|ﾎﾟｯﾌﾟｺｰﾝ|popcorn|ポップコン/i.test(q)) {
+    html += `<div class="card rows">${POPCORN.map((p) => `<div class="row"><span class="row__body"><span class="row__name">${jw(p.ja)}</span><span class="row__meta"><span class="num">${esc(p.price)}</span></span><span class="row__meta">${esc(p.where)}</span></span></div>`).join('')}</div>`;
+  }
+  if (!list.length) {
+    return html + `<div class="card card--pad empty">「${esc(q)}」はこのアプリの店データに見つかりませんでした。<br>ワゴン販売（チュロス・ポップコーンなど）は園内各所にあります。公式アプリのメニュー検索も試してください。</div>`;
+  }
+  html += `<div class="card rows">${list.map(({ r, hits, walk }) => `
+    <button class="row" data-open-food="${r.id}" type="button">
+      <span class="row__thumb">${foodImg(r)}</span>
+      <span class="row__body"><span class="row__name">${jw(r.ja)}</span>
+        ${hits.length ? `<span class="fhits">${hits.slice(0, 3).map((m) => `<span class="fhit"><span>${markHit(m.name, q)}</span><span>${esc(m.price)}</span></span>`).join('')}</span>` : `<span class="row__meta"><span>${esc(r.menu[0]?.name || '')}</span></span>`}
+        <span class="row__meta"><span>${ic('walk')}徒歩${walk}分</span><span>${esc(landById[r.land]?.ja || '')}</span>${r.mobile === 'yes' ? '<span class="tag tag--live">モバイルオーダー</span>' : ''}${r.halloween.length ? '<span class="tag tag--warn">限定</span>' : ''}</span></span>
+      <span class="row__chev">${ic('chev')}</span></button>`).join('')}</div>
+    <p class="footer">料金・限定メニューは事前調査の情報です</p>`;
+  return html;
 }
 
 // =====================================================================
@@ -1323,6 +1425,8 @@ function openSettings() {
         <span class="toggle"><input type="checkbox" data-gps-toggle ${S.gps ? 'checked' : ''} aria-label="現在地を使う"><i></i></span></div>
       <div class="setrow"><span class="setrow__ico">${ic('refresh')}</span><div class="setrow__b"><div class="setrow__t">待ち時間</div><div class="setrow__s">${liveTxt}</div></div>
         <button class="btn btn--sm" data-act="refresh">更新</button></div>
+      <div class="setrow"><span class="setrow__ico">${ic('users')}</span><div class="setrow__b"><div class="setrow__t">2人で共有</div><div class="setrow__s">${S.share ? `共有中 · コード ${esc(S.share.code)}` : 'オフ'}</div></div>
+        <button class="btn btn--sm" data-act="share-open">${S.share ? '管理' : '始める'}</button></div>
       <div class="setrow"><span class="setrow__ico">${ic('x')}</span><div class="setrow__b"><div class="setrow__t">記録をリセット</div><div class="setrow__s">済み・プランの条件を消去</div></div>
         <button class="btn btn--sm" data-act="reset">リセット</button></div>
     </div>
@@ -1340,6 +1444,152 @@ function openSettings() {
       <p style="font-size:13px;margin:10px 0 0"><a href="https://disneyland.disney.go.com/entertainment/disneyland/" target="_blank" rel="noopener">公式エンタメスケジュール</a> · <a href="https://disneyland.disney.go.com/guest-services/mobile-order/" target="_blank" rel="noopener">モバイルオーダー</a></p>
     </details>
     <p class="footer">非公式の個人用ツール · ThemeParks.wiki · Queue-Times.com · Wikipedia · © OpenStreetMap</p>
+  </div>`);
+}
+
+// =====================================================================
+// Two-person shared plan (Workers KV via /api/share/:code)
+// Synced: 乗った records + plan settings (pace, conditions, must/skip, order, meals/shows, manual waits).
+// Not synced: position, test time, chosen start time, temporary "別の候補".
+// =====================================================================
+function toDoc() {
+  const f = {};
+  for (const k of SHARE_FIELDS) f[k] = { at: S.fieldAt[k] || 0, v: S[k] ?? null };
+  return { v: 1, done: S.done, doneMin: S.doneMin, doneDel: S.doneDel, f };
+}
+function applyDoc(m, { quiet = false } = {}) {
+  const before = new Set(Object.keys(S.done));
+  const beforeFields = Object.fromEntries(SHARE_FIELDS.map((k) => [k, JSON.stringify(S[k] ?? null)]));
+  S.done = { ...m.done }; S.doneMin = { ...m.doneMin }; S.doneDel = { ...m.doneDel };
+  for (const k of SHARE_FIELDS) {
+    const e = m.f?.[k];
+    if (!e) continue;
+    S[k] = e.v == null ? structuredClone(defaults[k]) : structuredClone(e.v);
+    S.fieldAt[k] = e.at;
+  }
+  S.prefs = { ...structuredClone(defaults.prefs), ...(S.prefs || {}) };
+  const added = Object.keys(S.done).filter((id) => !before.has(id));
+  const removed = [...before].filter((id) => !S.done[id]);
+  const fieldsChanged = SHARE_FIELDS.filter((k) => JSON.stringify(S[k] ?? null) !== beforeFields[k]);
+  // We ride together: the partner's latest check-in is also where we are now.
+  const latest = [...added].sort((a, b) => S.done[b] - S.done[a])[0];
+  if (latest && (!S.lastDone || S.done[latest] > S.lastDone.at)) S.lastDone = { id: latest, at: S.done[latest] };
+  snap = snapOf();
+  try { localStorage.setItem(KEY, JSON.stringify(S)); } catch { /* full */ }
+  if (!added.length && !removed.length && !fieldsChanged.length) return;
+  if (added.length) R.replanned = { at: Date.now(), text: `${clock(nowMin())} 相手が ${added.map(doneName).join('・')} を完了 → ここからプランを更新` };
+  else if (removed.length) R.replanned = { at: Date.now(), text: `${clock(nowMin())} 相手が ${removed.map(doneName).join('・')} を未完了に戻しました` };
+  else if (fieldsChanged.length) R.replanned = { at: Date.now(), text: `${clock(nowMin())} 相手がプランの条件・順番を変更しました` };
+  if (!quiet) {
+    const msg = added.length ? `相手の端末：${added.map(doneName).join('・')} 完了` : removed.length ? `相手の端末：${removed.map(doneName).join('・')} を未完了に` : '相手がプランを変更しました';
+    toast(msg, 'ok');
+  }
+  if (!R.dragging && !R.draft) renderAll();
+}
+async function shareFetch(method, body) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 10000);
+  try {
+    const res = await fetch('/api/share/' + S.share.code, { method, cache: 'no-store', signal: ctl.signal, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+    const j = await res.json().catch(() => null);
+    if (!res.ok || !j?.ok) throw new Error(j?.error === 'storage-not-configured' ? '共有の保存先が未設定です' : `HTTP ${res.status}`);
+    return j;
+  } finally { clearTimeout(t); }
+}
+function schedulePush() {
+  clearTimeout(R.sharePushTimer);
+  R.sharePushTimer = setTimeout(pushShare, 700);
+}
+async function pushShare() {
+  if (!S.share) return;
+  try {
+    const j = await shareFetch('POST', { doc: toDoc() });
+    R.shareAt = Date.now(); R.shareErr = null;
+    applyDoc(mergeDocs(toDoc(), j.doc));
+  } catch (e) { R.shareErr = e.name === 'AbortError' ? 'タイムアウト' : e.message; }
+}
+async function pullShare({ quiet = false } = {}) {
+  if (!S.share || R.shareBusy) return;
+  R.shareBusy = true;
+  try {
+    const j = await shareFetch('GET');
+    R.shareAt = Date.now(); R.shareErr = null;
+    const merged = mergeDocs(toDoc(), j.doc);
+    applyDoc(merged, { quiet });
+    // This phone had something newer (or the room is new): send it.
+    if (!j.exists || !sameDoc(merged, mergeDocs(j.doc, j.doc))) await pushShare();
+  } catch (e) { R.shareErr = e.name === 'AbortError' ? 'タイムアウト' : e.message; }
+  finally { R.shareBusy = false; }
+}
+const shareLink = () => `${location.origin}/#share=${S.share.code}`;
+function startShare() {
+  S.share = { code: newCode() };
+  // Stamp current settings so they become the shared starting point.
+  const now = Date.now();
+  for (const k of SHARE_FIELDS) S.fieldAt[k] = S.fieldAt[k] || now;
+  save();
+  pushShare().then(() => {
+    const err = R.shareErr;
+    if (err) { S.share = null; R.shareErr = null; save(); }
+    openShare();
+    toast(err ? `共有を開始できませんでした（${err}）` : '共有を始めました。リンクを相手に送ってください', err ? 'error' : 'ok');
+  });
+}
+function joinShare(code) {
+  code = String(code || '').trim().toLowerCase();
+  if (!CODE_RE.test(code)) return toast('8文字の共有コードを入力してください', 'error');
+  S.share = { code }; save();
+  if (location.hash) history.replaceState(null, '', location.pathname);
+  pullShare({ quiet: true }).then(() => {
+    const err = R.shareErr;
+    if (err) { S.share = null; R.shareErr = null; save(); }
+    closeSheet(); go('plan');
+    toast(err ? `参加できませんでした（${err}）` : '2人の共有プランに参加しました', err ? 'error' : 'ok');
+  });
+}
+function leaveShare() {
+  S.share = null; R.shareAt = 0; R.shareErr = null; save(); closeSheet(); renderAll();
+  toast('共有をやめました（この端末の記録はそのまま）');
+}
+function shareStatus() {
+  if (!S.share) return '';
+  if (R.shareErr) return `同期できません：${R.shareErr}`;
+  if (!R.shareAt) return '同期中…';
+  const s2 = Math.round((Date.now() - R.shareAt) / 1000);
+  return `同期 ${s2 < 60 ? s2 + '秒前' : Math.round(s2 / 60) + '分前'}`;
+}
+function openShare() {
+  if (S.share) {
+    openSheet(`<div class="sheet__content">
+      <div><div class="kicker">Share</div><h2 class="sheet__title" id="sheetTitle">2人で共有中</h2></div>
+      <div class="sharecode"><span>共有コード</span><b class="num">${esc(S.share.code)}</b></div>
+      <div class="btnrow"><button class="btn btn--primary" data-act="share-send">${ic('users')}リンクを送る</button><button class="btn" data-act="share-copy">コピー</button></div>
+      <p class="para muted" style="font-size:13px;margin:0">相手はリンクを開くか、設定の「2人で共有」でこのコードを入力すると参加できます。</p>
+      <dl class="kv"><dt>状態</dt><dd>${esc(shareStatus())}</dd>
+        <dt>共有する</dt><dd>乗った記録・順番・条件・ごはんとショー・手入力の待ち時間</dd>
+        <dt>共有しない</dt><dd>現在地・テスト時刻・指定した開始時刻</dd></dl>
+      <div class="btnrow"><button class="btn" data-act="share-sync">${ic('refresh')}今すぐ同期</button><button class="btn" data-act="share-leave">共有をやめる</button></div>
+    </div>`);
+    return;
+  }
+  openSheet(`<div class="sheet__content">
+    <div><div class="kicker">Share</div><h2 class="sheet__title" id="sheetTitle">2人で同じプランを使う</h2></div>
+    <p class="para" style="margin:0">どちらかが「乗った」を押したり、順番・条件を変えると、もう1台のプランも自動で変わります（数十秒〜1分ほど）。</p>
+    <button class="btn btn--primary btn--block" data-act="share-start">${ic('users')}共有を始める（リンクを作る）</button>
+    <div class="field__h" style="margin:4px 0 0"><b>相手から届いたコードで参加</b></div>
+    <div class="formrow"><input type="text" id="shareCodeIn" autocapitalize="off" autocomplete="off" spellcheck="false" maxlength="8" placeholder="8文字のコード" style="flex:1"><button class="btn btn--navy btn--sm" data-act="share-join">参加</button></div>
+    <p class="muted" style="font-size:12px;margin:0">保存するのはプランと記録だけで、位置情報は送りません。7日で自動削除。</p>
+  </div>`);
+}
+function offerJoinFromLink() {
+  const m = /share=([a-z2-9]{8})/i.exec(location.hash || '');
+  if (!m) return;
+  const code = m[1].toLowerCase();
+  if (S.share?.code === code) { history.replaceState(null, '', location.pathname); return; }
+  openSheet(`<div class="sheet__content" style="text-align:center">
+    <div class="kicker">Share</div><h2 class="sheet__title" id="sheetTitle">共有プランに参加しますか？</h2>
+    <p class="para">コード <b class="num">${esc(code)}</b> のプランと同期します。この端末の「乗った」記録は合算され、条件や順番は新しく変えた方に合わせます。${S.share ? '<br>（いまの共有はやめて切り替えます）' : ''}</p>
+    <div class="btnrow"><button class="btn" data-act="share-decline" data-close>やめる</button><button class="btn btn--primary" data-share-join="${code}">参加する</button></div>
   </div>`);
 }
 
@@ -1379,12 +1629,17 @@ async function renderMap() {
     mapMod.draw({
       filter: S.mapFilter, pos: position(), gps: R.gpsPos && S.gps && Date.now() - R.gpsPos.at < 5 * 60e3 ? R.gpsPos : null,
       rides: ATTRACTIONS.map((a) => ({ a, pos: coordsOf(a.id), w: waitInfo(a), done: !!S.done[a.id] })),
-      food: RESTAURANTS.map((x) => ({ r: x, pos: coordsOf(x.id) })),
+      food: RESTAURANTS.filter((x) => !R.mapFood || R.mapFood.ids.includes(x.id)).map((x) => ({ r: x, pos: coordsOf(x.id) })),
       shows: SHOWS.map((s) => ({ s, pos: s.venuePos })),
       nextId: r.primary?.a?.id || null,
       icons: { food: ic('food'), show: ic('show') },
       coordsSrc: (() => { const n = Object.keys(R.meta?.coords || {}).filter((k) => attractionById[k]).length; return n >= 15 ? 'api' : n > 0 ? 'partial' : 'approx'; })(),
     });
+    let fc = el.querySelector('#mapFoodChip');
+    if (R.mapFood) {
+      if (!fc) { fc = document.createElement('button'); fc.id = 'mapFoodChip'; fc.className = 'chip is-active'; fc.dataset.act = 'map-food-clear'; el.querySelector('.mapbar').prepend(fc); }
+      fc.innerHTML = `「${esc(R.mapFood.q)}」の店 ${R.mapFood.ids.length}件 ${ic('x')}`;
+    } else fc?.remove();
     const meOn = !!(S.gps && R.gpsPos);
     const meBtn = el.querySelector('[data-act="map-me"]');
     if (meBtn) {
@@ -1429,6 +1684,7 @@ document.addEventListener('click', async (e) => {
   if (d.xtab) { S.exploreTab = d.xtab; save(); return renderExplore(); }
   if (d.xf) { S.exploreFilter = d.xf; save(); return renderExplore(); }
   if (d.ff) { S.foodFilter = d.ff; save(); return renderExplore(); }
+  if (d.fq !== undefined) { S.foodQ = S.foodQ === d.fq ? '' : d.fq; save(); return renderExplore(); }
   if (d.mf) { S.mapFilter = d.mf; save(); document.querySelectorAll('[data-mf]').forEach((b) => b.classList.toggle('is-active', b.dataset.mf === d.mf)); return renderMap(); }
   if (d.land) { S.land = d.land; S.landAt = Date.now(); save(); renderAll(); return toast(`現在地：${landById[d.land].ja}`, 'ok'); }
   if (d.rideSt) {
@@ -1493,8 +1749,24 @@ document.addEventListener('click', async (e) => {
     R.draft.prefs.shows[d.bShowPick] = { ...(R.draft.prefs.shows[d.bShowPick] || {}), on: true, pick: d.time };
     return openPlanBuilder();
   }
+  if (d.shareJoin) return joinShare(d.shareJoin);
   switch (d.act) {
     case 'refresh': return fetchLive({ manual: true });
+    case 'share-open': return openShare();
+    case 'food-map': S.mapFilter = 'food'; R.mapFood = { q: S.foodQ, ids: R.foodHits || [] }; save(); return go('map');
+    case 'map-food-clear': R.mapFood = null; return renderMap();
+    case 'share-start': return startShare();
+    case 'share-join': return joinShare($('#shareCodeIn')?.value);
+    case 'share-decline': history.replaceState(null, '', location.pathname); return;
+    case 'share-leave': if (!confirm('共有をやめますか？（この端末の記録は残ります）')) return; return leaveShare();
+    case 'share-sync': await pullShare(); return openShare();
+    case 'share-copy':
+      try { await navigator.clipboard.writeText(shareLink()); toast('リンクをコピーしました', 'ok'); } catch { prompt('このリンクを相手に送ってください', shareLink()); }
+      return;
+    case 'share-send':
+      if (navigator.share) { try { await navigator.share({ title: '10.31 ディズニー プラン共有', text: '一緒のプランを使おう', url: shareLink() }); } catch { /* cancelled */ } return; }
+      try { await navigator.clipboard.writeText(shareLink()); toast('リンクをコピーしました。LINEなどで送ってください', 'ok'); } catch { prompt('このリンクを相手に送ってください', shareLink()); }
+      return;
     case 'plan-time-set': {
       const raw = $('#planTimeInput')?.value;
       const mins = parseHHMM(raw);
@@ -1523,7 +1795,8 @@ document.addEventListener('click', async (e) => {
     case 'sim-off': S.sim = null; save(); closeSheet(); renderAll(); return toast('現在時刻に戻しました');
     case 'reset':
       if (!confirm('済みの記録とプランの条件をすべてリセットしますか？')) return;
-      S = structuredClone(defaults); save(); closeSheet(); renderAll(); return toast('リセットしました');
+      Object.keys(S).forEach((k) => delete S[k]); Object.assign(S, structuredClone(defaults)); snap = null; save(); closeSheet(); renderAll();
+      return toast('リセットしました（2人の共有もやめました）');
     case 'map-me':
       if (!S.gps || !R.gpsPos) return startGPS(true);
       mapMod?.locate(R.gpsPos);
@@ -1531,6 +1804,13 @@ document.addEventListener('click', async (e) => {
       return;
     case 'map-fit': return mapMod?.fit();
   }
+});
+document.addEventListener('input', (e) => {
+  if (e.target.id !== 'foodQ') return;
+  S.foodQ = e.target.value; save();
+  const box = $('#foodList');
+  if (box) box.innerHTML = foodListHtml(ctx());
+  document.querySelectorAll('[data-fq]').forEach((b) => b.classList.toggle('is-active', !!b.dataset.fq && b.dataset.fq === S.foodQ.trim()));
 });
 document.addEventListener('change', (e) => {
   const t = e.target;
@@ -1569,6 +1849,11 @@ fetchPhotos();
 const shouldPoll = () => { const m = nowMin(); return m >= hours().open - 90 && m <= hours().close + 30; };
 fetchLive();
 setInterval(() => { if (document.visibilityState === 'visible' && shouldPoll()) fetchLive(); }, 3 * 60e3);
+// Shared plan: pull every 20 s while visible (cheap GET), push right after local changes.
+if (S.share) pullShare({ quiet: true });
+setInterval(() => { if (S.share && document.visibilityState === 'visible') pullShare(); }, 20e3);
+offerJoinFromLink();
+addEventListener('hashchange', offerJoinFromLink);
 setInterval(() => { renderClock(); renderStatus(); }, 15e3);
 // Re-render the current view every minute so countdowns/plans follow the clock (skip while a sheet is open).
 setInterval(() => { if ($('#sheet').hidden && S.tab !== 'map' && document.activeElement?.tagName !== 'INPUT') renderView(); }, 60e3);
@@ -1577,6 +1862,7 @@ document.addEventListener('visibilitychange', () => {
     renderClock(); renderStatus(); if ($('#sheet').hidden) renderView();
     if (Date.now() - R.liveReceivedAt > 2 * 60e3) fetchLive();
     if (S.gps) requestFix();
+    if (S.share) pullShare();
   }
 });
 // Resume GPS automatically only if the user enabled it before AND the browser already granted permission.
@@ -1586,4 +1872,4 @@ if (S.gps && navigator.permissions?.query) {
 // Throttled position refresh (see requestFix): checks every 20 s, fetches only when due.
 setInterval(() => { if (S.gps) requestFix(); }, 20e3);
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
-window.__dlnavi = { S, R, ctx, recommend, simulateDay };
+window.__dlnavi = { S, R, ctx, recommend, simulateDay, pullShare };
