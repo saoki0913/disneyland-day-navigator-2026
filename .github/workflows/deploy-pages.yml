@@ -7,7 +7,7 @@ on:
     workflows: ["Verify Disneyland Navi"]
     types: [completed]
     branches:
-      - claude/vibrant-dijkstra-lbpi65
+      - main
   workflow_dispatch:
     inputs:
       target:
@@ -31,11 +31,11 @@ concurrency:
 jobs:
   deploy:
     if: >-
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/claude/vibrant-dijkstra-lbpi65') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_branch == 'claude/vibrant-dijkstra-lbpi65' &&
+       github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == 'saoki0913/disneyland-day-navigator-2026')
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -51,7 +51,7 @@ jobs:
         shell: bash
         run: |
           if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            latest="$(git ls-remote https://github.com/saoki0913/disneyland-day-navigator-2026.git refs/heads/claude/vibrant-dijkstra-lbpi65 | cut -f1)"
+            latest="$(git ls-remote https://github.com/saoki0913/disneyland-day-navigator-2026.git refs/heads/main | cut -f1)"
             tested="$(git rev-parse HEAD)"
             if [ -z "$latest" ]; then
               echo "::error::Cannot determine latest branch commit; declining to deploy."
