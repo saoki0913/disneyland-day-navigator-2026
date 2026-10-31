@@ -430,7 +430,14 @@ function markDone(id) {
   S.lastDone = { id, at: Date.now() };
   delete S.skip[id];
   if (S.pin?.id === id) S.pin = null;
-  save(); renderAll();
+  // Pressing "乗った" on the day means it really is now: drop a manually chosen start time
+  // so the rest of the plan restarts from this moment and this place.
+  if (S.planTime && !S.sim && laParts().date === TRIP.date) S.planTime = null;
+  save();
+  R.replanned = { at: Date.now(), text: `${clock(nowMin())} ${doneName(id)} 完了 → ここからプランを更新` };
+  renderAll();
+  // Fresh waits for the re-plan (the edge cache makes this cheap); skip if they are already recent.
+  if (Date.now() - R.liveReceivedAt > 60e3 && shouldPoll()) fetchLive();
   const n = doneRides().length;
   toast(`${doneName(id)} 完了${attractionById[id] ? `（${n}つ目）` : ''}`, 'ok', { label: '取り消す', fn: () => undoDone(id, true) });
 }
@@ -808,39 +815,21 @@ function renderPlan() {
   const mustIds = Object.keys(mustMap()).filter((id) => attractionById[id]);
   const h = hours();
   const flash = R.flash && Date.now() - R.flash.at < 6000 ? R.flash.ids : null;
-  let html = `<div class="card condsum">
-    <dl class="kv condsum__kv">${condSummary(D).map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
-    <button class="btn btn--navy btn--block" data-act="plan-edit">${ic('sliders')}条件を変えてプランを作る</button></div>`;
-  html += `<div class="kpis">
-    <div class="card kpi"><b>${done.length + sim.rides}</b><span>乗り物</span></div>
-    <div class="card kpi"><b>${mustIds.length - sim.missingMust.length}/${mustIds.length}</b><span>絶対乗る</span></div>
-    <div class="card kpi"><b>${c.anchors.length}</b><span>ごはん・ショー</span></div></div>`;
-  if (sim.missingMust.length) html += `<div class="note note--bad">${ic('alert')}<div><div class="note__t">${sim.missingMust.map((id) => esc(attractionById[id].short)).join('・')} が入りきらない</div><div class="note__s">休止中なら再開後に最優先で案内</div></div></div>`;
-  if (conflicts.length) html += `<div class="note note--bad">${ic('alert')}<div><div class="note__t">ごはんとショーの時間が重なっています</div></div></div>`;
-
-  // Re-plan panel: says exactly what "作り直す" uses (time / waits / done) and what it resets.
   const custom = !!S.order?.length;
   const busy = R.liveStatus === 'loading';
   const startAt = Math.max(c.now, h.open);
-  const rp = R.replanned && Date.now() - R.replanned.at < 60e3 ? R.replanned : null;
-  html += `<div class="sec"><h2><span class="sec__en">TIMELINE</span>これから</h2><span class="sec__sub">${custom ? 'あなたが並べた順' : 'おすすめ順'}</span></div>
-    <div class="card replan">
-      <div class="replan__h"><b>${S.planTime ? '指定時刻' : c.now < h.open ? '開園' : 'いま'} <span class="num">${clock(startAt)}</span> から閉園 <span class="num">${clock(h.close)}</span> までのプラン</b></div>
-      ${S.planTime ? `<div class="replan__custom">${ic('clock')}<span>開始時刻を指定中（実際の時間とともに進みます）</span><button class="linkbtn" data-act="plan-time-auto">実際の現在時刻に戻す</button></div>` : ''}
-      <ul class="replan__uses">
-        <li>${ic('clock')}${esc(liveAgeText())}</li>
-        <li>${ic('check')}済み ${done.length}件は除く</li>
-        <li>${ic('pin')}${esc(position().src === 'gps' ? 'GPSの現在地から' : position().src === 'none' ? '現在地は未設定' : '推定の現在地から')}</li>
-      </ul>
-      ${rp ? `<div class="replan__res">${ic('check')}${esc(rp.text)}</div>` : ''}
-      <button class="btn ${custom ? 'btn--navy' : 'btn--primary'} btn--block ${busy ? 'is-busy' : ''}" data-act="replan" ${busy ? 'disabled' : ''}>${ic('refresh')}${custom ? 'おすすめ順で作り直す' : '最新の待ち時間で作り直す'}</button>
-      <p class="replan__hint">${custom ? '並べ替えた順番はリセットされます。' : 'プランは1分ごとに自動で更新されます。'}${ic('grip')}をドラッグすると乗る順番を入れ替えられます。</p>
-      <div class="replan__time">
-        <label for="planTimeInput"><b>別の時刻から作る</b><span>遅れて入園・休憩のあとなど</span></label>
-        <div class="plan-start__row"><input type="time" id="planTimeInput" value="${clock(startAt)}" aria-label="プランの開始時刻">
-          <button class="btn btn--sm btn--navy" data-act="plan-time-set">この時刻から作る</button></div>
-      </div>
-    </div><ol class="tl tl--plan">`;
+  const rp = R.replanned && Date.now() - R.replanned.at < 90e3 ? R.replanned : null;
+  // 1) One-line summary, then the timeline right away — the plan itself is the first thing you see.
+  let html = `<div class="planhead"><div class="planhead__t"><b class="num">${clock(startAt)}→${clock(h.close)}</b>
+      <span>乗り物 <b class="num">${done.length + sim.rides}</b></span><span>絶対 <b class="num">${mustIds.length - sim.missingMust.length}/${mustIds.length}</b></span>
+      <span class="planhead__src">${esc(liveIsFresh() ? 'LIVE' : '推定')}</span></div>
+    <button class="btn btn--sm" data-act="plan-edit">${ic('sliders')}条件</button></div>`;
+  if (sim.missingMust.length) html += `<div class="note note--bad">${ic('alert')}<div><div class="note__t">${sim.missingMust.map((id) => esc(attractionById[id].short)).join('・')} が入りきらない</div><div class="note__s">休止中なら再開後に最優先で案内</div></div></div>`;
+  if (conflicts.length) html += `<div class="note note--bad">${ic('alert')}<div><div class="note__t">ごはんとショーの時間が重なっています</div></div></div>`;
+  if (S.planTime) html += `<div class="replan__custom">${ic('clock')}<span>開始時刻 <b class="num">${clock(startAt)}</b> を指定中</span><button class="linkbtn" data-act="plan-time-auto">現在時刻に戻す</button></div>`;
+  html += `<ol class="tl tl--plan">
+    <li class="tl__item tl__item--now ${rp ? 'is-fresh' : ''}"><span class="tl__time">${clock(startAt)}</span>
+      <div class="tl__now">${rp ? `${ic('check')}<span>${esc(rp.text)}</span>` : `<span>${c.now < h.open ? '開園' : S.planTime ? '指定時刻' : 'いま'} · ここから閉園まで</span><small>${custom ? 'あなたが並べた順' : 'おすすめ順'} · ${ic('grip')}で入れ替え</small>`}</div></li>`;
   for (const it of sim.items) {
     if (it.type === 'free' && it.end - it.start < 10) continue;
     if (it.type === 'ride') {
@@ -864,6 +853,27 @@ function renderPlan() {
     }
   }
   html += `</ol>`;
+
+  // 2) Below the plan: re-plan options and the conditions summary.
+  html += `<div class="sec"><h2><span class="sec__en">REPLAN</span>作り直す</h2></div>
+    <div class="card replan">
+      <ul class="replan__uses">
+        <li>${ic('clock')}${esc(liveAgeText())}</li>
+        <li>${ic('check')}済み ${done.length}件は除く</li>
+        <li>${ic('pin')}${esc(position().src === 'gps' ? 'GPSの現在地から' : position().src === 'none' ? '現在地は未設定' : '推定の現在地から')}</li>
+      </ul>
+      ${rp ? `<div class="replan__res">${ic('check')}${esc(rp.text)}</div>` : ''}
+      <button class="btn ${custom ? 'btn--navy' : ''} btn--block ${busy ? 'is-busy' : ''}" data-act="replan" ${busy ? 'disabled' : ''}>${ic('refresh')}${custom ? 'おすすめ順で作り直す' : '最新の待ち時間で作り直す'}</button>
+      <p class="replan__hint">「乗った」を押すと、その時刻と場所からプランが自動で更新されます。${custom ? '作り直すと並べ替えた順番はリセットされます。' : ''}</p>
+      <div class="replan__time">
+        <label for="planTimeInput"><b>別の時刻から作る</b><span>遅れて入園・休憩のあとなど</span></label>
+        <div class="plan-start__row"><input type="time" id="planTimeInput" value="${clock(startAt)}" aria-label="プランの開始時刻">
+          <button class="btn btn--sm btn--navy" data-act="plan-time-set">この時刻から作る</button></div>
+      </div>
+    </div>
+    <div class="card condsum">
+    <dl class="kv condsum__kv">${condSummary(D).map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
+    <button class="btn btn--navy btn--block" data-act="plan-edit">${ic('sliders')}条件を変えてプランを作る</button></div>`;
 
   const doneIds = Object.keys(S.done).sort((a, b) => (S.doneMin[a] ?? 0) - (S.doneMin[b] ?? 0) || S.done[a] - S.done[b]);
   if (doneIds.length) {

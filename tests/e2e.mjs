@@ -124,8 +124,13 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     const live = page.locator('.tl--plan .tl__wait:has(.tag--live)');
     assert.ok(await live.count() >= 1, 'LIVE wait in the timeline');
     assert.match(await live.first().textContent(), /いま\s*\d+分/);
+    const top = await page.evaluate(() => document.querySelector('.tl--plan > li[data-ride]').getBoundingClientRect().top);
+    assert.ok(top < 260, `plan timeline is visible right away (first ride at ${top}px)`);
+    const replanY = await page.evaluate(() => document.querySelector('.replan').getBoundingClientRect().top);
+    const tlBottom = await page.evaluate(() => document.querySelector('.tl--plan').getBoundingClientRect().bottom);
+    assert.ok(replanY > tlBottom, 're-plan panel is below the timeline');
+    assert.match(await page.textContent('.tl__item--now'), /ここから閉園/);
     const card = await page.textContent('.replan');
-    assert.match(card, /から閉園/);
     assert.match(card, /LIVE待ち時間/);
     assert.match(card, /済み \d+件は除く/);
     assert.match(card, /最新の待ち時間で作り直す/);
@@ -149,7 +154,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     const after = await page.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride));
     assert.equal(after[0], target, `dragged ${target} first, got ${after.join(',')}`);
     assert.match(await page.textContent('#toast'), /順番/);
-    assert.match(await page.textContent('.tl__item + .sec, .sec__sub'), /あなたが並べた順/);
+    assert.match(await page.textContent('.tl__item--now'), /あなたが並べた順/);
     assert.match(await page.textContent('[data-act="replan"]'), /おすすめ順で作り直す/);
     await tab(page, 'home');
     assert.equal(await page.getAttribute('#actionbar [data-done]', 'data-done'), target, 'home follows the custom order');
@@ -158,6 +163,24 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.equal(await page.evaluate(() => window.__dlnavi.S.order), null, 'order reset');
     assert.match(await page.textContent('.replan__res'), /作り直しました/);
     await page.screenshot({ path: `${SHOTS}/03-plan-replan.png`, fullPage: true });
+  });
+  await step('乗った re-plans the rest of the day from that moment', async () => {
+    await tab(page, 'plan');
+    const first = await page.getAttribute('.tl--plan > li[data-ride]', 'data-ride');
+    const ids0 = await page.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride));
+    await page.click(`.tl--plan [data-done="${first}"]`); await page.waitForTimeout(300);
+    const now = await page.evaluate(() => window.__dlnavi.S.doneMin);
+    assert.match(await page.textContent('.tl__item--now'), /完了 → ここからプランを更新/);
+    const t0 = await page.textContent('.tl__item--now .tl__time');
+    const t1 = await page.textContent('.tl--plan > li[data-ride] .tl__time');
+    const toMin = (x) => { const [h, m] = x.split(':').map(Number); return h * 60 + m; };
+    assert.ok(Math.abs(toMin(t0) - Math.floor(Object.values(now)[0])) <= 1, 'plan starts at the check-in time');
+    assert.ok(toMin(t1) >= toMin(t0) && toMin(t1) - toMin(t0) <= 30, 'next ride starts right after (walk only)');
+    assert.notEqual(await page.getAttribute('.tl--plan > li[data-ride]', 'data-ride'), first);
+    assert.ok(ids0.length >= 2);
+    await page.screenshot({ path: `${SHOTS}/03-plan-after-done.png` });
+    await page.click(`.tl--done [data-done="${first}"]`); await page.waitForTimeout(150);
+    await page.click(`[data-undo="${first}"]`); await page.waitForTimeout(200);
   });
   await step('9. Tap = complete; item stays visible as 完了; undo needs confirmation; survives reload', async () => {
     await tab(page, 'home');
