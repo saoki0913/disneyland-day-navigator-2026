@@ -779,3 +779,26 @@ body.is-dragging { -webkit-user-select: none; user-select: none; cursor: grabbin
 .tl__orderbtns button:disabled { opacity: .28; }
 .tl--edit .tl__rm { width: 32px; height: 37px; }
 @media (max-width: 390px) { .tl--edit .tl__grip { width: 25px; } .tl--edit .tl__card { padding-left: 4px; padding-right: 4px; } .tl--edit .tl__edittools { gap: 2px; } .tl--edit .tl__rm { width: 29px; } }
+
+/* Lightweight translucent controls; thumbnails replace the old plan glyph tiles. */
+.tl__thumb { flex: 0 0 40px; width: 40px; height: 40px; border-radius: 12px; overflow: hidden; background: transparent; }
+.tl__thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.tl--edit .tl__grip { flex: 0 0 30px; width: 30px; height: 44px; border: 1px solid rgba(92,116,152,.16); background: rgba(235,243,255,.7); color: #5e789e; border-radius: 12px; cursor: grab; touch-action: none; }
+.tl--edit .tl__grip .ico { width: 19px; height: 19px; }
+.tl--edit .tl__card { touch-action: pan-y; }
+.tl__edittools { margin-left: auto; }
+.tl--edit .tl__rm { border-radius: 12px; background: rgba(255,240,241,.85); color: #b83f4b; }
+.plan-edit-hint { margin: 4px 0 6px 60px; font-size: 11.5px; font-weight: 600; }
+.btn, .chip, .filter-toggle, .check { border: 1px solid rgba(255,255,255,.7); background: rgba(255,255,255,.76); box-shadow: 0 2px 9px rgba(30,60,100,.07), inset 0 1px 0 rgba(255,255,255,.85); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+.btn--primary { background: rgba(41,113,216,.88); border-color: rgba(255,255,255,.4); color: #fff; box-shadow: 0 3px 12px rgba(32,100,195,.17); }
+.btn--navy { background: rgba(225,237,252,.76); border-color: rgba(126,165,221,.12); box-shadow: none; }
+.check { width: 32px; height: 32px; border-radius: 50%; color: #7b9ab8; border-color: rgba(125,155,195,.34); }
+.check.is-done { background: rgba(46,116,205,.91); border-color: rgba(255,255,255,.55); color: #fff; }
+.filter-toggle { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: 999px; min-height: 34px; padding: 0 12px; color: var(--blue-d); font-size: 12.5px; font-weight: 700; }
+.filter-toggle .ico { width: 14px; height: 14px; }
+.sortrow { gap: 6px; }
+.sortrow #xcount { margin-right: auto; white-space: nowrap; }
+.sortrow select { max-width: 46%; padding-left: 9px; font-size: 12px; }
+.chips--quick .chip { height: 32px; font-size: 12.5px; }
+@media (max-width: 390px) { .tl--edit .tl__grip { width: 28px; flex-basis: 28px; } .tl__thumb { width: 36px; flex-basis: 36px; height: 36px; } }
+@media (prefers-reduced-transparency: reduce) { .btn, .chip, .filter-toggle, .check { background: #fff; backdrop-filter: none; -webkit-backdrop-filter: none; } }

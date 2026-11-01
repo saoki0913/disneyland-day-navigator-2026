@@ -349,6 +349,12 @@ export const RESTAURANTS = [
     desc: 'ダウンタウン・ディズニーのイタリアン。大きなピザを2人でシェア。パークを出て再入園が必要。',
     menuUrl: 'https://disneyland.disney.go.com/dining/downtown-disney-district/naples-ristorante-e-bar/',
   },
+
+  // Popcorn cart locations explicitly listed by the official Disneyland Resort dining guide.
+  {"id":"popcart-carthay-circle","ja":"ポップコーンワゴン（カーセイ・サークル付近）","en":"Popcorn near Carthay Circle Restaurant","land":"bvs","kind":"snack","style":"ワゴン","wagon":true,"mobile":"unknown","hours":"当日の営業を確認","emoji":"🍿","menu":[{"name":"ポップコーン","en":"Popcorn","price":"当日確認"}],"halloween":[],"desc":"ディズニー公式サイト掲載の販売地点。営業時間・取扱商品・正確な位置は公式アプリで確認してください。","menuUrl":"https://disneyland.disney.go.com/dining/popcorn/"},
+  {"id":"popcart-cozy-cone","ja":"ポップコーンワゴン（コージー・コーン・モーテル）","en":"Popcorn near Cozy Cone Motel","land":"cars","kind":"snack","style":"ワゴン","wagon":true,"mobile":"unknown","hours":"当日の営業を確認","emoji":"🍿","menu":[{"name":"ポップコーン","en":"Popcorn","price":"当日確認"}],"halloween":[],"desc":"ディズニー公式サイト掲載の販売地点。営業時間・取扱商品・正確な位置は公式アプリで確認してください。","menuUrl":"https://disneyland.disney.go.com/dining/popcorn/"},
+  {"id":"popcart-grizzly-airfield","ja":"ポップコーンワゴン（グリズリー・ピーク飛行場）","en":"Popcorn near Grizzly Peak Airfield","land":"grizzly","kind":"snack","style":"ワゴン","wagon":true,"mobile":"unknown","hours":"当日の営業を確認","emoji":"🍿","menu":[{"name":"ポップコーン","en":"Popcorn","price":"当日確認"}],"halloween":[],"desc":"ディズニー公式サイト掲載の販売地点。営業時間・取扱商品・正確な位置は公式アプリで確認してください。","menuUrl":"https://disneyland.disney.go.com/dining/popcorn/"},
+  {"id":"popcart-pixar-pier","ja":"ポップコーンワゴン（ピクサー・ピア）","en":"Popcorn near Pixar Pier","land":"pixar","kind":"snack","style":"ワゴン","wagon":true,"mobile":"unknown","hours":"当日の営業を確認","emoji":"🍿","menu":[{"name":"ポップコーン","en":"Popcorn","price":"当日確認"}],"halloween":[],"desc":"ディズニー公式サイト掲載の販売地点。営業時間・取扱商品・正確な位置は公式アプリで確認してください。","menuUrl":"https://disneyland.disney.go.com/dining/popcorn/"},
 ];
 export const restaurantById = Object.fromEntries(RESTAURANTS.map((r) => [r.id, r]));
 

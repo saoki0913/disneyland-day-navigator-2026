@@ -730,6 +730,8 @@ export function planScore(ctx, seq) {
 function bestInsert(ctx, full, base, id, bound) {
   let bo = null, bs = bound;
   for (let i = 0; i <= base.length; i++) {
+    // No candidate may be inserted ahead of the next destination chosen by the user.
+    if (ctx.firstRide && base[0] === ctx.firstRide && i === 0) continue;
     const o = [...base.slice(0, i), id, ...base.slice(i)];
     const sc = planScore(ctx, full(o));
     if (sc < bs) { bs = sc; bo = o; }
