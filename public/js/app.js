@@ -1242,8 +1242,7 @@ function renderPlan() {
   // 1) One-line summary, then the timeline right away — the plan itself is the first thing you see.
   const outside = outsideAnchors();
   let html = `<div class="phead"><div class="ptitle"><h1>1日のプラン</h1>
-      <div class="ptitle__btns">${R.planEdit ? `<button class="btn btn--sm btn--primary" data-act="plan-edit-done">${ic('check')}完了</button>` : `<button class="btn btn--sm" data-act="plan-edit-order">${ic('edit')}編集</button>`}
-      <button class="btn btn--sm" data-act="plan-edit">${ic('sliders')}条件</button></div></div>
+      <div class="ptitle__btns">${R.planEdit ? `<button class="btn btn--sm" data-act="plan-add">${ic('plus')}追加</button><button class="btn btn--sm btn--primary" data-act="plan-edit-done">${ic('check')}完了</button>` : `<button class="btn btn--sm" data-act="plan-edit-order">${ic('edit')}編集</button><button class="btn btn--sm" data-act="plan-edit">${ic('sliders')}条件</button>`}</div></div>
       <button class="dayrow" type="button" data-act="day-edit"><span class="dayrow__k">${esc(PARK.short)}</span><span class="dayrow__v"><b>${dateLabel()}</b> ${h.customOpen ? '入園' : '開園'}<span class="num">${clock(h.open)}</span>→${h.customClose ? '退園' : '閉園'}<span class="num">${clock(h.close)}</span></span><span class="dayrow__e">${ic('edit')}変更</span></button>
     <div class="planhead"><div class="planhead__t"><b class="num">${clock(startAt)}→${clock(h.close)}</b>
       <span>乗り物 <b class="num">${done.length + sim.rides}</b></span><span>絶対 <b class="num">${mustIds.length - sim.missingMust.length}/${mustIds.length}</b></span>
@@ -1254,7 +1253,15 @@ function renderPlan() {
   if (conflicts.length) html += `<div class="note note--bad">${ic('alert')}<div><div class="note__t">ごはんとショーの時間が重なっています</div></div></div>`;
   if (S.planTime) html += `<div class="replan__custom">${ic('clock')}<span>開始時刻を指定中</span><button class="linkbtn" data-act="plan-time-auto">現在時刻に戻す</button></div>`;
   const edit = R.planEdit;
+  const editableIds = sim.items.filter((it) => ['ride', 'meal', 'show'].includes(it.type) && it.id).map((it) => it.id);
   const rm = (id, name) => `<button class="tl__rm" data-rm="${id}" aria-label="${esc(name)} をプランから外す">${ic('x')}</button>`;
+  const editControls = (id, name) => {
+    const idx = editableIds.indexOf(id);
+    return `<div class="tl__edittools" role="group" aria-label="${esc(name)} の順番・削除">
+      <div class="tl__orderbtns"><button type="button" data-shift="${id}" data-step="-1" aria-label="${esc(name)} を一つ前へ" ${idx <= 0 ? 'disabled' : ''}>↑</button><button type="button" data-shift="${id}" data-step="1" aria-label="${esc(name)} を一つ後ろへ" ${idx < 0 || idx === editableIds.length - 1 ? 'disabled' : ''}>↓</button></div>
+      ${rm(id, name)}</div>`;
+  };
+  if (edit) html += `<p class="plan-edit-hint">↑ ↓ で順番を変更 · × で削除 · 「追加」で予定を追加</p>`;
   html += suggestCard();
   const here = position();
   const hereLabel = here.src === 'gps' ? 'GPS' : here.src === 'land' ? landById[S.land]?.ja : here.src === 'last' ? (attractionById[S.lastDone?.id]?.short || doneName(S.lastDone?.id)) : here.src === 'entrance' || here.src === 'outside' ? '入口' : '？';
@@ -1271,15 +1278,15 @@ function renderPlan() {
         <div class="tl__card"><span class="tl__grip" data-grip="${a.id}" role="button" aria-label="${esc(a.short)} をドラッグして順番を変更">${ic(RIDE_IC)}</span>
           <button class="tl__main" data-open="${a.id}"><span class="tl__name">${jw(a.short)}${it.must ? '<span class="tag tag--must">絶対</span>' : ''}</span>
           <span class="tl__meta"><span class="tag tag--bad">一時休止中</span><span>再開したらお知らせ・このまま次へ</span></span></button>
-          ${edit ? rm(a.id, a.short) : `<button class="check" data-done="${a.id}" aria-label="${esc(a.short)} 乗った">${ic('check')}</button>`}</div></li>`;
+          ${edit ? editControls(a.id, a.short) : `<button class="check" data-done="${a.id}" aria-label="${esc(a.short)} 乗った">${ic('check')}</button>`}</div></li>`;
     } else if (it.type === 'ride') {
       const a = it.a;
       html += `<li class="tl__item tl__item--ride ${it.must ? 'tl__item--must' : ''} ${flash?.has(a.id) ? 'is-changed' : ''} ${it.end < c.now - 5 ? 'is-past' : ''}" data-ride="${a.id}" data-drag="${a.id}"><span class="tl__time">${clock(it.start)}${mv(a.id)}</span>
         <div class="tl__card"><span class="tl__grip" data-grip="${a.id}" role="button" aria-label="${esc(a.short)} をドラッグして順番を変更">${ic(RIDE_IC)}</span>
           <button class="tl__main" data-open="${a.id}"><span class="tl__name">${jw(a.short)}${it.must ? '<span class="tag tag--must">絶対</span>' : ''}${it.over ? '<span class="tag tag--bad">閉園に間に合わない</span>' : ''}</span>
           <span class="tl__meta">${planWait(it, c.now)}<span>${ic('walk')}${it.walk}分</span><span>〜<span class="num">${clock(it.end)}</span></span></span></button>
-          <button class="tl__lock ${S.locks?.[a.id] ? 'is-on' : ''}" data-lock="${a.id}" aria-pressed="${!!S.locks?.[a.id]}" aria-label="${esc(a.short)} の位置を${S.locks?.[a.id] ? '固定中（タップで解除）' : '固定'}">${ic(S.locks?.[a.id] ? 'lock' : 'unlock')}</button>
-          ${edit ? rm(a.id, a.short) : `<button class="check" data-done="${a.id}" aria-label="${esc(a.short)} 乗った">${ic('check')}</button>`}</div></li>`;
+          ${edit ? '' : `<button class="tl__lock ${S.locks?.[a.id] ? 'is-on' : ''}" data-lock="${a.id}" aria-pressed="${!!S.locks?.[a.id]}" aria-label="${esc(a.short)} の位置を${S.locks?.[a.id] ? '固定中（タップで解除）' : '固定'}">${ic(S.locks?.[a.id] ? 'lock' : 'unlock')}</button>`}
+          ${edit ? editControls(a.id, a.short) : `<button class="check" data-done="${a.id}" aria-label="${esc(a.short)} 乗った">${ic('check')}</button>`}</div></li>`;
     } else if (it.type === 'meal' || it.type === 'show') {
       const x = it.anchor;
       const isMeal = it.type === 'meal';
@@ -1287,7 +1294,7 @@ function renderPlan() {
       html += `<li class="tl__item tl__item--${it.type} ${flash?.has(x.id) ? 'is-changed' : ''} ${x.late === 'miss' ? 'tl__item--late' : ''}" data-drag="${x.id}"><span class="tl__time">${clock(x.start)}${mv(x.id)}</span>
         <div class="tl__card"><span class="tl__grip" data-grip="${x.id}" role="button" aria-label="${esc(x.title)} をドラッグして順番を変更">${ic(isMeal ? 'food' : 'show')}</span><button class="tl__main" data-anchor-edit="${x.id}"><span class="tl__name">${jw(x.title)}${isMeal ? '' : '<span class="tag">時刻固定</span>'}${x.shifted ? '<span class="tag tag--warn">時間をずらした</span>' : ''}${lateTag}</span>
           <span class="tl__meta">${it.type === 'meal' ? `<span>${ic('food')}${esc(x.place)}</span>` : ''}<span><span class="num">${clock(x.start)}–${clock(x.end)}</span></span>${x.claim && x.late !== 'miss' ? `<span style="color:var(--red)">場所取り <span class="num">${clock(it.claimFrom ?? x.start - x.claim)}</span>〜</span>` : ''}</span></button>
-          ${edit ? rm(x.id, x.title) : `<button class="check" data-done="${x.id}" aria-label="${esc(x.title)} 完了">${ic('check')}</button>`}</div></li>`;
+          ${edit ? editControls(x.id, x.title) : `<button class="check" data-done="${x.id}" aria-label="${esc(x.title)} 完了">${ic('check')}</button>`}</div></li>`;
     } else if (it.type === 'dropped') {
       html += `<li class="tl__item tl__item--dropped"><span class="tl__time">${clock(it.start)}</span>
         <div class="tl__card"><div class="tl__main"><span class="tl__name" style="text-decoration:line-through">${esc(it.anchor.title)}</span><span class="tl__meta">絶対乗るものを優先して見送り</span></div></div></li>`;
@@ -1439,7 +1446,7 @@ let drag = null;
 function dragRows() { return [...document.querySelectorAll('#view-plan .tl--plan > li[data-drag]')]; }
 document.addEventListener('pointerdown', (e) => {
   const g = e.target.closest?.('[data-grip]');
-  if (!g || drag || (e.pointerType === 'mouse' && e.button !== 0)) return;
+  if (!R.planEdit || !g || drag || (e.pointerType === 'mouse' && e.button !== 0)) return;
   const li = g.closest('li[data-drag]');
   const rows = dragRows();
   if (!li || rows.length < 2) return;
@@ -2355,7 +2362,15 @@ document.addEventListener('click', async (e) => {
   if (d.undo) return undoDone(d.undo);
   if (d.add) { const how = d.addHow || R.addMode; closeSheet(); return addToPlan(d.add, how); }
   if (d.addMode) { R.addMode = d.addMode; return openAddSheet(); }
-  if (d.rm) return removeFromPlan(d.rm);
+  if (d.shift) {
+    if (!R.planEdit || !['-1', '1'].includes(d.step)) return;
+    const ids = planItems().filter((it) => ['ride', 'meal', 'show'].includes(it.type) && it.id).map((it) => it.id);
+    const from = ids.indexOf(d.shift), to = from + Number(d.step);
+    if (from < 0 || to < 0 || to >= ids.length) return;
+    [ids[from], ids[to]] = [ids[to], ids[from]];
+    return setOrder(ids, d.shift);
+  }
+  if (d.rm && R.planEdit) return removeFromPlan(d.rm);
   if (d.lock) {
     const id = d.lock;
     S.locks = { ...(S.locks || {}) };
