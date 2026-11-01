@@ -768,3 +768,14 @@ body.is-dragging { -webkit-user-select: none; user-select: none; cursor: grabbin
 .endcard::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 130px; background: linear-gradient(180deg, #fff 0%, rgba(255, 255, 255, 0) 45%), url(/img/park/skyline.webp) center bottom / cover no-repeat; pointer-events: none; }
 .endcard > * { position: relative; z-index: 1; }
 .endcard h2 { margin: 6px 0 4px; font-size: 22px; color: var(--navy); }
+
+/* Editing only: compact iPhone-friendly controls without changing the normal timeline. */
+.plan-edit-hint { margin: 10px 0 12px 66px; color: var(--muted); font-size: 12px; font-weight: 700; line-height: 1.6; }
+.tl--edit .tl__card { gap: 3px; }
+.tl--edit .tl__main { min-width: 0; }
+.tl__edittools { display: flex; align-items: center; gap: 3px; flex: none; }
+.tl__orderbtns { display: flex; flex-direction: column; gap: 3px; }
+.tl__orderbtns button { display: grid; place-items: center; width: 32px; height: 30px; border: 0; border-radius: 9px; background: var(--blue-l); color: var(--blue); font-size: 18px; font-weight: 800; line-height: 1; touch-action: manipulation; }
+.tl__orderbtns button:disabled { opacity: .28; }
+.tl--edit .tl__rm { width: 32px; height: 37px; }
+@media (max-width: 390px) { .tl--edit .tl__grip { width: 25px; } .tl--edit .tl__card { padding-left: 4px; padding-right: 4px; } .tl--edit .tl__edittools { gap: 2px; } .tl--edit .tl__rm { width: 29px; } }
