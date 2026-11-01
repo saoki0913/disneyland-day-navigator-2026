@@ -760,6 +760,45 @@ export const SHOWS = [
   },
 ];
 export const showById = Object.fromEntries(SHOWS.map((s) => [s.id, s]));
+// Officially listed experiences; do not assume performances on the selected date.
+export const ENTERTAINMENT = [
+  {
+    "id": "royal-hall",
+    "kind": "greeting",
+    "ja": "ディズニープリンセス（ロイヤルホール）",
+    "land": "fantasy",
+    "url": "https://disneyland.disney.go.com/o/character-experiences-at-disneyland-park.html"
+  },
+  {
+    "id": "pixie-hollow",
+    "kind": "greeting",
+    "ja": "ティンカー・ベル（ピクシー・ホロウ）",
+    "land": "fantasy",
+    "url": "https://disneyland.disney.go.com/o/character-experiences-at-disneyland-park.html"
+  },
+  {
+    "id": "mickey-main",
+    "kind": "greeting",
+    "ja": "ミッキーとミニー（メインストリート）",
+    "land": "main",
+    "url": "https://disneyland.disney.go.com/en-ca/events-tours/mickey-and-minnie/"
+  },
+  {
+    "id": "paint-night",
+    "kind": "parade",
+    "ja": "ペイント・ザ・ナイト（2026シーズン終了）",
+    "land": "main",
+    "url": "https://disneyland.disney.go.com/entertainment/disneyland/paint-the-night-parade/"
+  },
+  {
+    "id": "magic-happens",
+    "kind": "parade",
+    "ja": "マジック・ハプンズ（再開日未定）",
+    "land": "main",
+    "url": "https://disneyland.disney.go.com/entertainment/disneyland/parades/"
+  }
+];
+
 
 // ---------------------------------------------------------------------------
 // Plans. Times are minutes from midnight (park local time).

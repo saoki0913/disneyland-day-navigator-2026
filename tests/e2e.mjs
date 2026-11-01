@@ -309,11 +309,11 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
   });
   await step('Explore: filters/sort work and refurb closure is shown', async () => {
     await page.click('[data-act="explore-filters"]');
-    await page.click('[data-xf="down"]'); await page.waitForTimeout(150);
+    await page.click('#view-explore [data-act="explore-filters"]'); await page.click('#sheet [data-filter-kind="down"]'); await page.click('#sheet [data-act="filters-apply"]'); await page.waitForTimeout(150);
     const t = await page.textContent('#view-explore .rows');
     assert.match(t, /スモールワールド|スモール・?ワールド|スモールワールド|イッツ・ア・スモールワールド/);
     assert.match(t, /リニューアル休止/);
-    await page.click('[data-xf="all"]');
+    await page.click('#view-explore [data-act="explore-filters"]'); await page.click('#sheet [data-filter-kind="all"]'); await page.click('#sheet [data-act="filters-apply"]');
     await page.selectOption('[data-xsort]', 'wait'); await page.waitForTimeout(150);
     const waits = await page.$$eval('#view-explore .row__wait b', (b) => b.map((x) => parseInt(x.textContent)));
     for (let i = 1; i < waits.length; i++) assert.ok(waits[i] >= waits[i - 1]);
@@ -427,9 +427,11 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
   await step('All attractions are listed (e.g. くまのプーさん) and can be added to the plan', async () => {
     await tab(page, 'explore');
     await page.click('[data-xtab="rides"]'); await page.waitForTimeout(150);
-    if (!(await page.locator('[data-xf="all"]').isVisible())) await page.click('[data-act="explore-filters"]');
-    await page.click('[data-xf="all"]'); await page.waitForTimeout(150);
+    await page.click('#view-explore [data-act="explore-filters"]'); await page.click('#sheet [data-filter-kind="all"]'); await page.click('#sheet [data-act="filters-apply"]'); await page.waitForTimeout(150);
     assert.equal(await page.locator('#view-explore [data-open="pooh"]').count(), 1, 'Pooh listed');
+    await page.click('[data-xtab="greetings"]'); assert.ok(await page.locator('[data-open-ent]').count() >= 3);
+    await page.click('[data-xtab="parades"]'); assert.ok(await page.locator('[data-open-ent]').count() >= 1);
+    await page.click('[data-xtab="rides"]');
     await page.click('#view-explore [data-open="pooh"]'); await page.waitForTimeout(200);
     assert.match(await page.textContent('#sheet'), /プーさん/);
     await page.click('#sheet [data-add="pooh"][data-add-how="best"]'); await page.waitForTimeout(300);

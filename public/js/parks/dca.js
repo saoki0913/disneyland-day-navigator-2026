@@ -375,6 +375,45 @@ export const SHOWS = [
   },
 ];
 export const showById = Object.fromEntries(SHOWS.map((s) => [s.id, s]));
+// Officially listed experiences; do not assume performances on the selected date.
+export const ENTERTAINMENT = [
+  {
+    "id": "pixar-pals",
+    "kind": "greeting",
+    "ja": "ピクサーの仲間たち（ピクサー・ピア）",
+    "land": "pixar",
+    "url": "https://disneyland.disney.go.com/en_CA/entertainment/disney-california-adventure/character-meet-pixar-pals-pixar-pier/"
+  },
+  {
+    "id": "bvs-pals",
+    "kind": "greeting",
+    "ja": "ディズニーの仲間たち（ブエナビスタ）",
+    "land": "bvs",
+    "url": "https://disneyland.disney.go.com/entertainment/disney-california-adventure/"
+  },
+  {
+    "id": "cars-pals",
+    "kind": "greeting",
+    "ja": "カーズの住人たち",
+    "land": "cars",
+    "url": "https://disneyland.disney.go.com/entertainment/disney-california-adventure/"
+  },
+  {
+    "id": "avengers",
+    "kind": "greeting",
+    "ja": "スーパーヒーロー（アベンジャーズ・キャンパス）",
+    "land": "avengers",
+    "url": "https://disneyland.disney.go.com/o/character-experiences-at-disney-california-adventure-park.html"
+  },
+  {
+    "id": "happy-holidays",
+    "kind": "parade",
+    "ja": "ミッキーのハッピー・ホリデーズ（季節限定）",
+    "land": "bvs",
+    "url": "https://disneyland.disney.go.com/entertainment/disney-california-adventure/"
+  }
+];
+
 
 // ---------------------------------------------------------------------------
 // Plans (minutes from midnight). しおり：12:00 お昼 / 18:30 ご褒美ディナー / 21:00 閉園

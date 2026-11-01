@@ -1,5 +1,5 @@
 import {
-  TRIP, LANDS, landById, ATTRACTIONS, attractionById, RESTAURANTS, restaurantById, POPCORN, SHOWS, showById, PLANS, PRIORITY,
+  TRIP, LANDS, landById, ATTRACTIONS, attractionById, RESTAURANTS, restaurantById, POPCORN, SHOWS, showById, ENTERTAINMENT, PLANS, PRIORITY,
   PARK, PARK_ID, PARKS, PARK_ORDER, PARK_STORE,
 } from './data.js';
 import {
@@ -39,7 +39,7 @@ const defaults = {
   lastSuggestionAt: 0, // suppress unsolicited repeat proposals for 10 minutes
   planSnap: null,      // the saved plan: { at, base, items, waiting, missingMust } — changes only on 更新 / 乗った / edits
   a2hsDismissed: false,
-  exploreTab: 'rides', exploreFilter: 'all', exploreSort: 'reco', foodFilter: 'all', foodQ: '', rideQ: '',
+  exploreTab: 'rides', exploreFilter: 'all', exploreSort: 'reco', foodFilter: 'all', rideLand: 'all', foodLand: 'all', foodQ: '', rideQ: '',
   mapFilter: 'rides',
   tab: 'home',
   cfg: { date: null, entry: null, exit: null }, // this park's trip date / entry / exit (minutes); null → plan/API value
@@ -88,7 +88,7 @@ const R = {
   hist: {},            // { rideId: [[min, wait|null], ...] } today's observed waits (this device)
   alerts: [],          // [{ id, type:'reopen'|'drop', from, to, at }]
   noteSeen: new Set(), // notices already shown once as a snackbar
-  progOpen: false, planEdit: false, addMode: 'best', exploreFiltersOpen: false,
+  progOpen: false, planEdit: false, addMode: 'best', filterDraft: null,
 };
 try {
   const c = JSON.parse(localStorage.getItem(KEY + ':live') || 'null');
@@ -1713,16 +1713,16 @@ function applyPlanDraftProposal() {
 function renderExplore() {
   const el = $('#view-explore');
   const tab = S.exploreTab;
-  const xtabs = [['rides', '乗り物'], ['food', '食事'], ['shows', 'ショー'], ...(PARK.limitedTab ? [['halloween', PARK.limitedTab]] : [])];
+  const xtabs = [['rides', '乗り物'], ['food', '食事'], ['shows', 'ショー'], ['parades', 'パレード'], ['greetings', 'グリーティング'], ...(PARK.limitedTab ? [['halloween', PARK.limitedTab]] : [])];
   if (!xtabs.some(([k]) => k === tab)) { S.exploreTab = 'rides'; return renderExplore(); }
-  let html = `<div class="seg" role="tablist">${xtabs.map(([k, n]) => `<button class="${tab === k ? 'is-active' : ''}" data-xtab="${k}" role="tab" aria-selected="${tab === k}">${n}</button>`).join('')}</div>`;
+  let html = `<div class="seg explore-tabs" role="tablist">${xtabs.map(([k, n]) => `<button class="${tab === k ? 'is-active' : ''}" data-xtab="${k}" role="tab" aria-selected="${tab === k}">${n}</button>`).join('')}</div>`;
   const c = ctx();
   if (tab === 'rides') {
     const filters = [['all', 'すべて'], ['todo', '未体験'], ['short', '30分以下'], ['japan', '日本にない'], ['done', '体験済み'], ['down', '休止中']];
     const q = S.rideQ || '';
     html += `<label class="fsearch">${ic('search')}<input id="rideQ" type="search" enterkeyhint="search" autocomplete="off" placeholder="アトラクションを検索" value="${esc(q)}" aria-label="アトラクションを検索">${q ? `<button type="button" data-rq="" aria-label="消す">${ic('x')}</button>` : ''}</label>`;
-    html += `${R.exploreFiltersOpen || S.exploreFilter !== "all" ? `<div class="chips">${filters.map(([k,n]) => `<button class="chip ${S.exploreFilter === k ? "is-active" : ""}" data-xf="${k}">${n}</button>`).join("")}</div>` : ""}`;
-    html += `<div class="sortrow"><button class="filter-toggle" data-act="explore-filters" aria-expanded="${R.exploreFiltersOpen}">${ic("sliders")}絞り込み${S.exploreFilter !== "all" ? " · 設定中" : ""}</button><span id="xcount"></span><select data-xsort aria-label="並べ替え">${[['reco', 'おすすめ順'], ['wait', '待ち時間の短い順'], ['dist', '近い順'], ['pop', '人気順'], ['thrill', 'スリル順']].map(([k, n]) => `<option value="${k}" ${S.exploreSort === k ? 'selected' : ''}>${n}</option>`).join('')}</select></div>`;
+
+    html += `<div class="sortrow"><button class="filter-toggle" data-act="explore-filters" >${ic("sliders")}絞り込み${S.exploreFilter !== "all" || S.rideLand !== "all" ? " · 適用中" : ""}</button><span id="xcount"></span><select data-xsort aria-label="並べ替え">${[['reco', 'おすすめ順'], ['wait', '待ち時間の短い順'], ['dist', '近い順'], ['pop', '人気順'], ['thrill', 'スリル順']].map(([k, n]) => `<option value="${k}" ${S.exploreSort === k ? 'selected' : ''}>${n}</option>`).join('')}</select></div>`;
     html += `<div id="rideList"></div>`;
     el.innerHTML = html;
     renderRideList(c);
@@ -1733,10 +1733,15 @@ function renderExplore() {
     html += `<label class="fsearch">${ic('search')}<input id="foodQ" type="search" enterkeyhint="search" autocomplete="off" placeholder="食べたいもの（例：チキン、アイス、コーヒー）" value="${esc(q)}" aria-label="食べたいもので探す">${q ? `<button type="button" data-fq="" aria-label="消す">${ic('x')}</button>` : ''}</label>`;
     html += `<div class="chips chips--quick">${["ポップコーン", "チュロス", "アイス", "ドリンク"].map((w) => `<button class="chip ${q === w ? "is-active" : ""}" data-fq="${w}">${w}</button>`).join("")}</div>`;
     const filters = [['all', 'すべて'], ['meal', '食事'], ['sweets', 'スイーツ'], ['snack', '軽食'], ['mobile', 'モバイルオーダー'], ...(PARK.limitedTab ? [['halloween', '限定あり']] : [])];
-    html += `<button class="filter-toggle" data-act="explore-filters" aria-expanded="${R.exploreFiltersOpen}">${ic("sliders")}絞り込み${S.foodFilter !== "all" ? " · 設定中" : ""}</button>${R.exploreFiltersOpen || S.foodFilter !== "all" ? `<div class="chips">${filters.map(([k,n]) => `<button class="chip ${S.foodFilter === k ? "is-active" : ""}" data-ff="${k}">${n}</button>`).join("")}</div>` : ""}`;
+    html += `<button class="filter-toggle" data-act="explore-filters">${ic('sliders')}絞り込み${S.foodFilter !== 'all' || S.foodLand !== 'all' ? ' · 適用中' : ''}</button>`;
     html += `<div id="foodList">${foodListHtml(c)}</div>`;
     el.innerHTML = html;
     return;
+  }
+  if (tab === 'parades' || tab === 'greetings') {
+    const entries = ENTERTAINMENT.filter((e) => e.kind === (tab === 'parades' ? 'parade' : 'greeting'));
+    html += `<p class="explore-note">登場・上演の有無と時間は公式アプリで確認</p><div class="card rows">${entries.map((e) => `<button class="row" data-open-ent="${e.id}"><span class="row__body"><span class="row__k">${e.kind === 'parade' ? 'パレード' : 'グリーティング'} · ${esc(landById[e.land]?.ja || '')}</span><span class="row__name">${jw(e.ja)}</span></span><span class="row__chev">${ic('chev')}</span></button>`).join('')}</div>`;
+    el.innerHTML = html; return;
   }
   if (tab === 'shows') {
     const an = c.anchors.filter((a) => a.kind === 'show' && !a.done && a.end > c.now);
@@ -1787,6 +1792,7 @@ function renderRideList(c = ctx()) {
   const box = $('#rideList'); if (!box) return;
   let list = ATTRACTIONS.map((a) => ({ a, w: waitInfo(a), walk: walkMin(c.pos, coordsOf(a.id)), d: c.pos ? distanceM(c.pos, coordsOf(a.id)) : null }));
   const f = S.exploreFilter;
+  if (S.rideLand !== 'all') list = list.filter(({a}) => a.land === S.rideLand);
   list = list.filter(({ a, w }) => f === 'all'
     || (f === 'short' && w.wait != null && w.wait <= 30)
     || (f === 'todo' && !S.done[a.id]) || (f === 'done' && S.done[a.id])
@@ -1816,6 +1822,23 @@ function renderRideList(c = ctx()) {
       <span class="row__chev">${ic('chev')}</span></button>`;
   }).join('') || '<div class="empty">該当なし</div>'}</div>`;
   $('#xcount').textContent = `${list.length}件`;
+}
+
+function openExploreFilters() {
+  const food = S.exploreTab === 'food';
+  if (!R.filterDraft || R.filterDraft.tab !== S.exploreTab) R.filterDraft = {tab:S.exploreTab, kind:food ? S.foodFilter : S.exploreFilter, land:food ? S.foodLand : S.rideLand};
+  const d=R.filterDraft;
+  const filters=food ? [['all','すべて'],['meal','食事'],['sweets','スイーツ'],['snack','軽食'],['mobile','モバイルオーダー']] : [['all','すべて'],['todo','未体験'],['short','30分以下'],['japan','日本にない'],['done','体験済み'],['down','休止中']];
+  openSheet(`<div class="sheet__content filter-sheet"><h2 class="sheet__title" id="sheetTitle">絞り込み</h2>
+    <div class="field"><div class="field__h"><b>条件</b></div><div class="filter-options">${filters.map(([id,n]) => `<button class="chip ${d.kind===id?'is-active':''}" data-filter-kind="${id}" aria-pressed="${d.kind===id}">${n}</button>`).join('')}</div></div>
+    <label class="field"><div class="field__h"><b>エリア</b></div><select data-filter-land><option value="all">すべて</option>${LANDS.map((l)=>`<option value="${l.id}" ${d.land===l.id?'selected':''}>${esc(l.ja)}</option>`).join('')}</select></label>
+    <div class="btnrow"><button class="btn" data-act="filters-reset">リセット</button><button class="btn btn--primary" data-act="filters-apply">表示する</button></div></div>`,{keepScroll:true});
+}
+function openEntertainment(id) {
+  const e=ENTERTAINMENT.find((x)=>x.id===id); if(!e)return;
+  openSheet(`<div class="sheet__content"><div class="kicker">${e.kind==='parade'?'パレード':'グリーティング'} · ${esc(landById[e.land]?.ja||'')}</div><h2 class="sheet__title" id="sheetTitle">${jw(e.ja)}</h2>
+    <p class="para">登場・開催時間は日によって変わります。現地の公式情報で確認してください。</p>
+    <a class="btn btn--primary btn--block" href="${esc(e.url)}" target="_blank" rel="noopener">公式情報</a></div>`);
 }
 
 // ---------- food search: "what do I want to eat" → shops nearest to me first ----------
@@ -1851,6 +1874,7 @@ function foodSearch(q, pos) {
   const f = S.foodFilter;
   const out = [];
   for (const r of RESTAURANTS) {
+    if (S.foodLand !== 'all' && r.land !== S.foodLand) continue;
     if (!(f === 'all' || (f === 'meal' && (r.kind === 'meal' || r.kind === 'cafe')) || (f === 'sweets' && (r.kind === 'sweets' || r.kind === 'cafe')) || (f === 'snack' && r.kind === 'snack') || (f === 'mobile' && r.mobile === 'yes') || (f === 'halloween' && r.halloween.length))) continue;
     const ix = foodIndex.get(r.id);
     if (terms.length && !terms.every((alts) => alts.some((a) => ix.all.includes(a)))) continue;
@@ -2352,6 +2376,8 @@ document.addEventListener('click', async (e) => {
   if (d.open) return openAttraction(d.open);
   if (d.openFood) return openFood(d.openFood);
   if (d.openShow) return openShow(d.openShow);
+  if (d.openEnt) return openEntertainment(d.openEnt);
+  if (d.filterKind && R.filterDraft) { R.filterDraft.kind=d.filterKind; return openExploreFilters(); }
   if (d.done) return markDone(d.done);
   if (d.undo) return undoDone(d.undo);
   if (d.add) { const how = d.addHow || R.addMode; closeSheet(); return addToPlan(d.add, how); }
@@ -2506,7 +2532,9 @@ document.addEventListener('click', async (e) => {
     case 'day-save': return saveDaySettings();
     case 'day-reset': return setDay({ ...S.cfg, entry: null, exit: null }, '開園〜閉園に戻す');
     case 'plan-add': return openAddSheet();
-    case 'explore-filters': R.exploreFiltersOpen = !R.exploreFiltersOpen; return renderExplore();
+    case 'explore-filters': R.filterDraft=null; return openExploreFilters();
+    case 'filters-reset': if(R.filterDraft) { R.filterDraft.kind='all'; R.filterDraft.land='all'; } return openExploreFilters();
+    case 'filters-apply': { const f=R.filterDraft; if(!f)return; if(f.tab==='food'){S.foodFilter=f.kind;S.foodLand=f.land;}else{S.exploreFilter=f.kind;S.rideLand=f.land;}R.filterDraft=null;save();closeSheet();return renderExplore(); }
     case 'sync-paused': syncPaused(); return renderAll();
     case 'plan-edit-order': R.planEdit = true; return renderPlan();
     case 'plan-edit-done': R.planEdit = false; return renderPlan();
@@ -2545,6 +2573,7 @@ document.addEventListener('change', (e) => {
   const t = e.target;
   const d = t.dataset;
   if (d.xsort !== undefined) { S.exploreSort = t.value; save(); renderExplore(); }
+  if (d.filterLand !== undefined && R.filterDraft) { R.filterDraft.land=t.value; return; }
   if (d.gpsToggle !== undefined) { if (t.checked) startGPS(true); else stopGPS(); setTimeout(() => { if (!$('#sheet').hidden) openSettings(); }, 50); }
   if (R.draft) {
     const D = R.draft;

@@ -834,3 +834,9 @@ body.is-dragging { -webkit-user-select: none; user-select: none; cursor: grabbin
 .sheet__content .btnrow .btn{min-width:0;white-space:normal;line-height:1.2;padding-inline:8px;text-align:center;}
 .sheet__content .sheet__title{overflow-wrap:anywhere;}
 @media(max-width:390px){.sheet__content .stats{gap:0;padding:7px 0;}.sheet__content .stat{padding-inline:2px;}.sheet__content .stat__v{font-size:23px;}.sheet__content .stat__k{font-size:10px;gap:2px;}.actionbar .act{font-size:12px;}.next__title{font-size:21px;}}
+
+.explore-tabs{display:flex;overflow-x:auto;scrollbar-width:none;scroll-snap-type:x proximity;}
+.explore-tabs button{flex:0 0 auto;min-width:79px;padding:0 10px;scroll-snap-align:start;}
+.filter-sheet .filter-options{display:flex;flex-wrap:wrap;gap:7px;}
+.filter-sheet .chip.is-active{color:#fff;background:#205cb4;}
+.explore-note{color:var(--muted);font-size:12px;margin:0;line-height:1.4;}
