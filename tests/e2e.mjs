@@ -156,6 +156,8 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.ok((await page.textContent('.tl__item--now')).trim().length <= 30, 'no explanatory text in the plan header');
     assert.equal(await page.locator('.replan__hint, .replan__uses').count(), 0);
     assert.match(await page.textContent('.replan [data-act="replan"]'), /作り直す/);
+    assert.equal(await page.locator('.tl--plan .tl__grip').count(), 0, 'no decorative icon or handle in normal plan');
+    assert.equal(await page.locator('.tl--plan .tl__orderbtns').count(), 0, 'no arrow controls');
   });
   await step('Plan: drag & drop changes the ride order (and the home "next")', async () => {
     await tab(page, 'plan');
@@ -306,6 +308,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.screenshot({ path: `${SHOTS}/05-explore.png`, fullPage: true });
   });
   await step('Explore: filters/sort work and refurb closure is shown', async () => {
+    await page.click('[data-act="explore-filters"]');
     await page.click('[data-xf="down"]'); await page.waitForTimeout(150);
     const t = await page.textContent('#view-explore .rows');
     assert.match(t, /スモールワールド|スモール・?ワールド|スモールワールド|イッツ・ア・スモールワールド/);
@@ -316,6 +319,9 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     for (let i = 1; i < waits.length; i++) assert.ok(waits[i] >= waits[i - 1]);
     await page.click('[data-xtab="food"]'); await page.waitForTimeout(150);
     assert.ok(await page.locator('[data-open-food]').count() >= 10);
+    await page.fill('#foodQ', 'ポップコーン'); await page.waitForTimeout(150);
+    assert.ok(await page.locator('[data-open-food^="popcart-"]').count() >= 5, 'popcorn cart locations searchable');
+    await page.fill('#foodQ', '');
     await page.screenshot({ path: `${SHOTS}/06-food.png`, fullPage: true });
     await page.click('[data-xtab="halloween"]'); await page.waitForTimeout(150);
     assert.match(await page.textContent('#view-explore'), /ヴァンパイア・ミッキー/);
@@ -389,15 +395,12 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.ok((await rides()).includes(victim), 'added back');
     assert.match(await page.textContent('#toast'), /追加しました/);
     await page.click('[data-act="plan-edit-order"]'); await page.waitForTimeout(100);
-    // iPhone-friendly ↑↓ controls must reorder the saved sequence and remain reversible.
+    // Editing shows a drag handle and removal button; no crowded ↑↓ arrow controls.
     const editable = () => page.locator('.tl--plan > li[data-drag]').evaluateAll((els) => els.map((e) => e.dataset.drag));
     const original = await editable();
     assert.ok(original.length >= 3, 'enough stops to reorder');
-    const moving = original[1];
-    await page.click(`[data-shift="${moving}"][data-step="1"]`);
-    assert.deepEqual(await editable(), [original[0], original[2], original[1], ...original.slice(3)], 'down arrow swaps adjacent stops');
-    await page.click(`[data-shift="${moving}"][data-step="-1"]`);
-    assert.deepEqual(await editable(), original, 'up arrow restores the exact sequence');
+    assert.equal(await page.locator('[data-shift]').count(), 0, 'edit mode uses drag instead of arrows');
+    assert.ok(await page.locator('[data-grip]').count() >= 3, 'drag handles are available');
     // drag dinner up above the ride before it → dinner gets earlier
     const dinnerT = async () => page.textContent('.tl--plan > li[data-drag="meal:dinner"] .tl__time');
     const toMin = (t) => { const [h, m] = t.replace(/[^\d:]/g, '').split(':').map(Number); return h * 60 + m; };
@@ -424,6 +427,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
   await step('All attractions are listed (e.g. くまのプーさん) and can be added to the plan', async () => {
     await tab(page, 'explore');
     await page.click('[data-xtab="rides"]'); await page.waitForTimeout(150);
+    if (!(await page.locator('[data-xf="all"]').isVisible())) await page.click('[data-act="explore-filters"]');
     await page.click('[data-xf="all"]'); await page.waitForTimeout(150);
     assert.equal(await page.locator('#view-explore [data-open="pooh"]').count(), 1, 'Pooh listed');
     await page.click('#view-explore [data-open="pooh"]'); await page.waitForTimeout(200);
@@ -976,7 +980,8 @@ for (const [t, expect, file] of [['07:00', /開園/, '11-preopen'], ['11:28', /�
     const h = await page.evaluate(() => window.__dlnavi.hours());
     assert.equal(h.open, 540); assert.equal(h.close, 1200);
     assert.match(await page.textContent('.dayrow'), /入園9:00.*退園20:00/);
-    assert.match(await page.textContent('#view-plan'), /ワールド・オブ・カラー（20:30） は退園後/);
+    assert.doesNotMatch(await page.textContent('#view-plan'), /ワールド・オブ・カラー.*退園後/, 'no persistent after-exit banner');
+    assert.equal(await page.locator('[data-drag="show:worldofcolor"]').count(), 0, 'show after explicit exit is omitted');
     const mins = await planTimes();
     assert.ok(mins.length && mins.every((m) => m < 1200), `timeline before 20:00: ${mins}`);
     // tapping the active park in the header opens the same sheet
