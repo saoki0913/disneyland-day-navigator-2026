@@ -2584,7 +2584,7 @@ if (!S.share && !S.shareAdopted) {
   }
   S.shareAdopted = true; save();
 }
-document.title = `${dateLabel()} ${PARK.short} Day Navi`;
+document.title = `${dateLabel()} ${PARK.short} | Park Navi`;
 renderParkSwitch();
 measure();
 addEventListener('resize', measure);

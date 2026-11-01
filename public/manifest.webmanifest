@@ -1,13 +1,25 @@
 {
-  "name": "Disneyland Resort Day Navi",
-  "short_name": "Disney Navi",
+  "name": "Park Navi | Disneyland Resort",
+  "short_name": "Park Navi",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f3e8d0",
-  "theme_color": "#1d2747",
+  "background_color": "#eef5ff",
+  "theme_color": "#0769d5",
   "icons": [
-    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" },
-    { "src": "/icon-180.png", "sizes": "180x180", "type": "image/png" },
-    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+    {
+      "src": "/icon-180.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
   ]
 }
