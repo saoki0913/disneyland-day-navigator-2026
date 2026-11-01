@@ -582,10 +582,10 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.deepEqual(await rides(), before);
     assert.match(await page.textContent('#toast'), /再開/);
   });
-  await step('Trend: history recorded → sparkline in list + chart in detail', async () => {
+  await step('Trend: no sparkline in search; full trend only in details', async () => {
     await tab(page, 'explore');
     await page.click('[data-xtab="rides"]'); await page.waitForTimeout(150);
-    assert.ok(await page.locator('#view-explore .spark').count() >= 5);
+    assert.equal(await page.locator('#view-explore .spark').count(), 0, 'the search list should stay compact');
     await page.click('#view-explore [data-open="space"]'); await page.waitForTimeout(250);
     assert.equal(await page.locator('.bigspark svg').count(), 1);
     await page.locator('.bigspark svg').scrollIntoViewIfNeeded();
