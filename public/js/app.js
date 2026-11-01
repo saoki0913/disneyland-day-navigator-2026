@@ -36,6 +36,7 @@ const defaults = {
   pin: null,           // { id, until } destination chosen from an alert
   order: null,         // [rideId, ...] ride order chosen by drag & drop on the plan (null → recommended order)
   locks: {},           // { rideId: true } rides locked in place (kept even when the plan is re-optimised)
+  lastSuggestionAt: 0, // suppress unsolicited repeat proposals for 10 minutes
   planSnap: null,      // the saved plan: { at, base, items, waiting, missingMust } — changes only on 更新 / 乗った / edits
   a2hsDismissed: false,
   exploreTab: 'rides', exploreFilter: 'all', exploreSort: 'reco', foodFilter: 'all', foodQ: '', rideQ: '',
@@ -246,7 +247,7 @@ async function fetchLive({ manual = false } = {}) {
     if (manual) toast(j.stale ? '最新取得に失敗：前回の値を表示中' : `待ち時間を更新しました（${j.sourceLabel}）`, j.stale ? 'error' : 'ok');
     if (!j.stale && R.firstAuto && S.planSnap?.why === '初回' && !doneRides().length) { R.firstAuto = false; buildPlan('初回'); }
     R.firstAuto = false;
-    if (!j.stale) { syncPaused(); checkSuggest(); }
+    if (!j.stale) { syncPaused(); if (R.alerts.some((x) => nowMin() - x.at < 1)) checkSuggest({ trigger: 'significant' }); }
     R.livePrimed = true;
   } catch (e) {
     R.liveStatus = 'error';
@@ -582,10 +583,10 @@ function markDone(id) {
   if (S.planTime && !S.sim && laParts().date === tripDate()) S.planTime = null;
   if (S.gps) requestFix({ force: true });
   // the order stays as it is; only the times after it are recalculated (a better order → suggestion card)
-  relayout('乗った'); checkSuggest();
+  relayout('乗った'); checkSuggest({ trigger: 'completed' });
   renderAll();
   // Fresh waits for the re-plan (the edge cache makes this cheap); time it again with them.
-  if (Date.now() - R.liveReceivedAt > 60e3 && shouldPoll()) fetchLive().then(() => { if (S.done[id]) { relayout('乗った'); checkSuggest(); renderAll(); } });
+  if (Date.now() - R.liveReceivedAt > 60e3 && shouldPoll()) fetchLive().then(() => { if (S.done[id]) { relayout('乗った'); renderAll(); } });
   const n = doneRides().length;
   toast(`${doneName(id)} 完了${attractionById[id] ? `（${n}つ目）` : ''}`, 'ok', { label: '取り消す', fn: () => undoDone(id, true) });
 }
@@ -1072,8 +1073,10 @@ function markMoves(before, after) {
   if (R.moves) R.flash = { at: Date.now(), ids: new Set(Object.keys(map)) };
 }
 // A clearly better order (≥ 15 min less walking/waiting) is OFFERED, never applied on its own.
-const SUGGEST_MIN = 15;
-function checkSuggest() {
+const SUGGEST_MIN = 20;
+function checkSuggest({ trigger = 'manual' } = {}) {
+  // Do not display automatic suggestions from opening a tab, GPS or routine polling.
+  if (trigger === 'significant' && (Date.now() - (S.lastSuggestionAt || 0) < 10 * 60e3)) return;
   R.suggest = null;
   if (!S.planSnap?.items || R.dragging || R.planEdit) return;
   const c = ctx({ order: null, orderReason: null });
@@ -1090,7 +1093,7 @@ function checkSuggest() {
   if (gain < SUGGEST_MIN && !fixes) return suggestAdditions(c, cur);
   const sig = o.seq.filter((x) => !S.done[x]).join();
   if (S.suggestOff === sig) return suggestAdditions(c, cur);
-  R.suggest = { seq: o.seq, from: cur, gain, fixes, sig };
+  R.suggest = { seq: o.seq, from: cur, gain, fixes, sig }; S.lastSuggestionAt = Date.now(); save();
 }
 // 2) free time that rides could fill (e.g. a planned ride paused): offer to ADD them — nothing is removed
 function suggestAdditions(c, cur) {
@@ -1100,7 +1103,7 @@ function suggestAdditions(c, cur) {
   const added = add.seq.filter((id) => attractionById[id] && !cur.includes(id));
   if (!added.length) return;
   const sig = 'add:' + add.seq.filter((x) => !S.done[x]).join();
-  if (S.suggestOff !== sig) R.suggest = { seq: add.seq, from: cur, gain: 0, added, sig };
+  if (S.suggestOff !== sig && (Date.now() - (S.lastSuggestionAt || 0) >= 10 * 60e3)) { R.suggest = { seq: add.seq, from: cur, gain: 0, added, sig }; S.lastSuggestionAt = Date.now(); save(); }
 }
 function applySuggest() {
   const sg = R.suggest; if (!sg) return;
@@ -1125,26 +1128,9 @@ function suggestLayouts(sg) {
   };
 }
 function suggestCard() {
-  const sg = R.suggest; if (!sg) return '';
-  const L = suggestLayouts(sg);
-  const curIds = L.cur.map((i) => i.id);
-  if (sg.added?.length) {
-    const at = (id) => L.nxt.find((i) => i.id === id)?.start;
-    return `<div class="card sugg" role="status"><button class="sugg__open" data-act="suggest-preview" aria-label="追加案を見る">
-      <span class="sugg__gain">${ic('plus')}<b class="num">${sg.added.length}</b></span>
-      <span class="sugg__seq">${sg.added.slice(0, 2).map((id) => `<span class="sugg__chip">${esc(itemLabel(id))}</span>${at(id) != null ? `<span class="sugg__t num">${clock(at(id))}</span>` : ''}`).join('')}<span class="sugg__t">空き時間に追加</span></span>
-      <span class="sugg__go">${ic('chev')}</span></button>
-      <button class="alert__x" data-act="suggest-off" aria-label="追加しない">${ic('x')}</button></div>`;
-  }
-  // the item that jumps furthest forward is what the suggestion is "about"
-  const first = L.nxt.map((i, k) => ({ i, d: curIds.indexOf(i.id) - k + (i.type === 'ride' ? 0.5 : 0) })).filter((x) => x.d > 0.5).sort((x, y) => y.d - x.d)[0]?.i;
-  const t0 = first && L.startOf[first.id], t1 = first && (first.type === 'ride' ? first.start : first.anchor.start);
-  const gain = sg.gain >= 1 ? `<b class="num">−${sg.gain}</b><small>分</small>` : ic('check');
-  return `<div class="card sugg" role="status"><button class="sugg__open" data-act="suggest-preview" aria-label="変更後のプランを見る">
-    <span class="sugg__gain">${ic('refresh')}${gain}</span>
-    <span class="sugg__seq">${first ? `<span class="mv mv--up">↑</span><span class="sugg__chip">${esc(itemLabel(first.id))}</span>${t0 != null ? `<span class="sugg__t num"><s>${clock(t0)}</s>${ic('chev')}${clock(t1)}</span>` : ''}` : ''}</span>
-    <span class="sugg__go">${ic('chev')}</span></button>
-    <button class="alert__x" data-act="suggest-off" aria-label="今の順番のまま">${ic('x')}</button></div>`;
+  if (!R.suggest) return '';
+  // Never reveal the next ride, its timing or the user's likely destination without a tap.
+  return `<div class="sugg-quiet"><button class="filter-toggle" data-act="suggest-preview">${ic('spark')}プランの改善案を見る${ic('chev')}</button><button class="sugg-quiet__dismiss" data-act="suggest-off" aria-label="提案を閉じる">${ic('x')}</button></div>`;
 }
 // Preview: the proposed timeline, with what moves and how the times change.
 function openSuggestPreview() {
@@ -2409,7 +2395,7 @@ document.addEventListener('click', async (e) => {
   if (d.rq !== undefined) { S.rideQ = ''; save(); return renderExplore(); }
   if (d.fq !== undefined) { S.foodQ = S.foodQ === d.fq ? '' : d.fq; save(); return renderExplore(); }
   if (d.mf) { S.mapFilter = d.mf; save(); document.querySelectorAll('[data-mf]').forEach((b) => b.classList.toggle('is-active', b.dataset.mf === d.mf)); return renderMap(); }
-  if (d.land) { S.land = d.land; S.landAt = Date.now(); save(); if (S.planSnap?.items) checkSuggest(); renderAll(); return toast(landById[d.land].ja, 'ok'); }
+  if (d.land) { S.land = d.land; S.landAt = Date.now(); save(); renderAll(); return toast(landById[d.land].ja, 'ok'); }
   if (d.rideSt) {
     const id = d.rideSt, must = mustMap();
     delete must[id]; delete S.excluded[id];

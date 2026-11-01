@@ -810,3 +810,27 @@ body.is-dragging { -webkit-user-select: none; user-select: none; cursor: grabbin
 .act--route { background: rgba(38,102,190,.88); color: #fff; border-color: rgba(255,255,255,.6); box-shadow: 0 3px 12px rgba(18,77,157,.15); }
 .act:active, .btn:active, .check:active { transform: scale(.985); }
 @media (prefers-reduced-transparency: reduce) { .act { -webkit-backdrop-filter: none; backdrop-filter: none; } .act--done { background: #e4f1ff; } .act--alt { background: #fff; } .act--route { background: #2468b7; } }
+
+/* Details use ink on white, independently of the white-on-blue home stat. */
+.sheet__content .stats{width:100%;background:#edf4fc;border:1px solid #d9e5f3;color:#162e51;box-sizing:border-box;}
+.sheet__content .stats .stat__k,.sheet__content .stats .stat__v,.sheet__content .stats .stat__v small{color:#162e51;opacity:1;}
+.sheet__content .stats .stat__v .is-good{color:#08734b;}
+.sheet__content .stats .stat__v .is-mid{color:#845300;}
+.sheet__content .stats .stat__v .is-bad{color:#a22d37;}
+.sheet__content .stats .stat__src .tag--live{background:#c9f4df;color:#0b6643;}
+.sheet__content .stats .stat__src .tag--manual{background:#fff0c5;color:#735200;}
+.sheet__content .stats .stat__src .tag--est{background:#dbe8f5;color:#405779;}
+.sheet__content .stat+.stat{border-left-color:#d9e5f3;}
+.next .stats{color:#fff;}
+.actionbar{gap:6px;}
+.actionbar .act{height:43px;font-size:12.5px;font-weight:700;min-width:0;padding-inline:4px;box-shadow:none;}
+.actionbar .act--done{background:#e5f1ff;color:#1559aa;border:1px solid #cfddf1;flex:1.3;}
+.actionbar .act--alt,.actionbar .act--route{background:rgba(255,255,255,.96);color:#173967;border:1px solid #d9e4f1;}
+.actionbar .act .ico{width:15px;height:15px;}
+.sugg-quiet{display:flex;align-items:center;gap:6px;justify-content:flex-start;}
+.sugg-quiet .filter-toggle{font-size:12px;min-height:32px;}
+.sugg-quiet__dismiss{width:28px;height:28px;display:grid;place-items:center;border-radius:50%;color:var(--muted);background:rgba(255,255,255,.85);}
+.sugg-quiet__dismiss .ico{width:13px;height:13px;}
+.sheet__content .btnrow .btn{min-width:0;white-space:normal;line-height:1.2;padding-inline:8px;text-align:center;}
+.sheet__content .sheet__title{overflow-wrap:anywhere;}
+@media(max-width:390px){.sheet__content .stats{gap:0;padding:7px 0;}.sheet__content .stat{padding-inline:2px;}.sheet__content .stat__v{font-size:23px;}.sheet__content .stat__k{font-size:10px;gap:2px;}.actionbar .act{font-size:12px;}.next__title{font-size:21px;}}
