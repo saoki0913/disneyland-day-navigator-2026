@@ -147,6 +147,25 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.click('[data-b-ride="pirates"]');
     await page.click('[data-act="plan-apply"]'); await accept(page); await page.waitForTimeout(200);
   });
+  await step('3c. Plan builder: visit counts only for rides you choose (×2 → ×3 → 1); fits one screen', async () => {
+    await page.click('[data-act="plan-edit"]'); await page.waitForTimeout(150);
+    await page.click('[data-b-tab="rides"]'); await page.click('[data-b-ridemode="count"]'); await page.waitForTimeout(100);
+    await page.click('[data-b-rep="space"]'); await page.waitForTimeout(80);
+    assert.match(await page.textContent('[data-b-rep="space"]'), /×2/);
+    await page.click('[data-b-rep="space"]'); await page.click('[data-b-rep="space"]'); await page.waitForTimeout(80);
+    assert.doesNotMatch(await page.textContent('[data-b-rep="space"]'), /×/, 'back to once');
+    await page.click('[data-b-rep="space"]'); await page.waitForTimeout(80);
+    const [sh, ch] = await page.evaluate(() => { const b = document.querySelector('.builder__body'); return [b.scrollHeight, b.clientHeight]; });
+    assert.ok(sh <= ch + 2, `count mode fits (${sh} > ${ch})`);
+    assert.equal(await page.evaluate(() => window.__dlnavi.R.draft.prefs.repeats.space), 2);
+    await page.click('.sheet__close'); await page.waitForTimeout(150);
+  });
+  await step('Explore: every category tab is visible; home ほかの候補 are photo cards', async () => {
+    await tab(page, 'explore');
+    assert.ok(await page.evaluate(() => { const e = document.querySelector('.explore-tabs'); return e.scrollWidth <= e.clientWidth + 1; }), 'no clipped tab');
+    await tab(page, 'home');
+    assert.ok(await page.locator('.altcards .altc').count() >= 2, 'suggestion cards');
+  });
   await step('11. Timeline: meals/shows appear once each, in time order, no overlap with rides', async () => {
     const items = await page.$$eval('ol.tl:not(.tl--done) .tl__item', (els) => els.map((e) => ({ t: e.querySelector('.tl__time').textContent, cls: e.className, name: e.querySelector('.tl__name')?.textContent || '' })));
     const toMin = (s) => { const [h, m] = s.replace(/[^\d:]/g, '').split(':').map(Number); return h * 60 + m; };

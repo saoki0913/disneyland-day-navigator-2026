@@ -850,17 +850,16 @@ function renderHome() {
   // 3) other options — the reason chip says why, the wait is coloured like the chip
   if (r.alts.length) {
     const lbl = { wait: ['待ち短い', 'clock'], walk: ['近い', 'walk'], pop: ['人気', 'crown'], score: ['時間があれば', 'spark'] };
-    html += `<div class="sec" id="alts"><h2>${ic('castle')}ほかの候補</h2><button class="sec__more" type="button" data-tab-go="explore">すべて見る${ic('chev')}</button></div><div class="card rows">`;
-    html += r.alts.map((a) => {
-      const k = lbl[a.key] ? a.key : 'score';
-      const [t, i] = lbl[a.key] || [a.label, 'spark'];
-      return `<button class="row" type="button" data-open="${a.a.id}">
-        <span class="rchip rchip--${k}">${ic(i)}${esc(t)}</span>
-        <span class="row__body"><span class="row__name">${jw(a.a.short)}</span>
-          <span class="row__meta">${c.pos ? `<span>${ic('walk')}${walkHere(coordsOf(a.a.id), c)}分</span>` : ''}</span></span>
-        <span class="row__wait c-${k}"><b class="num">${a.wait}</b><small>分</small><br>${kindTag(a.kind)}</span><span class="row__chev">${ic('chev')}</span></button>`;
-    }).join('');
-    html += `</div>`;
+    html += `<div class="sec" id="alts"><h2>${ic('castle')}ほかの候補</h2><button class="sec__more" type="button" data-tab-go="explore">すべて${ic('chev')}</button></div>
+      <div class="altcards" role="list">${r.alts.map((a) => {
+        const k = lbl[a.key] ? a.key : 'score';
+        const [t, i] = lbl[k];
+        const wk = walkHere(coordsOf(a.a.id), c);
+        return `<button class="altc" type="button" role="listitem" data-open="${a.a.id}">
+          <span class="altc__img">${rideImg(a.a)}<span class="altc__why altc__why--${k}">${ic(i)}${esc(t)}</span></span>
+          <span class="altc__b"><span class="altc__n">${jw(a.a.short)}</span>
+            <span class="altc__m"><span class="altc__w ${waitClass(a.wait)}">${ic('clock')}<b class="num">${a.wait}</b>分</span>${wk != null ? `<span>${ic('walk')}${wk}分</span>` : ''}</span></span></button>`;
+      }).join('')}</div>`;
   }
   // 4) お知らせ: only actionable ones stay on screen (reopened / suddenly shorter)
   const alerts = activeAlerts();
@@ -1181,28 +1180,43 @@ function suggestCard() {
   return `<div class="sugg-quiet"><button class="sugg-quiet__b glass" data-act="suggest-preview">${ic('route')}<span>動線を整える案</span><b class="num">−${Math.max(0, R.suggest.flow[0].walk - R.suggest.flow[1].walk)}<small>分</small></b>${ic('chev')}</button><button class="sugg-quiet__dismiss" data-act="suggest-off" aria-label="閉じる">${ic('x')}</button></div>`;
 }
 // Compact before → after list that fits one screen: unchanged rows far from the change fold into "+N".
-const PV_MAX = 8;
+// Compact before → after list that fills the sheet: every row is rendered, then fitPv() hides the rows
+// farthest from the change until the list fits the space left, folding them into "+N" pills.
 function pvList(after, beforeIds, startOf) {
+  const land = (it) => (it.type === 'ride' ? landById[rideAt(it.id)?.land] : null);
   const rows = after.map((it, k) => {
     const j = beforeIds.indexOf(it.id);
     const mvk = j < 0 ? 'new' : j > k ? 'up' : k - j >= 2 ? 'down' : '';
     const t = it.type === 'ride' ? it.start : it.anchor.start;
     const t0 = startOf[it.id];
-    return { it, mvk, t, t0, changed: !!mvk || (t0 != null && Math.abs(t0 - t) >= 5) };
-  });
-  let from = 0, to = rows.length;
-  if (rows.length > PV_MAX) {
-    const ch = rows.map((r, i) => (r.mvk ? i : -1)).filter((i) => i >= 0);
-    const c0 = ch.length ? ch[0] : 0;
-    from = Math.max(0, Math.min(c0 - 1, rows.length - PV_MAX));
-    to = from + PV_MAX;
-  }
-  const more = (n) => (n > 0 ? `<li class="pv__more">+${n}</li>` : '');
-  const land = (it) => (it.type === 'ride' ? landById[rideAt(it.id)?.land] : null);
-  return `<ol class="pv">${more(from)}${rows.slice(from, to).map(({ it, mvk, t, t0, changed }) => `<li class="pv__row ${mvk ? 'is-moved' : ''} pv__row--${it.type}">
-      <span class="pv__t num">${changed && t0 != null && Math.abs(t0 - t) >= 5 ? `<s>${clock(t0)}</s>` : ''}<b>${clock(t)}</b></span>
+    const shift = t0 != null && Math.abs(t0 - t) >= 5;
+    return `<li class="pv__row ${mvk ? 'is-moved' : ''} pv__row--${it.type}" ${mvk ? 'data-mv="1"' : ''}>
+      <span class="pv__t num">${shift ? `<s>${clock(t0)}</s>` : ''}<b>${clock(t)}</b></span>
       <span class="pv__dot" style="--c:${land(it)?.color || 'var(--blue-m)'}"></span>
-      <span class="pv__n">${mvk === 'new' ? `<span class="mv mv--new">${ic('plus')}</span>` : mvk === 'up' ? '<span class="mv mv--up">↑</span>' : mvk === 'down' ? '<span class="mv mv--down">↓</span>' : ''}${esc(itemLabel(it.id))}${it.paused ? '<span class="tag tag--bad">休止</span>' : ''}</span></li>`).join('')}${more(rows.length - to)}</ol>`;
+      <span class="pv__n">${mvk === 'new' ? `<span class="mv mv--new">${ic('plus')}</span>` : mvk === 'up' ? '<span class="mv mv--up">↑</span>' : mvk === 'down' ? '<span class="mv mv--down">↓</span>' : ''}${esc(itemLabel(it.id))}${it.paused ? '<span class="tag tag--bad">休止</span>' : ''}</span></li>`;
+  });
+  return `<ol class="pv"><li class="pv__more" data-pv="top" hidden></li>${rows.join('')}<li class="pv__more" data-pv="bot" hidden></li></ol>`;
+}
+function fitPv() {
+  const ol = $('#sheet .pv'); if (!ol) return;
+  const rows = [...ol.querySelectorAll('.pv__row')];
+  const top = ol.querySelector('[data-pv="top"]'), bot = ol.querySelector('[data-pv="bot"]');
+  const fits = () => ol.scrollHeight <= ol.clientHeight + 1;
+  const show = (a, b) => {
+    rows.forEach((r, i) => { r.hidden = i < a || i > b; });
+    top.hidden = a <= 0; top.textContent = `+${a}`;
+    bot.hidden = b >= rows.length - 1; bot.textContent = `+${rows.length - 1 - b}`;
+  };
+  show(0, rows.length - 1);
+  if (fits()) return;
+  let a = Math.max(0, rows.findIndex((r) => r.dataset.mv) - 1), b = a;
+  show(a, b);
+  // grow downwards (what comes next) and upwards while it still fits
+  for (let grew = true; grew;) {
+    grew = false;
+    if (b < rows.length - 1) { show(a, b + 1); if (fits()) { b++; grew = true; } else show(a, b); }
+    if (a > 0) { show(a - 1, b); if (fits()) { a--; grew = true; } else show(a, b); }
+  }
 }
 const flowChips = (fa, fb) => `<div class="pv__head">
     <span class="pv__stat">${ic('walk')}<s class="num">${fa.walk}</s>${ic('chev')}<b class="num">${fb.walk}</b><small>分</small></span>
@@ -1221,6 +1235,7 @@ function openSuggestPreview() {
     ${pvList(nxt, cur.map((i) => i.id), startOf)}
     <div class="btnrow"><button class="btn" data-act="suggest-off" data-close>このまま</button><button class="btn btn--primary" data-act="suggest-apply" data-close>反映</button></div>
   </div>`, { fit: true });
+  fitPv();
 }
 const planSeq = () => S.planSnap?.seq || (S.planSnap?.items ? S.planSnap.items.filter((i) => SEQ_TYPES.includes(i.type)).map((i) => i.id) : []);
 // Recalculate times only — keeps the order exactly (乗った, edits, meal/show settings).
@@ -1471,6 +1486,7 @@ function openProposal() {
     ${pvList(d.a, d.b.map((i) => i.id), d.startOf)}
     <div class="btnrow"><button class="btn" data-act="proposal-cancel">このまま</button><button class="btn btn--primary" data-act="proposal-apply">反映</button></div>
   </div>`, { fit: true });
+  fitPv();
 }
 function applyProposal() {
   const pr = R.proposal; if (!pr) return;
@@ -1710,10 +1726,17 @@ function openPlanBuilder(focus) {
   } else if (D.tab === 'rides') {
     body = `<div class="field field--row"><div class="field__h"><b>${ic('flag')}次に行く</b></div>
         <select data-b-first aria-label="次に行きたいところ"><option value="">おまかせ</option>${rides.filter((a) => !S.done[a.id]).map((a) => `<option value="${a.id}" ${D.first === a.id ? 'selected' : ''}>${esc(a.short)}</option>`).join('')}</select></div>
-      <div class="legend" aria-hidden="true"><span><i class="m">${ic('star')}</i>絶対</span><span><i></i>おまかせ</span><span><i class="s">${ic('x')}</i>乗らない</span></div>
-      <div class="ridepick ${rides.length <= 18 ? 'ridepick--few' : ''}">${rides.map((a) => {
+      <div class="rpbar"><div class="seg seg--mini" role="tablist">
+          <button class="${D.rideMode !== 'count' ? 'is-active' : ''}" data-b-ridemode="pick" aria-selected="${D.rideMode !== 'count'}">${ic('star')}選ぶ</button>
+          <button class="${D.rideMode === 'count' ? 'is-active' : ''}" data-b-ridemode="count" aria-selected="${D.rideMode === 'count'}">${ic('refresh')}回数</button></div>
+        ${D.rideMode === 'count'
+          ? '<div class="legend" aria-hidden="true"><span><i class="c">2</i>タップで ×2 → ×3 → 1回</span></div>'
+          : `<div class="legend" aria-hidden="true"><span><i class="m">${ic('star')}</i>絶対</span><span><i></i>おまかせ</span><span><i class="s">${ic('x')}</i>乗らない</span></div>`}</div>
+      <div class="ridepick ${rides.length <= 18 ? 'ridepick--few' : ''} ${D.rideMode === 'count' ? 'ridepick--count' : ''}">${rides.map((a) => {
         const st = D.must[a.id] ? 'must' : D.excluded[a.id] ? 'skip' : '';
-        return `<button class="rp ${st ? 'is-' + st : ''}" data-b-ride="${a.id}" aria-label="${esc(a.short)}：${st === 'must' ? '絶対乗る' : st === 'skip' ? '乗らない' : 'おまかせ'}"><span class="rp__st">${st === 'must' ? ic('star') : st === 'skip' ? ic('x') : ''}</span><span class="rp__n">${jw(a.short)}</span></button>`;
+        const n = Number(D.prefs.repeats?.[a.id]) || 1;
+        const count = D.rideMode === 'count';
+        return `<button class="rp ${st ? 'is-' + st : ''} ${n > 1 ? 'has-rep' : ''}" ${count ? `data-b-rep="${a.id}"` : `data-b-ride="${a.id}"`} ${count && st === 'skip' ? 'disabled' : ''} aria-label="${esc(a.short)}：${count ? `${n}回` : st === 'must' ? '絶対乗る' : st === 'skip' ? '乗らない' : 'おまかせ'}"><span class="rp__st">${st === 'must' ? ic('star') : st === 'skip' ? ic('x') : ''}</span><span class="rp__n">${jw(a.short)}</span>${n > 1 ? `<span class="rp__rep num">×${n}</span>` : ''}</button>`;
       }).join('')}</div>`;
   } else if (D.tab === 'meals') {
     body = PLANS[D.plan].meals.map((m) => {
@@ -1772,7 +1795,7 @@ async function applyPlanDraftProposal() {
 function renderExplore() {
   const el = $('#view-explore');
   const tab = S.exploreTab;
-  const xtabs = [['rides', '乗り物'], ['food', '食事'], ['shows', 'ショー'], ['parades', 'パレード'], ['greetings', 'グリーティング'], ...(PARK.limitedTab ? [['halloween', PARK.limitedTab]] : [])];
+  const xtabs = [['rides', '乗り物'], ['food', '食事'], ['shows', 'ショー'], ['parades', 'パレード'], ['greetings', 'キャラ'], ...(PARK.limitedTab ? [['halloween', PARK.limitedTab]] : [])];
   if (!xtabs.some(([k]) => k === tab)) { S.exploreTab = 'rides'; return renderExplore(); }
   let html = `<div class="seg explore-tabs" role="tablist">${xtabs.map(([k, n]) => `<button class="${tab === k ? 'is-active' : ''}" data-xtab="${k}" role="tab" aria-selected="${tab === k}">${n}</button>`).join('')}</div>`;
   const c = ctx();
@@ -2293,6 +2316,7 @@ function go(tab) {
   document.querySelectorAll('.view').forEach((v) => { v.hidden = v.dataset.view !== tab; });
   document.querySelectorAll('.tab').forEach((t) => { t.classList.toggle('is-active', t.dataset.tab === tab); t.setAttribute('aria-current', t.dataset.tab === tab ? 'page' : 'false'); });
   document.body.classList.toggle('tab-map', tab === 'map');
+  document.documentElement.classList.toggle('tab-map', tab === 'map');
   renderView(tab);
   window.scrollTo(0, 0);
   if (tab === 'map') { if (S.gps) requestFix(); else gpsIfGranted(); }
@@ -2612,6 +2636,12 @@ document.addEventListener('click', async (e) => {
   if (d.mealReset) { delete S.prefs.mealOverrides[d.mealReset]; relayout('ごはん'); closeSheet(); renderAll(); return toast('初期設定に戻しました'); }
   // ---- plan builder (draft) ----
   if (d.bTab && R.draft) { R.draft.tab = d.bTab; return openPlanBuilder(); }
+  if (d.bRidemode && R.draft) { R.draft.rideMode = d.bRidemode; return openPlanBuilder(); }
+  if (d.bRep && R.draft) {
+    const reps = { ...(R.draft.prefs.repeats || {}) }, n = Number(reps[d.bRep]) || 1;
+    if (n >= 3) delete reps[d.bRep]; else reps[d.bRep] = n + 1;
+    R.draft.prefs.repeats = reps; return openPlanBuilder();
+  }
   if (d.bSet && R.draft) {
     if (d.bSet === 'plan') R.draft.plan = d.v;
     else R.draft.cond = { ...R.draft.cond, [d.bSet]: d.bSet === 'maxWait' ? Number(d.v) : d.v };
