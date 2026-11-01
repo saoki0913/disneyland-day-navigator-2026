@@ -648,3 +648,14 @@ body.is-dragging { -webkit-user-select: none; user-select: none; cursor: grabbin
 .restcur { justify-content: flex-start; gap: 8px; text-align: left; }
 .restcur .dish__img { width: 32px; height: 32px; font-size: 18px; border-radius: 6px; }
 .restcur span:not(.dish__img) { flex: 1; min-width: 0; font-weight: 800; }
+
+/* paused ride kept in place */
+.tl__item--paused .tl__card { opacity: .72; border-style: dashed; }
+.tl__item--paused .tl__time { color: var(--muted); font-size: 13px; }
+/* rebuild proposal */
+.pdiff { display: flex; gap: 10px; align-items: baseline; font-size: 13px; }
+.pdiff > b { flex: 0 0 auto; min-width: 3em; }
+.pdiff > div { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.chipx { display: inline-flex; align-items: center; gap: 3px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); font-size: 12.5px; max-width: 100%; overflow-wrap: anywhere; }
+.chipx.is-add { border-color: var(--good); color: var(--good); font-weight: 700; }
+.chipx.is-rm { border-color: var(--bad); color: var(--bad); text-decoration: line-through; }

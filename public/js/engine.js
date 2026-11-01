@@ -132,7 +132,7 @@ export function buildAnchors(planId, prefs = {}, done = {}) {
     const r = restaurantById[ov.restaurant || m.restaurant];
     out.push({
       id: 'meal:' + m.id, kind: 'meal', title: m.ja, place: r?.ja, restaurant: r?.id,
-      start: ov.at ?? m.at, end: (ov.at ?? m.at) + (ov.dur ?? m.dur), claim: 0,
+      start: ov.at ?? m.at, end: (ov.at ?? m.at) + (ov.dur ?? m.dur), claim: 0, fixed: ov.at != null, // a time you set yourself is kept exactly
       pos: r?.pos, emoji: r?.emoji || '🍽️', done: !!done['meal:' + m.id], flex: m.id === 'snack',
     });
   }
@@ -472,7 +472,8 @@ export function planFromOrder(ctx, order) {
       const p = ctx.coords?.[a.id] || a.pos;
       const live = now - startNow <= 30 ? ctx.live : stripDown(ctx.live, ctx);
       const av = availability(a, { ...ctx, live, now: Math.max(startNow, ctx.openMin), preopen: startNow < ctx.openMin });
-      if (!av.ok) { waiting.push(id); continue; }
+      // paused now: stays in its place in the plan, marked, and takes no time (the plan does not move)
+      if (!av.ok) { waiting.push(id); items.push({ type: 'ride', id, a, paused: true, walk: 0, start: now, end: now, wait: null, waitKind: 'live', must: isMust(a, ctx) }); continue; }
       const walk = walkMin(pos, p);
       const start = now + walk;
       const w = waitFor(a, start, { ...ctx, live });
@@ -490,9 +491,12 @@ export function planFromOrder(ctx, order) {
     const arrive = now + walk;
     if (x.kind === 'meal') {
       const d = x.end - x.start;
-      const start = Math.max(arrive, x.start);
+      // ctx.mealFlex: a meal may start up to this many minutes BEFORE its set time when you arrive early
+      // (0 = never before). A pinned meal (x.fixed) always keeps its time.
+      const flex = x.fixed ? 0 : (ctx.mealFlex || 0);
+      const start = Math.max(arrive, x.start - flex);
       if (start - walk - now >= 10) items.push({ type: 'free', start: now, end: start - walk, minutes: start - walk - now });
-      const an = { ...x, start, end: start + d, shifted: start > x.start + 4 };
+      const an = { ...x, start, end: start + d, shifted: Math.abs(start - x.start) > 4, setAt: x.start };
       items.push({ type: 'meal', id, anchor: an, start, end: an.end, walk });
       now = an.end; pos = x.pos || pos;
     } else {
@@ -507,7 +511,7 @@ export function planFromOrder(ctx, order) {
   }
   if (now < ctx.closeMin - 10) items.push({ type: 'free', start: now, end: ctx.closeMin, minutes: ctx.closeMin - now });
   const missingMust = Object.keys(mustOf(ctx)).filter((id) => !ctx.done?.[id] && !scheduled[id] && !ctx.excluded?.[id] && !waiting.includes(id));
-  return { items, waiting, missingMust, late, rides: items.filter((i) => i.type === 'ride' && !i.over).length };
+  return { items, waiting, missingMust, late, rides: items.filter((i) => i.type === 'ride' && !i.over && !i.paused).length };
 }
 
 /**
@@ -579,7 +583,7 @@ function stripDown(live, ctx) {
 // Lower is better. Free time costs nothing — it is what a good route buys you.
 /** Real minutes spent walking + queueing in a sequence (what the user would actually save). */
 export function planMinutes(ctx, seq) {
-  return planFromOrder(ctx, seq).items.reduce((t, it) => t + (it.walk || 0) + (it.type === 'ride' && !it.over ? it.wait : 0), 0);
+  return planFromOrder(ctx, seq).items.reduce((t, it) => t + (it.walk || 0) + (it.type === 'ride' && !it.over && !it.paused ? it.wait : 0), 0);
 }
 export function planCost(ctx, seq) {
   const r = planFromOrder(ctx, seq);
@@ -589,6 +593,7 @@ export function planCost(ctx, seq) {
   let cost = 0;
   for (const it of r.items) {
     if (it.type === 'ride') {
+      if (it.paused) continue;
       cost += it.walk * walkCost + it.wait;
       if (!it.must && it.wait > plan.maxWait) cost += (it.wait - plan.maxWait);
       if (it.over) cost += it.must ? 5000 : 400;
@@ -598,9 +603,12 @@ export function planCost(ctx, seq) {
         if (tail > 0) cost += tail * 2;
       }
     } else if (it.type === 'meal') {
-      cost += it.walk * walkCost + Math.max(0, it.start - (orig[it.id]?.start ?? it.start)) * 1.5;
+      // moving a meal costs a little per minute; beyond the allowed window (mealFlex) it costs a lot
+      const dev = it.start - (orig[it.id]?.start ?? it.start), flex = ctx.mealFlex || 0;
+      const lateOver = Math.max(0, dev - flex);
+      cost += it.walk * walkCost + (flex ? Math.abs(dev) * 0.4 + lateOver * 3 : Math.max(0, dev) * 1.5);
     } else if (it.type === 'show') {
-      cost += it.walk * walkCost + (it.anchor.late === 'miss' ? 3000 : it.anchor.late === 'short' ? 40 : 0);
+      cost += it.walk * walkCost + (it.anchor.late === 'miss' ? 3000 : it.anchor.late === 'short' ? 120 : 0);
     }
   }
   return cost + (r.missingMust?.length || 0) * 5000;
@@ -704,6 +712,90 @@ export function pickNext(ctx, seq, locks = {}, minGain = 3) {
     if (c < best.c) best = { c, s };
   }
   return best.s;
+}
+
+// ---------- full plan optimisation (which rides + their order) ----------
+// Each ride is worth "minutes" (popularity + your priority, scaled by the pace); the plan minimises
+// cost (walking, queueing, meals moved, shows reached late, rides past closing) minus the value of the
+// rides it includes. Must-rides are always included — WHEN they go is decided by the same cost
+// (lowest predicted wait / shortest walk), not by putting them first.
+const PACE_VALUE = { relax: 0.65, balance: 1, rides: 1.35 };
+export const rideValue = (a, ctx) => (15 + a.pop * 12 + (PRIORITY[a.id] || 0)) * (PACE_VALUE[ctx.planId] ?? 1);
+export function planScore(ctx, seq) {
+  const r = planFromOrder(ctx, seq);
+  let v = 0;
+  for (const it of r.items) if (it.type === 'ride' && !it.over && !it.paused) v += rideValue(it.a, ctx);
+  return planCost(ctx, seq) - v;
+}
+function bestInsert(ctx, full, base, id, bound) {
+  let bo = null, bs = bound;
+  for (let i = 0; i <= base.length; i++) {
+    const o = [...base.slice(0, i), id, ...base.slice(i)];
+    const sc = planScore(ctx, full(o));
+    if (sc < bs) { bs = sc; bo = o; }
+  }
+  return bo ? { o: bo, s: bs } : null;
+}
+function localSearch(ctx, seq0, { locks = {}, pool = [], deadline = Infinity, keep = false } = {}) {
+  const must = mustOf(ctx);
+  const done = seq0.filter((x) => ctx.done?.[x]);
+  let open = seq0.filter((x) => !ctx.done?.[x]);
+  const full = (o) => [...done, ...o];
+  const movable = (id) => attractionById[id] && !locks[id];
+  let best = planScore(ctx, full(open));
+  const take = (r) => { if (r) { open = r.o; best = r.s; return true; } return false; };
+  for (let pass = 0; pass < 8 && Date.now() < deadline; pass++) {
+    let improved = false;
+    for (const id of pool) if (!open.includes(id) && take(bestInsert(ctx, full, open, id, best - 0.5))) improved = true;
+    for (const id of keep ? [] : [...open]) {
+      if (!movable(id) || must[id]) continue;
+      const o = open.filter((x) => x !== id), sc = planScore(ctx, full(o));
+      if (sc < best - 0.5) { open = o; best = sc; improved = true; }
+    }
+    for (const id of [...open]) if (movable(id) && take(bestInsert(ctx, full, open.filter((x) => x !== id), id, best - 0.5))) improved = true;
+    for (const id of keep ? [] : [...open]) {
+      if (Date.now() > deadline) break;
+      if (!movable(id) || must[id] || !open.includes(id)) continue;
+      const rest = open.filter((x) => x !== id);
+      let r = null;
+      for (const nid of pool) if (!open.includes(nid)) { const t = bestInsert(ctx, full, rest, nid, r ? r.s : best - 0.5); if (t) r = t; }
+      if (take(r)) improved = true;
+    }
+    for (let i = 0; i < open.length; i++) for (let j = i + 2; j < Math.min(open.length, i + 7); j++) {
+      const seg = open.slice(i, j + 1);
+      if (!seg.every(movable)) break;
+      const o = [...open.slice(0, i), ...seg.reverse(), ...open.slice(j + 1)], sc = planScore(ctx, full(o));
+      if (sc < best - 0.5) { open = o; best = sc; improved = true; }
+    }
+    if (!improved) break;
+  }
+  return { seq: full(open), score: best };
+}
+/**
+ * Decide which rides go into the day and in what order. seq0 = a starting sequence (rides + meals/shows).
+ * opts: { locks, budgetMs, pool } — pool = ride ids that may be added (default: every ride that is open
+ * now, not done, not excluded and not an "extra"). Deterministic for the same input.
+ */
+export function optimizePlan(ctx, seq0, opts = {}) {
+  const t0 = Date.now(), budget = opts.budgetMs ?? 600;
+  const deadline = t0 + budget * 1.5;
+  const pool = opts.pool || ATTRACTIONS.filter((a) => !a.extra && !ctx.done?.[a.id] && !ctx.excluded?.[a.id] && availability(a, ctx).ok).map((a) => a.id);
+  // keep: only add rides / reorder — never drop a ride that is already in the plan (used for suggestions)
+  let best = localSearch(ctx, seq0, { locks: opts.locks, pool, deadline, keep: opts.keep });
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+  const must = mustOf(ctx);
+  // iterated local search: shake (drop two rides) and re-optimise while time allows
+  while (Date.now() - t0 < budget) {
+    const cand = best.seq.filter((x) => attractionById[x] && !ctx.done?.[x] && !must[x] && !opts.locks?.[x]);
+    if (cand.length < 2) break;
+    const drop = new Set();
+    for (let k = 0; k < 2; k++) drop.add(cand.splice(Math.floor(rnd() * cand.length), 1)[0]);
+    if (opts.keep) break;
+    const r = localSearch(ctx, best.seq.filter((x) => !drop.has(x)), { locks: opts.locks, pool, deadline });
+    if (r.score < best.score - 0.5) best = r;
+  }
+  return best;
 }
 
 export const _test = { scoreRide, stripDown };
