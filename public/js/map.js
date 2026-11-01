@@ -45,7 +45,8 @@ function ensureMap(el) {
   if (map && map.getContainer() === el) return;
   if (map) { try { map.remove(); } catch { /* detached */ } }
   markers = new Map(); me = null; line = null; busy = false; pending = null;
-  map = L.map(el, { zoomControl: false, attributionControl: true, minZoom: 14, maxZoom: 19, zoomSnap: 0.25 });
+  // keyboard:false — a focusable map container makes iOS scroll the page (the tab bar jumps) on tap
+  map = L.map(el, { zoomControl: false, attributionControl: true, minZoom: 14, maxZoom: 19, zoomSnap: 0.25, keyboard: false });
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   }).addTo(map);
