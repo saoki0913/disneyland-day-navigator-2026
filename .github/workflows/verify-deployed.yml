@@ -7,6 +7,8 @@ jobs:
     timeout-minutes: 15
     env:
       BASE: https://dl-navi-1031.pages.dev
+      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,8 +21,11 @@ jobs:
           node --input-type=module -e '
           import assert from "node:assert/strict";
           const root = process.env.BASE;
+          const accessHeaders = process.env.CF_ACCESS_CLIENT_ID && process.env.CF_ACCESS_CLIENT_SECRET
+            ? { "CF-Access-Client-Id": process.env.CF_ACCESS_CLIENT_ID, "CF-Access-Client-Secret": process.env.CF_ACCESS_CLIENT_SECRET }
+            : {};
           const check = async (path, ms=40000) => {
-            const r=await fetch(root+path,{signal:AbortSignal.timeout(ms)});
+            const r=await fetch(root+path,{signal:AbortSignal.timeout(ms),headers:accessHeaders});
             console.log("HTTP",r.status,path,"content-type",r.headers.get("content-type"));
             assert.equal(r.status,200,path);
             return r;
@@ -35,7 +40,7 @@ jobs:
           assert.equal(h.ok,true);
           console.log("HEALTH",JSON.stringify(h));
           for(const path of ["/api/live","/api/live","/api/meta","/api/photos?set=rides","/api/photos?set=food","/api/photos?set=shows"]){
-            const r=await fetch(root+path,{signal:AbortSignal.timeout(60000)});
+            const r=await fetch(root+path,{signal:AbortSignal.timeout(60000),headers:accessHeaders});
             const j=await r.json().catch(()=>null);
             console.log("API",path,"http",r.status,"ok",j?.ok,"cache",j?.cache,"source",j?.source);
             if(path.startsWith("/api/live")){

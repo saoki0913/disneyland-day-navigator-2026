@@ -7,6 +7,9 @@ import { normalizeTPWLive, normalizeChildren, normalizeSchedule } from '../lib/s
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
 const base = process.argv[2] || 'http://127.0.0.1:8788';
+const accessHeaders = process.env.CF_ACCESS_CLIENT_ID && process.env.CF_ACCESS_CLIENT_SECRET
+  ? { 'CF-Access-Client-Id': process.env.CF_ACCESS_CLIENT_ID, 'CF-Access-Client-Secret': process.env.CF_ACCESS_CLIENT_SECRET }
+  : null;
 const SHOTS = process.env.SHOTS || 'screenshots';
 mkdirSync(SHOTS, { recursive: true });
 const fx = (n) => JSON.parse(readFileSync(new URL(`./fixtures/${n}`, import.meta.url)));
@@ -29,6 +32,7 @@ async function newCtx({ liveMode = 'ok', sim = '10:00', geo = null, photos = 'ok
   const ctx = await browser.newContext({
     viewport: { width: 375, height: 667 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'ja-JP', timezoneId: 'America/Los_Angeles',
     ...(geo ? { geolocation: geo, permissions: ['geolocation'] } : {}),
+    ...(accessHeaders ? { extraHTTPHeaders: accessHeaders } : {}),
   });
   await ctx.route('**/api/live*', (r) => liveMode === 'ok' ? r.fulfill({ json: live() }) : r.fulfill({ status: 502, json: { ok: false, errors: ['themeparks.wiki: HTTP 503', 'queue-times.com: timeout'] } }));
   await ctx.route('**/api/meta*', (r) => r.fulfill({ json: meta }));
@@ -1004,7 +1008,7 @@ for (const [t, expect, file] of [['07:00', /開園/, '11-preopen'], ['11:28', /�
     shows: {}, otherShows: [], matched: 18,
   });
   const seen = [];
-  const ctx = await browser.newContext({ viewport: { width: 375, height: 667 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'ja-JP', timezoneId: 'America/Los_Angeles' });
+  const ctx = await browser.newContext({ viewport: { width: 375, height: 667 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'ja-JP', timezoneId: 'America/Los_Angeles', ...(accessHeaders ? { extraHTTPHeaders: accessHeaders } : {}) });
   const isDca = (r) => new URL(r.request().url()).searchParams.get('park') === 'dca';
   await ctx.route('**/api/live*', (r) => { seen.push(r.request().url()); return r.fulfill({ json: isDca(r) ? dcaLive() : live() }); });
   await ctx.route('**/api/meta*', (r) => { seen.push(r.request().url()); return r.fulfill({ json: isDca(r) ? { ok: true, coords: {}, schedule: null, errors: [] } : meta }); });
