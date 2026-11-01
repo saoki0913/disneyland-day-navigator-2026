@@ -113,6 +113,8 @@ jobs:
         if: steps.fresh.outputs.deploy == 'true'
         env:
           TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'production' }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           if [ "$TARGET" = "production" ]; then
             BASE=https://dl-navi-1031.pages.dev
@@ -120,6 +122,6 @@ jobs:
             BASE=https://preview.dl-navi-1031.pages.dev
           fi
           echo "Verify $BASE"
-          curl --fail --silent --show-error --retry 8 --retry-delay 3 --retry-all-errors "$BASE/" -o /dev/null
-          curl --fail --silent --show-error --retry 8 --retry-delay 3 --retry-all-errors "$BASE/api/health"
+          curl --fail --silent --show-error --retry 8 --retry-delay 3 --retry-all-errors -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" "$BASE/" -o /dev/null
+          curl --fail --silent --show-error --retry 8 --retry-delay 3 --retry-all-errors -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" "$BASE/api/health"
           echo
