@@ -9,7 +9,8 @@ let markers = new Map(); // key -> { m, html, lat, lon, popup }
 let me = null;           // { dot, ring }
 let line = null;
 let busy = false, busyAt = 0, pending = null;
-const PARK_BOUNDS = [[33.8095, -117.9248], [33.8168, -117.9160]];
+// Set per park by the caller (opts.bounds); Disneyland Park as the fallback.
+let PARK_BOUNDS = [[33.8095, -117.9248], [33.8168, -117.9160]];
 const FIT_PAD = { paddingTopLeft: [0, 50], paddingBottomRight: [0, 70] };
 
 function loadLeaflet() {
@@ -60,6 +61,7 @@ function ensureMap(el) {
 
 export async function draw(opts) {
   L = await loadLeaflet();
+  if (opts.bounds) PARK_BOUNDS = opts.bounds;
   const el = document.getElementById('map');
   if (!el) return;
   ensureMap(el);
@@ -95,7 +97,8 @@ function apply(opts) {
   coordsSrc = opts.coordsSrc;
   const f = opts.filter;
   const seen = new Set();
-  let nextPos = null;
+  // A meal / show as the next stop has no ride marker: the caller passes its position.
+  let nextPos = valid(opts.nextPos) ? opts.nextPos : null;
   if (f === 'all' || f === 'rides') {
     for (const { a, pos, w, done } of opts.rides) {
       if (!valid(pos)) continue;

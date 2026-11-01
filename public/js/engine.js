@@ -1,5 +1,6 @@
 // Pure planning / recommendation engine. No DOM, no fetch — unit-testable in Node.
-import { ATTRACTIONS, attractionById, PLANS, PRIORITY, WAIT_CURVE, SHOWS, showById, restaurantById, TRIP } from './data.js';
+import { ATTRACTIONS, attractionById, PLANS, PRIORITY, WAIT_CURVE, SHOWS, showById, restaurantById, DEFAULT_MUST } from './data.js';
+export { DEFAULT_MUST };
 
 // ---------- geometry ----------
 export function distanceM(a, b) {
@@ -173,7 +174,6 @@ export function anchorConflicts(anchors) {
 // ---------- plan conditions ----------
 // ctx.must: { rideId: true } — rides the user marked "絶対乗る" (default: both Star Wars rides).
 // ctx.cond: { maxWait, walk:'low'|'normal'|'any' } — user conditions layered on top of the pace preset.
-export const DEFAULT_MUST = { rise: true, falcon: true };
 export const mustOf = (ctx) => ctx.must || DEFAULT_MUST;
 export const isMust = (a, ctx) => !!mustOf(ctx)[a.id];
 const WALK_W = { low: 1.8, normal: 1, any: 0.5 };
