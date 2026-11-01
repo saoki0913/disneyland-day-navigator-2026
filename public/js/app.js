@@ -1694,6 +1694,8 @@ function openPlanBuilder(focus) {
         <div class="opts">${opt('plan', 'relax', 'ゆったり', '6前後')}${opt('plan', 'balance', 'ふつう', '9前後')}${opt('plan', 'rides', 'たくさん', '12以上')}</div></div>
       <div class="field"><div class="field__h"><b>混雑</b><span>並んでもいい時間</span></div>
         <div class="opts">${opt('maxWait', 30, '〜30分', '空いてる所')}${opt('maxWait', 60, '〜60分', 'ふつう')}${opt('maxWait', 90, '〜90分', '人気優先')}</div></div>
+      <details class="more"><summary>待ち時間を細かく指定</summary><div class="field"><div class="field__h"><b>最大待ち時間</b></div>
+        <select data-b-maxwait aria-label="許容する最大待ち時間">${[15,30,45,60,75,90,120,150].map((n) => `<option value="${n}" ${Number(D.cond.maxWait)===n?'selected':''}>${n}分まで</option>`).join('')}</select></div></details>
       <div class="field"><div class="field__h"><b>動線</b><span>歩く量</span></div>
         <div class="opts">${opt('walk', 'low', '少なめ', '近くを順に')}${opt('walk', 'normal', 'ふつう', '')}${opt('walk', 'any', '気にしない', '遠くてもOK')}</div></div>
       <div class="field" id="b-first"><div class="field__h"><b>次に行きたいところ</b><span>あれば</span></div>
@@ -2629,6 +2631,7 @@ document.addEventListener('change', (e) => {
       if (!t.value || !Number.isFinite(mins) || mins < 0 || mins >= 1440) return toast('開始時刻を正しく入力してください', 'error');
       D.startMin = mins; D.startMode = 'custom'; return openPlanBuilder();
     }
+    if (d.bMaxwait !== undefined) { D.cond.maxWait = Number(t.value); return; }
     if (d.bRepeat) { D.prefs.repeats = { ...(D.prefs.repeats || {}), [d.bRepeat]: Math.max(1, Math.min(5, Number(t.value)||1)) }; return; }
     if (d.bMealOn) { const o = D.prefs.mealOverrides[d.bMealOn] = { ...(D.prefs.mealOverrides[d.bMealOn] || {}) }; o.off = !t.checked; return openPlanBuilder(); }
     if (d.bMealRest) { D.prefs.mealOverrides[d.bMealRest] = { ...(D.prefs.mealOverrides[d.bMealRest] || {}), restaurant: t.value }; return openPlanBuilder(); }

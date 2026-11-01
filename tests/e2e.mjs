@@ -19,7 +19,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 const results = [];
 async function step(name, fn) {
   try { await fn(); results.push(['PASS', name]); console.log('PASS', name); }
-  catch (e) { results.push(['FAIL', name, e.message]); console.log('FAIL', name, '\n   ', process.env.E2E_VERBOSE ? e.message : e.message.split('\n')[0]); }
+  catch (e) { results.push(['FAIL', name, e.message]); console.log('FAIL', name, '\n   ', e.message.slice(0, 1500)); }
 }
 const browser = await chromium.launch();
 async function newCtx({ liveMode = 'ok', sim = '10:00', geo = null, photos = 'ok' } = {}) {
@@ -308,7 +308,6 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.screenshot({ path: `${SHOTS}/05-explore.png`, fullPage: true });
   });
   await step('Explore: filters/sort work and refurb closure is shown', async () => {
-    await page.click('[data-act="explore-filters"]');
     await page.click('#view-explore [data-act="explore-filters"]'); await page.click('#sheet [data-filter-kind="down"]'); await page.click('#sheet [data-act="filters-apply"]'); await page.waitForTimeout(150);
     const t = await page.textContent('#view-explore .rows');
     assert.match(t, /スモールワールド|スモール・?ワールド|スモールワールド|イッツ・ア・スモールワールド/);
@@ -513,7 +512,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
   await step('Suggestion: a clearly better order is offered (not applied), 反映 shows ↑↓ on the rows', async () => {
     await tab(page, 'plan');
     const zig = ['space', 'thunder', 'mmrr', 'indy', 'startours', 'haunted', 'matterhorn', 'jungle'];
-    await page.evaluate((z) => { const d = window.__dlnavi; const seq = d.S.planSnap.seq; const done = seq.filter((x) => d.S.done[x]); const anchors = seq.filter((x) => !d.S.done[x] && x.includes(':')); d.layoutPlan([...done, ...z.filter((x) => !d.S.done[x]), ...anchors], '並べ替え'); d.checkSuggest(); d.renderAll(); }, zig);
+    await page.evaluate((z) => { const d = window.__dlnavi; d.S.lastSuggestionAt=0; const seq = d.S.planSnap.seq; const done = seq.filter((x) => d.S.done[x]); const anchors = seq.filter((x) => !d.S.done[x] && x.includes(':')); d.layoutPlan([...done, ...z.filter((x) => !d.S.done[x]), ...anchors], '並べ替え'); d.checkSuggest(); d.renderAll(); }, zig);
     await page.waitForTimeout(150);
     const before = await page.evaluate(() => window.__dlnavi.S.planSnap.seq.join());
     assert.equal(await page.locator('#view-plan .sugg-quiet').count(), 1, 'quiet suggestion');
@@ -905,11 +904,11 @@ for (const [t, expect, file] of [['07:00', /開園/, '11-preopen'], ['11:28', /�
   await step('Rules: free time offers rides to ADD (suggestion), never adds them on its own', async () => {
     await tab(page, 'plan');
     // empty the evening: drop the evening rides from the plan by hand
-    await page.evaluate(() => { const d = window.__dlnavi; const s = d.S.planSnap.seq; const keep = s.filter((x) => x.includes(':') || d.S.done[x]); d.layoutPlan(keep, '削除'); d.checkSuggest(); d.renderAll(); });
+    await page.evaluate(() => { const d = window.__dlnavi; d.S.lastSuggestionAt=0; const s = d.S.planSnap.seq; const keep = s.filter((x) => x.includes(':') || d.S.done[x]); d.layoutPlan(keep, '削除'); d.checkSuggest(); d.renderAll(); });
     await page.waitForTimeout(200);
     const s0 = await seq();
     assert.equal(await page.locator('#view-plan .sugg-quiet').count(), 1, 'suggestion available');
-    assert.match(await page.textContent('#view-plan .sugg'), /空き時間に追加/);
+    assert.doesNotMatch(await page.textContent('#view-plan .sugg-quiet'), /空き時間に追加|スペース|インディ/, 'no destinations exposed');
     assert.equal(await seq(), s0, 'not added on its own');
     await tab(page, 'home');
     assert.equal(await page.evaluate(() => { const d = window.__dlnavi; return d.homeReco(d.ctx()).primary?.type; }), 'free', 'no ride outside the plan is made the next stop');
