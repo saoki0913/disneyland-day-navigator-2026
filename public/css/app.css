@@ -802,3 +802,11 @@ body.is-dragging { -webkit-user-select: none; user-select: none; cursor: grabbin
 .chips--quick .chip { height: 32px; font-size: 12.5px; }
 @media (max-width: 390px) { .tl--edit .tl__grip { width: 28px; flex-basis: 28px; } .tl__thumb { width: 36px; flex-basis: 36px; height: 36px; } }
 @media (prefers-reduced-transparency: reduce) { .btn, .chip, .filter-toggle, .check { background: #fff; backdrop-filter: none; -webkit-backdrop-filter: none; } }
+
+/* Home actions: one quiet iOS-style glass treatment instead of saturated yellow. */
+.act { border: 1px solid rgba(255,255,255,.68); box-shadow: 0 3px 12px rgba(15,55,115,.11), inset 0 1px 0 rgba(255,255,255,.7); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+.act--done { background: rgba(224,240,255,.88); color: #155cac; box-shadow: 0 3px 12px rgba(20,85,165,.13), inset 0 1px 0 rgba(255,255,255,.85); }
+.act--alt { background: rgba(255,255,255,.82); color: #245989; }
+.act--route { background: rgba(38,102,190,.88); color: #fff; border-color: rgba(255,255,255,.6); box-shadow: 0 3px 12px rgba(18,77,157,.15); }
+.act:active, .btn:active, .check:active { transform: scale(.985); }
+@media (prefers-reduced-transparency: reduce) { .act { -webkit-backdrop-filter: none; backdrop-filter: none; } .act--done { background: #e4f1ff; } .act--alt { background: #fff; } .act--route { background: #2468b7; } }
