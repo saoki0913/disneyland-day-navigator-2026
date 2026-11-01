@@ -46,6 +46,8 @@ async function newCtx({ liveMode = 'ok', sim = '10:00', geo = null, photos = 'ok
   return { ctx, page, errors };
 }
 const tab = async (p, t) => { await p.click(`.tab[data-tab="${t}"]`); await p.waitForTimeout(250); };
+// Full rebuilds open a 作り直し案 sheet first; 反映 applies it (no sheet when nothing changes).
+const accept = async (p) => { await p.waitForTimeout(150); if (await p.locator('#sheet [data-act="proposal-apply"]').count()) { await p.click('#sheet [data-act="proposal-apply"]'); await p.waitForTimeout(250); } };
 const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'horizontal overflow');
 
 // ---------- A: normal day with live data ----------
@@ -98,15 +100,14 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
       await page.click('[data-act="plan-edit"]'); await page.waitForTimeout(150);
       await page.click(`[data-b-set="plan"][data-v="${id}"]`); await page.waitForTimeout(150);
       assert.ok(await page.locator(`[data-b-set="plan"][data-v="${id}"].is-active`).count() === 1);
-      await page.click('[data-act="plan-apply"]'); await page.waitForTimeout(200);
+      await page.click('[data-act="plan-apply"]'); await accept(page); await page.waitForTimeout(200);
       const tl = await page.textContent('ol.tl:not(.tl--done)');
-      // rise is DOWN in the fixture → not in the timeline but listed as 再開待ち
-      assert.doesNotMatch(tl, /レジスタンスの台頭/, `${id} rise not planned while down`);
-      assert.match(await page.textContent('.waitlist'), /レジスタンスの台頭/, `${id} rise waiting`);
+      // rise is DOWN in the fixture → stays in the plan marked 休止中 (takes no time)
+      assert.match(await page.textContent('.tl__item--paused'), /レジスタンスの台頭/, `${id} rise shown as paused`);
       assert.match(tl, /ミレニアム・ファルコン/, `${id} falcon`);
       await page.screenshot({ path: `${SHOTS}/03-plan-${id}.png`, fullPage: true });
     }
-    assert.match(await page.textContent('#toast'), /プランを作りました/);
+    assert.match(await page.textContent('#toast'), /反映しました|最適です/);
   });
   await step('3b. Plan builder: conditions (must ride / skip ride / max wait) change the plan', async () => {
     await page.click('[data-act="plan-edit"]'); await page.waitForTimeout(150);
@@ -116,7 +117,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.equal(await page.locator('[data-b-ride="pirates"].is-skip').count(), 1);
     await page.click('[data-b-set="maxWait"][data-v="30"]'); await page.waitForTimeout(100);
     await page.screenshot({ path: `${SHOTS}/03-plan-builder.png` });
-    await page.click('[data-act="plan-apply"]'); await page.waitForTimeout(200);
+    await page.click('[data-act="plan-apply"]'); await accept(page); await page.waitForTimeout(200);
     const tl = await page.textContent('ol.tl:not(.tl--done)');
     assert.match(tl, /マッターホーン/);
     assert.doesNotMatch(tl, /カリブの海賊/);
@@ -126,12 +127,13 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.click('[data-b-ride="matterhorn"]'); await page.click('[data-b-ride="matterhorn"]');
     await page.click('[data-b-ride="pirates"]');
     await page.click('[data-b-set="maxWait"][data-v="60"]');
-    await page.click('[data-act="plan-apply"]'); await page.waitForTimeout(200);
+    await page.click('[data-act="plan-apply"]'); await accept(page); await page.waitForTimeout(200);
   });
   await step('11. Timeline: meals/shows appear once each, in time order, no overlap with rides', async () => {
     const items = await page.$$eval('ol.tl:not(.tl--done) .tl__item', (els) => els.map((e) => ({ t: e.querySelector('.tl__time').textContent, cls: e.className, name: e.querySelector('.tl__name')?.textContent || '' })));
-    const toMin = (s) => { const [h, m] = s.split(':').map(Number); return h * 60 + m; };
-    for (let i = 1; i < items.length; i++) assert.ok(toMin(items[i].t) >= toMin(items[i - 1].t), `order ${items[i - 1].t} > ${items[i].t}`);
+    const toMin = (s) => { const [h, m] = s.replace(/[^\d:]/g, '').split(':').map(Number); return h * 60 + m; };
+    const timed = items.filter((i) => /\d:\d/.test(i.t)); // paused rows show 休止 instead of a time
+    for (let i = 1; i < timed.length; i++) assert.ok(toMin(timed[i].t) >= toMin(timed[i - 1].t), `order ${timed[i - 1].t} > ${timed[i].t}`);
     const fant = items.filter((i) => /ファンタズミック/.test(i.name));
     assert.equal(fant.length, 1, 'Fantasmic once');
   });
@@ -175,15 +177,15 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await tab(page, 'home');
     assert.equal(await page.getAttribute('#actionbar [data-done]', 'data-done'), target, 'home follows the custom order');
     await tab(page, 'plan');
-    await page.click('.replan [data-act="replan"]'); await page.waitForTimeout(500);
+    await page.click('.replan [data-act="replan"]'); await accept(page); await page.waitForTimeout(500);
     assert.equal(await page.evaluate(() => window.__dlnavi.S.order), null, 'order reset');
-    assert.match(await page.textContent('#toast'), /作り直しました/);
+    assert.match(await page.textContent('#toast'), /反映しました|最適です/);
     assert.equal(await page.locator('.tl__item--now.is-fresh').count(), 1, 'fresh stamp');
     await page.screenshot({ path: `${SHOTS}/03-plan-replan.png`, fullPage: true });
   });
   await step('Lock: a locked ride keeps its place when the plan is re-optimised (更新)', async () => {
     await tab(page, 'plan');
-    const ids = await page.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride));
+    const ids = await page.$$eval('.tl--plan > li[data-ride]:not(.tl__item--paused)', (els) => els.map((e) => e.dataset.ride));
     const target = ids[ids.length - 1];
     const seqIdx = () => page.evaluate((t) => { const s = window.__dlnavi.S; return s.planSnap.seq.filter((x) => !s.done[x]).indexOf(t); }, target);
     // move it to the top, lock it there, then 更新
@@ -197,11 +199,11 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.click(`[data-lock="${target}"]`); await page.waitForTimeout(150);
     assert.match(await page.textContent('#toast'), /固定しました/);
     assert.equal(await page.locator(`[data-lock="${target}"].is-on`).count(), 1);
-    await page.click('.replan [data-act="replan"]'); await page.waitForTimeout(600);
+    await page.click('.replan [data-act="replan"]'); await accept(page); await page.waitForTimeout(600);
     assert.equal(await seqIdx(), idx, 'locked ride stays put after 更新');
     await page.screenshot({ path: `${SHOTS}/03-plan-lock.png`, fullPage: true });
     await page.click(`[data-lock="${target}"]`); await page.waitForTimeout(150);
-    await page.click('.replan [data-act="replan"]'); await page.waitForTimeout(600);
+    await page.click('.replan [data-act="replan"]'); await accept(page); await page.waitForTimeout(600);
   });
   await step('Plan stays put on its own; changes only on 更新', async () => {
     await tab(page, 'plan');
@@ -213,22 +215,21 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.click('#livePill'); await page.waitForTimeout(500);
     assert.equal(await snapOf(), before, 'time passing / tab switching / new waits do not reshuffle the plan');
     assert.equal(await page.evaluate(() => window.__dlnavi.S.planSnap.at), at0, 'saved plan untouched');
-    await page.click('.tl__item--now [data-act="replan"]'); await page.waitForTimeout(600);
+    await page.click('.tl__item--now [data-act="replan"]'); await accept(page); await page.waitForTimeout(600);
     assert.notEqual(await snapOf(), before, '更新 rebuilds from the current time');
     await page.evaluate(() => { window.__dlnavi.S.sim.base -= 45; });
-    await page.click('.tl__item--now [data-act="replan"]'); await page.waitForTimeout(600);
+    await page.click('.tl__item--now [data-act="replan"]'); await accept(page); await page.waitForTimeout(600);
   });
-  await step('乗った re-plans the rest of the day from that moment', async () => {
+  await step('乗った keeps the order and re-times the rest from that moment', async () => {
     await tab(page, 'plan');
     const first = await page.getAttribute('.tl--plan > li[data-ride]', 'data-ride');
     const ids0 = await page.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride));
     await page.click(`.tl--plan [data-done="${first}"]`); await page.waitForTimeout(300);
     const now = await page.evaluate(() => window.__dlnavi.S.doneMin);
     const ids1 = await page.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride));
-    // only the NEXT stop may be re-chosen from here; everything after it keeps its order
+    // 乗った never reorders: the rest keeps exactly its order, only the times move
     const rest0 = ids0.filter((x) => x !== first);
-    assert.deepEqual([...ids1].sort(), [...rest0].sort(), 'same rides');
-    assert.deepEqual(ids1.slice(1), rest0.filter((x) => x !== ids1[0]), '乗った keeps the order of the rest');
+    assert.deepEqual(ids1, rest0, '乗った keeps the order of the rest');
     const t0 = await page.textContent('.tl__item--now .tl__time');
     const t1 = await page.textContent('.tl--plan > li[data-ride] .tl__time');
     const toMin = (x) => { const [h, m] = x.split(':').map(Number); return h * 60 + m; };
@@ -269,21 +270,23 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
   });
   await step('10. Re-optimise after check-in keeps the remaining must-rides', async () => {
     await tab(page, 'plan');
-    await page.click('[data-act="replan"]');
+    await page.click('[data-act="replan"]'); await accept(page);
     await page.waitForTimeout(500);
-    assert.match(await page.textContent('#toast'), /作り直しました/);
+    assert.match(await page.textContent('#toast'), /反映しました|最適です/);
     const tl = await page.textContent('ol.tl:not(.tl--done)');
     const st = await page.evaluate(() => window.__dlnavi.S.done);
     if (!st.falcon) assert.match(tl, /ファルコン/);
-    if (!st.rise) assert.match(await page.textContent('.waitlist'), /レジスタンス/);
+    if (!st.rise) assert.match(await page.textContent('.tl__item--paused'), /レジスタンス/);
   });
   await step('"別の候補" skips the current suggestion and shows feedback', async () => {
     await tab(page, 'home');
     const cur = await page.getAttribute('#actionbar [data-skip]', 'data-skip');
     await page.click('#actionbar [data-skip]');
     await page.waitForTimeout(250);
-    assert.match(await page.textContent('#toast'), /あとまわし|後ろ/);
-    assert.notEqual(await page.getAttribute('#actionbar [data-skip]', 'data-skip') ?? 'anchor', cur);
+    const msg = await page.textContent('#toast');
+    assert.match(msg, /あとまわし|後ろ|ほかの乗り物がありません/);
+    // the next stop changes — unless the plan has no other ride (rides outside the plan are never made "next")
+    if (!/ほかの乗り物がありません/.test(msg)) assert.notEqual(await page.getAttribute('#actionbar [data-skip]', 'data-skip') ?? 'anchor', cur);
     await page.screenshot({ path: `${SHOTS}/02-home-after-skip.png` });
   });
   await step('8. Photos: real image loads; broken image falls back to poster', async () => {
@@ -353,7 +356,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.click('[data-act="plan-edit-shows"]'); await page.waitForTimeout(200);
     await page.uncheck('[data-b-show-on="cavalcade"]'); await page.waitForTimeout(150);
     await page.click('[data-b-show-pick="fantasmic"][data-time="21:00"]'); await page.waitForTimeout(150);
-    await page.click('[data-act="plan-apply"]'); await page.waitForTimeout(200);
+    await page.click('[data-act="plan-apply"]'); await accept(page); await page.waitForTimeout(200);
     const tl = await page.textContent('ol.tl:not(.tl--done)');
     assert.doesNotMatch(tl, /カヴァルケード/);
     const fItem = await page.locator('.tl__item', { hasText: 'ファンタズミック' }).first().textContent();
@@ -361,7 +364,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.click('[data-act="plan-edit"]'); await page.waitForTimeout(150);
     await page.check('[data-b-show-on="cavalcade"]'); await page.waitForTimeout(100);
     await page.click('[data-b-show-pick="fantasmic"][data-time="22:30"]');
-    await page.click('[data-act="plan-apply"]'); await page.waitForTimeout(200);
+    await page.click('[data-act="plan-apply"]'); await accept(page); await page.waitForTimeout(200);
   });
   await step('Plan editing: remove, add back (best slot), drag dinner earlier', async () => {
     await tab(page, 'plan');
@@ -380,7 +383,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.match(await page.textContent('#toast'), /追加しました/);
     // drag dinner up above the ride before it → dinner gets earlier
     const dinnerT = async () => page.textContent('.tl--plan > li[data-drag="meal:dinner"] .tl__time');
-    const toMin = (t) => { const [h, m] = t.trim().split(':').map(Number); return h * 60 + m; };
+    const toMin = (t) => { const [h, m] = t.replace(/[^\d:]/g, '').split(':').map(Number); return h * 60 + m; };
     const t0 = toMin(await dinnerT());
     const drags = await page.$$eval('.tl--plan > li[data-drag]', (els) => els.map((e) => e.dataset.drag));
     const di = drags.indexOf('meal:dinner');
@@ -432,7 +435,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.equal((+m[3] * 60 + +m[4]) - (+m[1] * 60 + +m[2]), 90, 'meal lasts 90 min');
     await page.locator('.tl__item--meal [data-anchor-edit]').first().click(); await page.waitForTimeout(200);
     await page.click('[data-meal-reset]'); await page.waitForTimeout(150);
-    await page.locator('.replan [data-act="replan"]').click(); await page.waitForTimeout(600); // back to おすすめ順
+    await page.locator('.replan [data-act="replan"]').click(); await accept(page); await page.waitForTimeout(600); // back to おすすめ順
   });
   await step('Meal can be changed visually (±15 min stepper + restaurant cards)', async () => {
     await tab(page, 'plan');
@@ -505,7 +508,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.screenshot({ path: `${SHOTS}/03-plan-moved.png` });
     await page.click('#toastAct'); await page.waitForTimeout(200); // 元に戻す
     assert.equal(await page.evaluate(() => window.__dlnavi.S.planSnap.seq.join()), before, 'undo');
-    await page.click('.replan [data-act="replan"]'); await page.waitForTimeout(600);
+    await page.click('.replan [data-act="replan"]'); await accept(page); await page.waitForTimeout(600);
   });
   await step('Position chip: pick the area you are in from the plan header', async () => {
     await tab(page, 'plan');
@@ -530,7 +533,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.screenshot({ path: `${SHOTS}/06b-food-menu.png`, fullPage: true });
     await page.click('.sheet__backdrop', { position: { x: 10, y: 10 } }); await page.waitForTimeout(200);
   });
-  await step('Pause: a planned ride that goes down leaves the plan (rest closes up) and returns to its place on reopening', async () => {
+  await step('Pause: a planned ride that goes down stays in its place as 休止中 (order unchanged) and counts again on reopening', async () => {
     await tab(page, 'plan');
     const rides = () => page.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride));
     const seqOpen = () => page.evaluate(() => { const s = window.__dlnavi.S; return s.planSnap.seq.filter((x) => !s.done[x]); });
@@ -541,15 +544,19 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     const pick = before.find((x) => x !== 'rise' && x !== 'space' && !manual.includes(x));
     pauseId = pick;
     await page.click('#livePill'); await page.waitForTimeout(600);
-    assert.ok(!(await rides()).includes(pauseId), 'paused ride left the timeline');
-    { const a = await rides(); assert.deepEqual(a, before.filter((x) => x !== pauseId), `others keep their order: ${before.join()} → ${a.join()}`); }
-    assert.equal(await page.locator(`.waitlist [data-open="${pick}"]`).count(), 1, 'listed as 再開待ち');
+    assert.deepEqual(await rides(), before, 'order unchanged, the paused ride stays in place');
+    assert.equal(await page.locator(`.tl__item--paused[data-ride="${pick}"]`).count(), 1, 'marked 休止中 in place');
+    assert.deepEqual(await seqOpen(), seq0, 'sequence unchanged');
     assert.match(await page.textContent('#toast'), /一時休止/);
+    await tab(page, 'home');
+    assert.notEqual(await page.getAttribute('#actionbar [data-done]', 'data-done'), pick, 'the next stop skips it');
+    await tab(page, 'plan');
     await page.screenshot({ path: `${SHOTS}/03-plan-paused.png`, fullPage: true });
     pauseId = null;
     await page.click('#livePill'); await page.waitForTimeout(600);
     assert.deepEqual(await seqOpen(), seq0, 'sequence unchanged');
-    assert.deepEqual(await rides(), before, 'back in its original place');
+    assert.equal(await page.locator(`.tl__item--paused[data-ride="${pick}"]`).count(), 0, 'counts again');
+    assert.deepEqual(await rides(), before);
     assert.match(await page.textContent('#toast'), /再開/);
   });
   await step('Trend: history recorded → sparkline in list + chart in detail', async () => {
@@ -617,7 +624,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await tab(page, 'plan');
     const done = await page.locator('.tl--done .tl__item').count();
     await page.fill('#planTimeInput', '15:30');
-    await page.click('[data-act="plan-time-set"]');
+    await page.click('[data-act="plan-time-set"]'); await accept(page);
     assert.equal(await page.evaluate(() => window.__dlnavi.S.planTime.base), 930);
     assert.equal(await page.locator('.tl--done .tl__item').count(), done);
     await page.reload(); await page.waitForSelector('#planTimeInput');
@@ -625,9 +632,9 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.click('[data-act="plan-edit"]');
     await page.fill('[data-b-start]', '16:15');
     await page.locator('[data-b-start]').dispatchEvent('change');
-    await page.click('[data-act="plan-apply"]');
+    await page.click('[data-act="plan-apply"]'); await accept(page);
     assert.equal(await page.evaluate(() => window.__dlnavi.S.planTime.base), 975);
-    await page.click('[data-act="plan-time-auto"]');
+    await page.click('[data-act="plan-time-auto"]'); await accept(page);
     assert.equal(await page.evaluate(() => window.__dlnavi.S.planTime), null);
   });
   await step('No JS errors in manual-time builder', async () => assert.deepEqual(errors, []));
@@ -660,11 +667,11 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.equal(await B.page.locator(`.tl--done [data-done="${rid}"]`).count(), 1);
     // B changes the pace → A follows
     await B.page.click('[data-act="plan-edit"]'); await B.page.waitForTimeout(150);
-    await B.page.click('[data-b-set="plan"][data-v="rides"]'); await B.page.click('[data-act="plan-apply"]'); await B.page.waitForTimeout(1200);
+    await B.page.click('[data-b-set="plan"][data-v="rides"]'); await B.page.click('[data-act="plan-apply"]'); await accept(B.page); await B.page.waitForTimeout(1200);
     await A.page.evaluate(() => window.__dlnavi.pullShare()); await A.page.waitForTimeout(300);
     assert.equal(await A.page.evaluate(() => window.__dlnavi.S.plan), 'rides');
     // Both phones show exactly the same plan (the saved plan itself is shared)
-    const tlOf = (p) => p.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride + '@' + e.querySelector('.tl__time').textContent).join(','));
+    const tlOf = (p) => p.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride + '@' + e.querySelector('.tl__time').textContent.replace(/[^\d:休止]/g, '')).join(','));
     await A.page.click('.tab[data-tab="plan"]'); await B.page.click('.tab[data-tab="home"]'); await B.page.click('.tab[data-tab="plan"]'); await A.page.waitForTimeout(200);
     assert.equal(await tlOf(A.page), await tlOf(B.page), 'identical timelines');
     // A undoes → B drops it
@@ -823,6 +830,73 @@ for (const [t, expect, file] of [['07:00', /開園/, '11-preopen'], ['11:28', /�
   await ctx.close();
 }
 
+// ---------- G: when the plan changes (only on your own action) ----------
+{
+  const { ctx, page, errors } = await newCtx();
+  const seq = () => page.evaluate(() => window.__dlnavi.S.planSnap.seq.join());
+  await step('Rules: 今から作り直す is a proposal until 反映 — やめる keeps the plan exactly', async () => {
+    await tab(page, 'plan');
+    const s0 = await seq();
+    await page.evaluate(() => { window.__dlnavi.S.sim.base += 150; });
+    await page.click('.replan [data-act="replan"]'); await page.waitForTimeout(900);
+    if (await page.locator('#sheet [data-act="proposal-apply"]').count()) {
+      assert.match(await page.textContent('#sheet'), /作り直し案/);
+      assert.match(await page.textContent('#sheet'), /反映を押すまで|「反映」を押すまで/);
+      assert.equal(await seq(), s0, 'nothing changes while the proposal is open');
+      await page.screenshot({ path: `${SHOTS}/19-proposal.png` });
+      await page.click('#sheet [data-act="proposal-cancel"]'); await page.waitForTimeout(250);
+      assert.equal(await seq(), s0, 'やめる keeps the plan');
+      await page.click('.replan [data-act="replan"]'); await page.waitForTimeout(900);
+      await page.click('#sheet [data-act="proposal-apply"]'); await page.waitForTimeout(300);
+      assert.notEqual(await seq(), s0, '反映 applies it');
+    } else {
+      assert.match(await page.textContent('#toast'), /最適です/);
+    }
+    await page.evaluate(() => { window.__dlnavi.S.sim.base -= 150; });
+  });
+  await step('Rules: 絶対乗る on a ride sheet inserts only that ride; 乗らない removes only it', async () => {
+    await tab(page, 'plan');
+    const rides = async () => (await seq()).split(',').filter((x) => !x.includes(':'));
+    const s0 = await rides();
+    await tab(page, 'explore');
+    const ids = await page.$$eval('#view-explore [data-open]', (els) => els.map((e) => e.dataset.open));
+    const out = ids.find((x) => !s0.includes(x) && x !== 'rise' && x !== 'smallworld');
+    await page.click(`#view-explore [data-open="${out}"]`); await page.waitForTimeout(250);
+    await page.click(`#sheet [data-ride-st="${out}"][data-v="must"]`); await page.waitForTimeout(400);
+    const s1 = await rides();
+    assert.ok(s1.includes(out), 'inserted');
+    assert.deepEqual(s1.filter((x) => x !== out), s0, 'nothing else changed');
+    await page.click(`#sheet [data-ride-st="${out}"][data-v="skip"]`); await page.waitForTimeout(400);
+    assert.deepEqual(await rides(), s0, 'removed again, rest unchanged');
+    await page.evaluate(() => document.querySelector('.sheet__close')?.click()); await page.waitForTimeout(200);
+  });
+  await step('Rules: choosing your area does not reorder the plan', async () => {
+    await tab(page, 'plan');
+    const s0 = await seq();
+    await page.click('.tl__item--now [data-act="pick-land"]'); await page.waitForTimeout(200);
+    await page.click('#sheet [data-land="toon"]'); await page.waitForTimeout(300);
+    assert.equal(await seq(), s0);
+  });
+  await step('Rules: free time offers rides to ADD (suggestion), never adds them on its own', async () => {
+    await tab(page, 'plan');
+    // empty the evening: drop the evening rides from the plan by hand
+    await page.evaluate(() => { const d = window.__dlnavi; const s = d.S.planSnap.seq; const keep = s.filter((x) => x.includes(':') || d.S.done[x]); d.layoutPlan(keep, '削除'); d.checkSuggest(); d.renderAll(); });
+    await page.waitForTimeout(200);
+    const s0 = await seq();
+    assert.equal(await page.locator('#view-plan .sugg').count(), 1, 'suggestion card');
+    assert.match(await page.textContent('#view-plan .sugg'), /空き時間に追加/);
+    assert.equal(await seq(), s0, 'not added on its own');
+    await tab(page, 'home');
+    assert.equal(await page.evaluate(() => { const d = window.__dlnavi; return d.homeReco(d.ctx()).primary?.type; }), 'free', 'no ride outside the plan is made the next stop');
+    await tab(page, 'plan');
+    await page.click('#view-plan .sugg__open'); await page.waitForTimeout(250);
+    await page.click('#sheet [data-act="suggest-apply"]'); await page.waitForTimeout(300);
+    assert.ok((await seq()).split(',').length > s0.split(',').length, 'added after 反映');
+  });
+  await step('No uncaught JS errors (rules)', async () => assert.deepEqual(errors, []));
+  await ctx.close();
+}
+
 // ---------- F: Disney California Adventure (park switch, trip day, map NEXT = plan) ----------
 {
   const dcaLive = (variant = 0) => ({
@@ -849,11 +923,11 @@ for (const [t, expect, file] of [['07:00', /開園/, '11-preopen'], ['11:28', /�
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(base + '/'); await page.waitForSelector('.next__title'); await page.waitForTimeout(300);
-  const planTimes = () => page.$$eval('.tl--plan > li[data-drag] .tl__time', (els) => els.map((e) => { const [h, m] = e.textContent.trim().split(':').map(Number); return h * 60 + m; }));
+  const planTimes = () => page.$$eval('.tl--plan > li[data-drag]:not(.tl__item--paused) .tl__time', (els) => els.map((e) => { const [h, m] = e.textContent.replace(/[^\d:]/g, '').split(':').map(Number); return h * 60 + m; }));
 
   await step('DCA 1. Header switch ランド → カリフォルニア: DCA catalog, park=dca APIs, no horizontal scroll', async () => {
     assert.equal((await page.textContent('.parksw .is-active')).trim(), 'ランド');
-    await page.click('[data-park="dca"]');
+    await page.click('.parksw [data-park="dca"]');
     await page.waitForSelector('.next__title'); await page.waitForTimeout(500);
     assert.equal((await page.textContent('.parksw .is-active')).trim(), 'カリフォルニア');
     assert.equal(await page.evaluate(() => window.__dlnavi.park), 'dca');
@@ -878,7 +952,7 @@ for (const [t, expect, file] of [['07:00', /開園/, '11-preopen'], ['11:28', /�
     assert.match(await page.textContent('#sheetBody'), /カリフォルニアの日程/);
     await page.screenshot({ path: `${SHOTS}/22-dca-day.png` });
     await page.fill('#dayEntry', '09:00'); await page.fill('#dayExit', '20:00');
-    await page.click('[data-act="day-save"]'); await page.waitForTimeout(400);
+    await page.click('[data-act="day-save"]'); await accept(page); await page.waitForTimeout(400);
     const h = await page.evaluate(() => window.__dlnavi.hours());
     assert.equal(h.open, 540); assert.equal(h.close, 1200);
     assert.match(await page.textContent('.dayrow'), /入園9:00.*退園20:00/);
@@ -886,8 +960,8 @@ for (const [t, expect, file] of [['07:00', /開園/, '11-preopen'], ['11:28', /�
     const mins = await planTimes();
     assert.ok(mins.length && mins.every((m) => m < 1200), `timeline before 20:00: ${mins}`);
     // tapping the active park in the header opens the same sheet
-    await page.click('[data-park="dca"]'); await page.waitForTimeout(200);
-    await page.click('[data-act="day-reset"]'); await page.waitForTimeout(400);
+    await page.click('.parksw [data-park="dca"]'); await page.waitForTimeout(200);
+    await page.click('[data-act="day-reset"]'); await accept(page); await page.waitForTimeout(400);
     const h2 = await page.evaluate(() => window.__dlnavi.hours());
     assert.equal(h2.open, 480); assert.equal(h2.close, 1260);
   });
@@ -914,11 +988,11 @@ for (const [t, expect, file] of [['07:00', /開園/, '11-preopen'], ['11:28', /�
     await page.click('.actionbar [data-done]'); await page.waitForTimeout(300);
     const dcaDone = Object.keys(await page.evaluate(() => window.__dlnavi.S.done));
     assert.ok(dcaDone.length >= 1);
-    await page.click('[data-park="dl"]'); await page.waitForSelector('.next__title'); await page.waitForTimeout(300);
+    await page.click('.parksw [data-park="dl"]'); await page.waitForSelector('.next__title'); await page.waitForTimeout(300);
     assert.equal(await page.evaluate(() => window.__dlnavi.park), 'dl');
     const dlDone = Object.keys(await page.evaluate(() => window.__dlnavi.S.done));
     assert.ok(!dlDone.some((k) => dcaDone.includes(k)), 'progress is separate per park');
-    await page.click('[data-park="dca"]'); await page.waitForSelector('.next__title'); await page.waitForTimeout(300);
+    await page.click('.parksw [data-park="dca"]'); await page.waitForSelector('.next__title'); await page.waitForTimeout(300);
     assert.deepEqual(Object.keys(await page.evaluate(() => window.__dlnavi.S.done)), dcaDone);
   });
   await step('No uncaught JS errors (DCA)', async () => assert.deepEqual(errors, []));
