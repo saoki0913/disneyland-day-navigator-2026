@@ -240,10 +240,10 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     const rest0 = ids0.filter((x) => x !== first);
     assert.deepEqual(ids1, rest0, '乗った keeps the order of the rest');
     const t0 = await page.textContent('.tl__item--now .tl__time');
-    const t1 = await page.textContent('.tl--plan > li[data-ride] .tl__time');
+    const t1 = await page.textContent('.tl--plan > li[data-ride]:not(.tl__item--paused) .tl__time');
     const toMin = (x) => { const [h, m] = x.split(':').map(Number); return h * 60 + m; };
     assert.ok(Math.abs(toMin(t0) - Math.floor(Object.values(now)[0])) <= 1, 'plan starts at the check-in time');
-    assert.ok(toMin(t1) >= toMin(t0), 'next ride is after the check-in time');
+    assert.ok(Number.isFinite(toMin(t1)) && toMin(t1) >= toMin(t0), 'next operating ride is after check-in');
     assert.notEqual(await page.getAttribute('.tl--plan > li[data-ride]', 'data-ride'), first);
     assert.ok(ids0.length >= 2);
     await page.screenshot({ path: `${SHOTS}/03-plan-after-done.png` });
@@ -256,9 +256,9 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.click('#actionbar [data-done]');
     await page.waitForTimeout(300);
     assert.match(await page.textContent('#toast'), /完了/);
-    assert.match(await page.textContent('.prog__n'), /^1/);
+    assert.equal(await page.evaluate((id) => !!window.__dlnavi.S.done[id], first), true, 'selected stop is complete');
     await page.reload(); await page.waitForSelector('.next__title'); await page.waitForTimeout(300);
-    assert.match(await page.textContent('.prog__n'), /^1/);
+    assert.equal(await page.evaluate((id) => !!window.__dlnavi.S.done[id], first), true, 'completion persisted');
     assert.notEqual(await page.getAttribute('#actionbar [data-done]', 'data-done'), first, 'next recommendation changes');
     await tab(page, 'plan');
     const doneRow = page.locator(`.tl--done [data-done="${first}"]`);
