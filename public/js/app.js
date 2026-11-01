@@ -38,7 +38,7 @@ const defaults = {
   locks: {},           // { rideId: true } rides locked in place (kept even when the plan is re-optimised)
   planSnap: null,      // the saved plan: { at, base, items, waiting, missingMust } — changes only on 更新 / 乗った / edits
   a2hsDismissed: false,
-  exploreTab: 'rides', exploreFilter: 'all', exploreSort: 'reco', foodFilter: 'all', foodQ: '',
+  exploreTab: 'rides', exploreFilter: 'all', exploreSort: 'reco', foodFilter: 'all', foodQ: '', rideQ: '',
   mapFilter: 'rides',
   tab: 'home',
   cfg: { date: null, entry: null, exit: null }, // this park's trip date / entry / exit (minutes); null → plan/API value
@@ -464,7 +464,14 @@ const IC = {
   unlock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.5-2"/>',
   users: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2.5"/><path d="M15.5 14.2c3 .2 5.5 2.7 5.5 5.8"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  cal: '<rect x="3.5" y="5" width="17" height="15" rx="3"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
+  castle: '<path d="M4 21V10l2-1.5V6h2v2.5L10 7V4l2-1.5L14 4v3l2 1.5V6h2v2.5l2 1.5v11h-5v-4a3 3 0 0 0-6 0v4Z"/>',
+  crown: '<path d="m3 8 4.5 3.5L12 5l4.5 6.5L21 8l-2 11H5Z"/>',
+  spark: '<path d="M12 2.5c.5 4.6 2.9 7 7.5 7.5-4.6.5-7 2.9-7.5 7.5-.5-4.6-2.9-7-7.5-7.5 4.6-.5 7-2.9 7.5-7.5Z"/><path d="M19 15.5c.2 1.8 1.2 2.8 3 3-1.8.2-2.8 1.2-3 3-.2-1.8-1.2-2.8-3-3 1.8-.2 2.8-1.2 3-3Z"/>',
+  bell: '<path d="M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15Z"/><path d="M10 21h4"/>',
+  down: '<path d="M12 4v14M6 12l6 6 6-6"/>',
 };
+const RIDE_IC = PARK_ID === 'dca' ? 'ride' : 'castle';
 const ic = (k) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${IC[k] || ''}</svg>`;
 
 // =====================================================================
@@ -642,6 +649,27 @@ function renderStatus() {
 function renderClock() {
   const m = nowMin();
   $('#clock').textContent = m >= 24 * 60 ? '--:--' : clock(m);
+  applySky(m);
+}
+// Header artwork: this park's skyline for the time of day (day → sunset 16:30 → night 18:30), park-local time.
+const SKY = {
+  day: { top: '#0670e2', theme: '#0670e2' },
+  sunset: { top: '#4f76e0', theme: '#4f76e0' },
+  night: { top: '#042067', theme: '#042067' },
+};
+const skyPhase = (m) => (m >= 18 * 60 + 30 || m < 4 * 60 ? 'night' : m >= 16 * 60 + 30 ? 'sunset' : 'day');
+function applySky(m = nowMin()) {
+  const ph = skyPhase(m);
+  const key = `${PARK_ID}:${ph}`;
+  if (R.sky === key) return;
+  R.sky = key;
+  const bar = $('#topbar');
+  bar.style.setProperty('--sky-img', `url(/img/park/${PARK_ID === 'dca' ? 'dca' : 'land'}-${ph}.webp)`);
+  bar.style.setProperty('--sky-top', SKY[ph].top);
+  bar.classList.toggle('has-art-spark', ph === 'day');
+  document.body.classList.toggle('is-sunset', ph === 'sunset');
+  document.body.classList.toggle('is-night', ph === 'night');
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', SKY[ph].theme);
 }
 
 // Reason keys → short text tags
@@ -655,12 +683,6 @@ const rtags = (reasons, max = 3) => `<div class="tags">${(reasons || []).slice(0
   return `<span class="tag ${k ? 'tag--' + k : ''}" title="${esc(x.t)}">${esc(t)}</span>`;
 }).join('')}</div>`;
 
-// Time bar: now → walk → wait → ride → spare → next fixed plan (visual instead of sentences)
-function timeBar(start, parts, endLabel, endTime) {
-  const total = parts.reduce((s, p) => s + Math.max(0, p.m), 0) || 1;
-  return `<div class="tbar"><div class="tbar__row">${parts.filter((p) => p.m > 0).map((p) => `<div class="tbar__seg tbar__seg--${p.k}" style="flex:${p.m} 1 0">${p.m / total > 0.13 ? esc(p.t) : ''}</div>`).join('')}</div>
-    <div class="tbar__lbl"><span>いま <span class="num">${clock(start)}</span></span><span>${esc(endLabel)} <span class="num">${clock(endTime)}</span></span></div></div>`;
-}
 function trendOf(id) {
   const pts = (R.hist[id] || []).filter((p) => p[1] != null);
   if (pts.length < 2) return null;
@@ -745,13 +767,17 @@ function renderHome() {
   const done = doneRides();
   let html = '';
   if (c.now >= h.close || dayPhase() === 'after') {
-    html += `<div class="card card--pad" style="text-align:center"><div class="kicker">See you again</div><h2 style="margin:4px 0">おつかれさま！</h2>
+    html += `<div class="card endcard"><div class="kicker">${ic('spark')}今日のまとめ</div><h2>おつかれさま！</h2>
       <div class="prog__n" style="font-size:40px">${done.length}<small> 施設</small></div>
       <div class="tags" style="justify-content:center;margin-top:10px">${done.map((id) => `<span class="tag">${esc(attractionById[id].short)}</span>`).join('')}</div></div>`;
     el.innerHTML = html + footer();
-    renderActionBar(null);
     return;
   }
+  // 0) quick actions right under the header artwork
+  html += `<div class="qa">
+    <button class="qa__b ${S.share ? 'is-on' : ''}" type="button" data-act="qa-share">${ic('users')}${S.share ? '共有中' : 'プランを共有'}</button>
+    <button class="qa__b" type="button" data-act="qa-day">${ic('cal')}日付・時間</button>
+    <button class="qa__b" type="button" data-act="qa-cond">${ic('sliders')}条件</button></div>`;
   // 1) next action — always first
   html += renderNextCard(r, c);
   // 2) progress: one slim band; tap to open the details
@@ -760,27 +786,34 @@ function renderHome() {
   if (c.now < h.open) {
     html += `<div class="card cdrow">${ic('clock')}<span>${h.customOpen ? '入園' : '開園'} <b class="num">${clock(h.open)}</b> まで <b>${fmtDur(h.open - c.now)}</b> · ${h.customOpen ? `開園 <span class="num">${clock(h.parkOpen)}</span>` : `入口に <span class="num">${clock(h.open - 40)}</span> 着が目安`}</span></div>`;
   }
-  // 3) only actionable alerts stay on screen: reopened / suddenly shorter
-  for (const al of activeAlerts()) {
-    const a = attractionById[al.id];
-    html += `<div class="alert" role="alert"><div class="alert__body"><div class="alert__t">${esc(a.short)} ${al.type === 'reopen' ? '再開' : '空いてきた'}</div>
-        <div class="alert__s">${al.type === 'reopen' ? `いま 待ち <span class="num">${al.to ?? '?'}</span>分` : `<s>${al.from}分</s> → <b class="num">${al.to}</b>分`}</div></div>
-      <button class="btn btn--sm btn--primary" data-pin="${al.id}">行く</button><button class="alert__x" data-dismiss-alert="${al.id}" aria-label="閉じる">${ic('x')}</button></div>`;
-  }
-  // 4) other options
+  // 3) other options — the reason chip says why, the wait is coloured like the chip
   if (r.alts.length) {
-    const lbl = { wait: '待ち短い', walk: '近い', pop: '人気', score: '時間があれば' };
-    html += `<div class="sec" id="alts"><h2><span class="sec__en">OTHERS</span>ほかの候補</h2></div><div class="card rows">`;
-    html += r.alts.map((a) => `<button class="row" type="button" data-open="${a.a.id}">
-        <span class="row__thumb">${rideImg(a.a)}</span>
-        <span class="row__body"><span class="row__k">${esc(lbl[a.key] || a.label)}</span><span class="row__name">${jw(a.a.short)}</span>
-          <span class="row__meta">${ic('walk')}${a.walk}分<span>${ic('flag')}<span class="num">${clock(a.finish)}</span></span></span></span>
-        <span class="row__wait"><b class="${waitClass(a.wait)}">${a.wait}</b><small>分</small><br>${kindTag(a.kind)}</span></button>`).join('');
+    const lbl = { wait: ['待ち短い', 'clock'], walk: ['近い', 'walk'], pop: ['人気', 'crown'], score: ['時間があれば', 'spark'] };
+    html += `<div class="sec" id="alts"><h2>${ic('castle')}ほかの候補</h2><button class="sec__more" type="button" data-tab-go="explore">すべて見る${ic('chev')}</button></div><div class="card rows">`;
+    html += r.alts.map((a) => {
+      const k = lbl[a.key] ? a.key : 'score';
+      const [t, i] = lbl[a.key] || [a.label, 'spark'];
+      return `<button class="row" type="button" data-open="${a.a.id}">
+        <span class="rchip rchip--${k}">${ic(i)}${esc(t)}</span>
+        <span class="row__body"><span class="row__name">${jw(a.a.short)}</span>
+          <span class="row__meta"><span>${ic('walk')}徒歩${a.walk}分</span><span>〜<span class="num">${clock(a.finish)}</span></span></span></span>
+        <span class="row__wait c-${k}"><b class="num">${a.wait}</b><small>分</small><br>${kindTag(a.kind)}</span><span class="row__chev">${ic('chev')}</span></button>`;
+    }).join('');
     html += `</div>`;
+  }
+  // 4) お知らせ: only actionable ones stay on screen (reopened / suddenly shorter)
+  const alerts = activeAlerts();
+  if (alerts.length) {
+    html += `<div class="sec"><h2>${ic('bell')}お知らせ</h2></div><div class="rows">`;
+    html += alerts.map((al) => {
+      const a = attractionById[al.id];
+      return `<div class="alert" role="alert"><span class="alert__thumb">${ic(al.type === 'reopen' ? 'refresh' : 'down')}</span><div class="alert__body"><div class="alert__t">${esc(a.short)} ${al.type === 'reopen' ? '再開' : '空いてきた'}</div>
+        <div class="alert__s">${al.type === 'reopen' ? `いま 待ち <span class="num">${al.to ?? '?'}</span>分` : `<s>${al.from}分</s> → <b class="num">${al.to}</b>分`}</div></div>
+        <button class="alert__go" data-pin="${al.id}">行く</button><button class="alert__x" data-dismiss-alert="${al.id}" aria-label="閉じる">${ic('x')}</button></div>`;
+    }).join('') + '</div>';
   }
   html += footer();
   el.innerHTML = html;
-  renderActionBar(r);
   noteToasts(r);
 }
 
@@ -798,7 +831,7 @@ function progressBand(c, done) {
   return `<div class="card pband ${R.progOpen ? 'is-open' : ''}">
     <button class="pband__h" type="button" data-act="prog-toggle" aria-expanded="${!!R.progOpen}">
       <span class="prog__n">${done.length}<small>/${total}</small></span>
-      <span class="pband__bar"><i style="width:${pct}%"></i></span>
+      <span class="pband__mid"><span class="pband__lbl">乗った数</span><span class="pband__bar"><i style="width:${pct}%"></i></span></span>
       <span class="pband__s">${fixed ? `<span class="num">${clock(fixed.anchor.start)}</span> ${esc(fixed.anchor.title)}` : `残り${Math.max(0, total - done.length)}`}</span>
       <span class="pband__chev">${ic('chev')}</span></button>
     ${R.progOpen ? `<div class="pband__body">
@@ -826,57 +859,43 @@ function noteToasts(r) {
 }
 const isStandalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
 
-// Thumb-reach action bar (one-handed): the two most frequent actions, always at the bottom.
-function renderActionBar(r) {
-  let bar = $('#actionbar');
-  if (!bar) { bar = document.createElement('div'); bar.id = 'actionbar'; bar.className = 'actionbar'; document.body.appendChild(bar); }
-  const p = r?.primary;
-  const show = S.tab === 'home' && p && (p.type === 'ride' || p.type === 'anchor');
-  bar.hidden = !show;
-  document.body.classList.toggle('has-actionbar', !!show);
-  if (!show) return;
-  if (p.type === 'ride') {
-    bar.innerHTML = `<button class="actionbar__side" data-skip="${p.a.id}" aria-label="別の候補">${ic('refresh')}別の候補</button>
-      <button class="actionbar__main" data-done="${p.a.id}">${ic('check')}<span class="ab__n">${jw(p.a.short)}</span><b class="ab__v">乗った</b></button>`;
-  } else {
-    const x = p.anchor;
-    bar.innerHTML = `<button class="actionbar__side" data-anchor-edit="${x.id}" aria-label="変更">${ic('edit')}変更</button>
-      <button class="actionbar__main" data-done="${x.id}">${ic('check')}<span class="ab__n">${jw(x.title)}</span><b class="ab__v">${x.kind === 'show' ? '観た' : '食べた'}</b></button>`;
-  }
-}
-
 function stat(k, icon, v, src = '') {
   return `<div class="stat"><div class="stat__k">${ic(icon)}${k}</div><div class="stat__v">${v}</div>${src ? `<div class="stat__src">${src}</div>` : ''}</div>`;
+}
+// Fits before the next fixed plan? One line under the stats (taps through to the plan).
+function fitLine(next, finish, from, c) {
+  if (!next) {
+    if (finish == null) return '';
+    const ok = finish <= c.closeMin;
+    return `<button class="fit ${ok ? '' : 'is-tight'}" type="button" data-tab-go="plan"><span class="fit__ic">${ic(ok ? 'check' : 'alert')}</span><span>${ok ? `閉園（${clock(c.closeMin)}）までに間に合います` : '閉園に間に合わないかも'}</span><span class="fit__chev">${ic('chev')}</span></button>`;
+  }
+  const slack = next.start - (next.claim || 0) - finish - walkMin(from, next.pos);
+  return `<button class="fit ${slack < 0 ? 'is-tight' : ''}" type="button" data-tab-go="plan"><span class="fit__ic">${ic(slack < 0 ? 'alert' : 'check')}</span><span>次のプラン（${esc(next.title)} <span class="num">${clock(next.start)}</span>）${slack < 0 ? 'に遅れるかも' : 'までに間に合います'}</span><span class="fit__chev">${ic('chev')}</span></button>`;
 }
 function renderNextCard(r, c) {
   const p = r.primary;
   const next = r.next;
   if (!p) return `<div class="card card--pad empty">候補を計算できませんでした</div>`;
+  const kick = (t) => `<div class="kicker">${ic('spark')}${t}</div>`;
 
   if (p.type === 'ride') {
     const a = p.a;
-    const start = Math.max(c.now, c.openMin);
-    const back = next ? walkMin(coordsOf(a.id), next.pos) : 0;
-    const endT = next ? next.start - next.claim : Math.max(p.finish, c.closeMin);
-    const slack = next ? Math.max(0, endT - p.finish - back) : 0;
-    const bar = timeBar(start, [
-      { k: 'walk', m: p.walk, t: `歩${p.walk}` }, { k: 'wait', m: p.wait, t: `待ち${p.wait}` }, { k: 'ride', m: a.dur, t: '乗る' }, { k: 'slack', m: slack + back, t: next ? '余裕' : '' },
-    ], next ? next.title : '閉園', next ? next.start : c.closeMin);
     const t = trendOf(a.id);
-    return `<article class="card next">
-      <div class="next__head"><div class="next__thumb">${rideImg(a)}</div>
-        <div style="min-width:0"><div class="kicker">Next · ${esc(landById[a.land]?.ja || '')}</div>
-          <h1 class="next__title">${jw(a.short)}</h1><div class="next__en">${esc(a.en)}</div></div></div>
-      <div class="stats">
-        ${stat('待ち', 'clock', `<span class="${waitClass(p.wait)}">${p.wait}</span><small>分</small>`, kindTag(p.kind) + (t && t.dir !== 'flat' ? ` <b style="color:${TREND[t.dir][2]}">${TREND[t.dir][0]}</b>` : ''))}
-        ${stat('徒歩', 'walk', `${p.walk}<small>分</small>`)}
-        ${stat('終わる', 'flag', clock(p.finish))}
-      </div>
+    return `<article class="next">
+      <div class="next__photo" data-open="${a.id}" aria-hidden="true">${rideImg(a)}</div>
+      <div class="next__head">${kick(`次の行き先 · ${esc(landById[a.land]?.ja || '')}`)}
+        <h1 class="next__title" data-open="${a.id}">${jw(a.short)}</h1><div class="next__en">${esc(a.en)}</div></div>
       ${rtags(p.reasons)}
-      ${bar}
-      <div class="btnrow">
-        <a class="btn" ${routeAttr(coordsOf(a.id))}>${ic('route')}ルート</a>
-        <button class="btn" data-open="${a.id}">${ic('info')}くわしく</button>
+      <div class="stats">
+        ${stat('待ち時間', 'clock', `<span class="${waitClass(p.wait)}">${p.wait}</span><small>分</small>`, kindTag(p.kind) + (t && t.dir !== 'flat' ? ` <b>${TREND[t.dir][0]}</b>` : ''))}
+        ${stat('徒歩', 'walk', `${p.walk}<small>分</small>`)}
+        ${stat('終了予定', 'flag', clock(p.finish))}
+      </div>
+      ${fitLine(next, p.finish, coordsOf(a.id), c)}
+      <div class="acts actionbar" id="actionbar">
+        <button class="act act--done" data-done="${a.id}">${ic('check')}乗った<span class="vh">：${esc(a.short)}</span></button>
+        <button class="act act--alt" data-skip="${a.id}" aria-label="別の候補">${ic('refresh')}別の候補</button>
+        <a class="act act--route" ${routeAttr(coordsOf(a.id))}>${ic('route')}ルート</a>
       </div></article>`;
   }
 
@@ -885,35 +904,38 @@ function renderNextCard(r, c) {
     const isShow = x.kind === 'show';
     const s = isShow ? showById[x.show] : null;
     const rest = x.restaurant ? restaurantById[x.restaurant] : null;
+    const open = rest ? `data-open-food="${rest.id}"` : `data-open-show="${x.show}"`;
     const tags = isShow
       ? [[s.venue.split('（')[0], '']]
       : [[`${fmtDur(x.end - x.start)}確保`, ''], rest.mobile === 'yes' ? ['モバイルオーダー可', 'live'] : rest.mobile === 'no' ? ['テーブル席', ''] : ['モバイルオーダー要確認', '']];
-    return `<article class="card next">
-      <div class="next__head"><div class="next__thumb">${isShow ? showImg(s) : foodImg(rest)}</div>
-        <div style="min-width:0"><div class="kicker">${isShow ? 'Show' : 'Meal'} · ${clock(x.start)}</div>
-          <h1 class="next__title">${jw(isShow ? x.title : `${x.title}：${x.place}`)}</h1>${rest ? `<div class="next__en">${esc(rest.en)}</div>` : ''}</div></div>
+    return `<article class="next">
+      <div class="next__photo" ${open} aria-hidden="true">${isShow ? showImg(s) : foodImg(rest)}</div>
+      <div class="next__head">${kick(`次の行き先 · ${isShow ? 'ショー' : 'ごはん'} ${clock(x.start)}`)}
+        <h1 class="next__title" ${open}>${jw(isShow ? x.title : `${x.title}：${x.place}`)}</h1>${rest ? `<div class="next__en">${esc(rest.en)}</div>` : ''}</div>
+      <div class="tags">${tags.map(([t, k]) => `<span class="tag ${k ? 'tag--' + k : ''}">${esc(t)}</span>`).join('')}</div>
       <div class="stats">
         ${stat(isShow ? '開演' : '開始', 'clock', clock(x.start))}
         ${stat('徒歩', 'walk', `${p.walk}<small>分</small>`)}
         ${isShow ? stat('場所取り', 'flag', clock(x.start - x.claim)) : stat('所要', 'flag', `${x.end - x.start}<small>分</small>`)}
       </div>
-      <div class="tags">${tags.map(([t, k]) => `<span class="tag ${k ? 'tag--' + k : ''}">${esc(t)}</span>`).join('')}</div>
-      <div class="btnrow">
-        <a class="btn" ${routeAttr(x.pos)}>${ic('route')}ルート</a>
-        ${rest ? `<button class="btn" data-open-food="${rest.id}">${ic('food')}メニュー</button>` : `<button class="btn" data-open-show="${x.show}">${ic('info')}くわしく</button>`}
+      ${next ? fitLine(next, x.end, x.pos, c) : ''}
+      <div class="acts actionbar" id="actionbar">
+        <button class="act act--done" data-done="${x.id}">${ic('check')}${isShow ? '観た' : '食べた'}<span class="vh">：${esc(x.title)}</span></button>
+        <button class="act act--alt" data-anchor-edit="${x.id}" aria-label="変更">${ic('edit')}変更</button>
+        <a class="act act--route" ${routeAttr(x.pos)}>${ic('route')}ルート</a>
       </div></article>`;
   }
 
   const nearSnacks = RESTAURANTS.filter((x) => x.kind === 'sweets' || x.kind === 'snack')
     .map((x) => ({ x, w: walkMin(c.pos, coordsOf(x.id)) })).sort((a, b) => a.w - b.w).slice(0, 4);
-  return `<article class="card next">
-    <div><div class="kicker">Free time</div><h1 class="next__title">${next ? `${esc(next.title)}まで ${fmtDur(p.minutes)}` : '自由時間'}</h1>
+  return `<article class="next">
+    <div class="next__head">${kick('自由時間')}<h1 class="next__title">${next ? `${esc(next.title)}まで ${fmtDur(p.minutes)}` : '自由時間'}</h1>
       <div class="next__en">おやつ・写真・お土産に</div></div>
-    ${next ? `<div class="tags"><span class="tag tag--warn">${clock(r.leaveBy)} に移動開始</span></div>
-    <div class="nextstop"><div class="nextstop__t"><span class="kicker">Next · ${clock(next.start)}</span><b>${jw(next.kind === 'meal' ? `${next.title}：${next.place}` : next.title)}</b><small>${ic('walk')}徒歩${walkMin(c.pos, next.pos)}分${next.claim ? ` · 場所取り ${clock(next.start - next.claim)}〜` : ''}</small></div></div>
-    <div class="btnrow">
-      <a class="btn btn--primary" ${routeAttr(next.pos)}>${ic('route')}ルート</a>
-      ${next.restaurant ? `<button class="btn" data-open-food="${next.restaurant}">${ic('food')}メニュー</button>` : next.show ? `<button class="btn" data-open-show="${next.show}">${ic('info')}くわしく</button>` : ''}
+    ${next ? `<div class="tags"><span class="tag tag--must">${clock(r.leaveBy)} に移動開始</span></div>
+    <div class="nextstop"><div class="nextstop__t"><span class="kicker">次の予定 · ${clock(next.start)}</span><b>${jw(next.kind === 'meal' ? `${next.title}：${next.place}` : next.title)}</b><small>${ic('walk')}徒歩${walkMin(c.pos, next.pos)}分${next.claim ? ` · 場所取り ${clock(next.start - next.claim)}〜` : ''}</small></div></div>
+    <div class="acts">
+      <a class="act act--route" ${routeAttr(next.pos)}>${ic('route')}ルート</a>
+      ${next.restaurant ? `<button class="act act--alt" data-open-food="${next.restaurant}">${ic('food')}メニュー</button>` : next.show ? `<button class="act act--alt" data-open-show="${next.show}">${ic('info')}くわしく</button>` : ''}
     </div>` : ''}
     <div class="restgrid">${nearSnacks.map((n) => `<button class="rest" data-open-food="${n.x.id}"><span class="rest__n">${jw(n.x.ja)}</span><span class="rest__s">徒歩${n.w}分</span></button>`).join('')}</div>
   </article>`;
@@ -1219,14 +1241,15 @@ function renderPlan() {
   const coach = !S.seenCoach && sim.items.some((i) => i.type === 'ride');
   // 1) One-line summary, then the timeline right away — the plan itself is the first thing you see.
   const outside = outsideAnchors();
-  let html = `<button class="dayrow" type="button" data-act="day-edit"><span class="dayrow__k">${esc(PARK.short)}</span><span class="dayrow__v"><b>${dateLabel()}</b> ${h.customOpen ? '入園' : '開園'}<span class="num">${clock(h.open)}</span>→${h.customClose ? '退園' : '閉園'}<span class="num">${clock(h.close)}</span></span><span class="dayrow__e">${ic('edit')}変更</span></button>
-    ${outside.length ? `<div class="note">${ic('info')}<div><div class="note__t">${outside.map((x) => `${esc(x.title)}（${clock(x.start)}）`).join('・')} は退園後なので外しました</div></div></div>` : ''}
+  let html = `<div class="phead"><div class="ptitle"><h1>1日のプラン</h1>
+      <div class="ptitle__btns">${R.planEdit ? `<button class="btn btn--sm btn--primary" data-act="plan-edit-done">${ic('check')}完了</button>` : `<button class="btn btn--sm" data-act="plan-edit-order">${ic('edit')}編集</button>`}
+      <button class="btn btn--sm" data-act="plan-edit">${ic('sliders')}条件</button></div></div>
+      <button class="dayrow" type="button" data-act="day-edit"><span class="dayrow__k">${esc(PARK.short)}</span><span class="dayrow__v"><b>${dateLabel()}</b> ${h.customOpen ? '入園' : '開園'}<span class="num">${clock(h.open)}</span>→${h.customClose ? '退園' : '閉園'}<span class="num">${clock(h.close)}</span></span><span class="dayrow__e">${ic('edit')}変更</span></button>
     <div class="planhead"><div class="planhead__t"><b class="num">${clock(startAt)}→${clock(h.close)}</b>
       <span>乗り物 <b class="num">${done.length + sim.rides}</b></span><span>絶対 <b class="num">${mustIds.length - sim.missingMust.length}/${mustIds.length}</b></span>
-      <span class="planhead__src">${esc(liveIsFresh() ? 'LIVE' : '推定')}</span></div>
-    ${S.share ? `<button class="btn btn--sm sharechip ${R.shareErr ? 'is-err' : ''}" data-act="share-open" aria-label="2人で共有中">${ic('users')}共有中</button>` : ''}
-    ${R.planEdit ? `<button class="btn btn--sm btn--primary" data-act="plan-edit-done">${ic('check')}完了</button>` : `<button class="btn btn--sm" data-act="plan-edit-order">${ic('edit')}編集</button>`}
-    <button class="btn btn--sm" data-act="plan-edit">${ic('sliders')}条件</button></div>`;
+      <span class="planhead__src ${liveIsFresh() ? '' : 'is-est'}">${esc(liveIsFresh() ? 'LIVE' : '推定')}</span></div>
+      ${S.share ? `<button class="btn btn--sm sharechip ${R.shareErr ? 'is-err' : ''}" data-act="share-open" aria-label="2人で共有中">${ic('users')}共有中</button>` : ''}</div></div>
+    ${outside.length ? `<div class="note">${ic('info')}<div><div class="note__t">${outside.map((x) => `${esc(x.title)}（${clock(x.start)}）`).join('・')} は退園後なので外しました</div></div></div>` : ''}`;
   if (sim.missingMust.length) html += `<div class="note note--bad">${ic('alert')}<div><div class="note__t">${sim.missingMust.map((id) => esc(attractionById[id].short)).join('・')} が入りきらない</div><div class="note__s">休止中なら再開後に最優先で案内</div></div></div>`;
   if (conflicts.length) html += `<div class="note note--bad">${ic('alert')}<div><div class="note__t">ごはんとショーの時間が重なっています</div></div></div>`;
   if (S.planTime) html += `<div class="replan__custom">${ic('clock')}<span>開始時刻を指定中</span><button class="linkbtn" data-act="plan-time-auto">現在時刻に戻す</button></div>`;
@@ -1245,14 +1268,14 @@ function renderPlan() {
       // paused: stays in its place, takes no time; the next stop skips it until it reopens
       const a = it.a;
       html += `<li class="tl__item tl__item--ride tl__item--paused" data-ride="${a.id}" data-drag="${a.id}"><span class="tl__time">休止</span>
-        <div class="tl__card"><span class="tl__grip" data-grip="${a.id}" role="button" aria-label="${esc(a.short)} をドラッグして順番を変更">${ic('grip')}</span>
+        <div class="tl__card"><span class="tl__grip" data-grip="${a.id}" role="button" aria-label="${esc(a.short)} をドラッグして順番を変更">${ic(RIDE_IC)}</span>
           <button class="tl__main" data-open="${a.id}"><span class="tl__name">${jw(a.short)}${it.must ? '<span class="tag tag--must">絶対</span>' : ''}</span>
           <span class="tl__meta"><span class="tag tag--bad">一時休止中</span><span>再開したらお知らせ・このまま次へ</span></span></button>
           ${edit ? rm(a.id, a.short) : `<button class="check" data-done="${a.id}" aria-label="${esc(a.short)} 乗った">${ic('check')}</button>`}</div></li>`;
     } else if (it.type === 'ride') {
       const a = it.a;
       html += `<li class="tl__item tl__item--ride ${it.must ? 'tl__item--must' : ''} ${flash?.has(a.id) ? 'is-changed' : ''} ${it.end < c.now - 5 ? 'is-past' : ''}" data-ride="${a.id}" data-drag="${a.id}"><span class="tl__time">${clock(it.start)}${mv(a.id)}</span>
-        <div class="tl__card"><span class="tl__grip" data-grip="${a.id}" role="button" aria-label="${esc(a.short)} をドラッグして順番を変更">${ic('grip')}</span>
+        <div class="tl__card"><span class="tl__grip" data-grip="${a.id}" role="button" aria-label="${esc(a.short)} をドラッグして順番を変更">${ic(RIDE_IC)}</span>
           <button class="tl__main" data-open="${a.id}"><span class="tl__name">${jw(a.short)}${it.must ? '<span class="tag tag--must">絶対</span>' : ''}${it.over ? '<span class="tag tag--bad">閉園に間に合わない</span>' : ''}</span>
           <span class="tl__meta">${planWait(it, c.now)}<span>${ic('walk')}${it.walk}分</span><span>〜<span class="num">${clock(it.end)}</span></span></span></button>
           <button class="tl__lock ${S.locks?.[a.id] ? 'is-on' : ''}" data-lock="${a.id}" aria-pressed="${!!S.locks?.[a.id]}" aria-label="${esc(a.short)} の位置を${S.locks?.[a.id] ? '固定中（タップで解除）' : '固定'}">${ic(S.locks?.[a.id] ? 'lock' : 'unlock')}</button>
@@ -1262,7 +1285,7 @@ function renderPlan() {
       const isMeal = it.type === 'meal';
       const lateTag = x.late === 'miss' ? '<span class="tag tag--bad">間に合わない</span>' : x.late === 'short' ? '<span class="tag tag--warn">場所取り短め</span>' : '';
       html += `<li class="tl__item tl__item--${it.type} ${flash?.has(x.id) ? 'is-changed' : ''} ${x.late === 'miss' ? 'tl__item--late' : ''}" data-drag="${x.id}"><span class="tl__time">${clock(x.start)}${mv(x.id)}</span>
-        <div class="tl__card"><span class="tl__grip" data-grip="${x.id}" role="button" aria-label="${esc(x.title)} をドラッグして順番を変更">${ic('grip')}</span><button class="tl__main" data-anchor-edit="${x.id}"><span class="tl__name">${jw(x.title)}${isMeal ? '' : '<span class="tag">時刻固定</span>'}${x.shifted ? '<span class="tag tag--warn">時間をずらした</span>' : ''}${lateTag}</span>
+        <div class="tl__card"><span class="tl__grip" data-grip="${x.id}" role="button" aria-label="${esc(x.title)} をドラッグして順番を変更">${ic(isMeal ? 'food' : 'show')}</span><button class="tl__main" data-anchor-edit="${x.id}"><span class="tl__name">${jw(x.title)}${isMeal ? '' : '<span class="tag">時刻固定</span>'}${x.shifted ? '<span class="tag tag--warn">時間をずらした</span>' : ''}${lateTag}</span>
           <span class="tl__meta">${it.type === 'meal' ? `<span>${ic('food')}${esc(x.place)}</span>` : ''}<span><span class="num">${clock(x.start)}–${clock(x.end)}</span></span>${x.claim && x.late !== 'miss' ? `<span style="color:var(--red)">場所取り <span class="num">${clock(it.claimFrom ?? x.start - x.claim)}</span>〜</span>` : ''}</span></button>
           ${edit ? rm(x.id, x.title) : `<button class="check" data-done="${x.id}" aria-label="${esc(x.title)} 完了">${ic('check')}</button>`}</div></li>`;
     } else if (it.type === 'dropped') {
@@ -1689,36 +1712,13 @@ function renderExplore() {
   const c = ctx();
   if (tab === 'rides') {
     const filters = [['all', 'すべて'], ['todo', '未体験'], ['short', '30分以下'], ['japan', '日本にない'], ['done', '体験済み'], ['down', '休止中']];
+    const q = S.rideQ || '';
+    html += `<label class="fsearch">${ic('search')}<input id="rideQ" type="search" enterkeyhint="search" autocomplete="off" placeholder="アトラクションを検索" value="${esc(q)}" aria-label="アトラクションを検索">${q ? `<button type="button" data-rq="" aria-label="消す">${ic('x')}</button>` : ''}</label>`;
     html += `<div class="chips">${filters.map(([k, n]) => `<button class="chip ${S.exploreFilter === k ? 'is-active' : ''}" data-xf="${k}">${n}</button>`).join('')}</div>`;
-    html += `<div class="sortrow"><span id="xcount"></span><select data-xsort aria-label="並べ替え">${[['reco', 'おすすめ順'], ['wait', '待ち時間順'], ['dist', '近い順'], ['pop', '人気順'], ['thrill', 'スリル順']].map(([k, n]) => `<option value="${k}" ${S.exploreSort === k ? 'selected' : ''}>${n}</option>`).join('')}</select></div>`;
-    let list = ATTRACTIONS.map((a) => ({ a, w: waitInfo(a), walk: walkMin(c.pos, coordsOf(a.id)), d: c.pos ? distanceM(c.pos, coordsOf(a.id)) : null }));
-    const f = S.exploreFilter;
-    list = list.filter(({ a, w }) => f === 'all'
-      || (f === 'short' && w.wait != null && w.wait <= 30)
-      || (f === 'todo' && !S.done[a.id]) || (f === 'done' && S.done[a.id])
-      || (f === 'down' && w.status && w.status !== 'OPERATING' && c.now >= c.openMin)
-      || (f === 'japan' && /日本未上陸|日本にない/.test(a.japan)));
-    const sort = S.exploreSort;
-    const reco = recommend(c);
-    const rank = new Map([reco.primary?.a?.id, ...reco.alts.map((x) => x.a.id)].filter(Boolean).map((id, i) => [id, i]));
-    const must = mustMap();
-    list.sort((x, y) => {
-      if (sort === 'wait') return (x.w.wait ?? 999) - (y.w.wait ?? 999);
-      if (sort === 'dist') return (x.d ?? 1e9) - (y.d ?? 1e9);
-      if (sort === 'pop') return y.a.pop - x.a.pop || (PRIORITY[y.a.id] || 0) - (PRIORITY[x.a.id] || 0);
-      if (sort === 'thrill') return y.a.thrill - x.a.thrill;
-      return (rank.get(x.a.id) ?? 99) - (rank.get(y.a.id) ?? 99) || (!!must[y.a.id] - !!must[x.a.id]) || (PRIORITY[y.a.id] || 0) - (PRIORITY[x.a.id] || 0);
-    });
-    html += `<div class="card rows">${list.map(({ a, w, walk }) => `
-      <button class="row ${S.done[a.id] ? 'is-done' : ''}" data-open="${a.id}" type="button">
-        <span class="row__thumb">${rideImg(a)}</span>
-        <span class="row__body"><span class="row__name">${jw(a.short)}</span>
-          <span class="row__meta"><span>${esc(landById[a.land]?.ja)}</span><span>${ic('walk')}${walk}分</span>${sparkSmall(a.id)}</span>
-          <span class="tags" style="margin-top:3px">${must[a.id] ? '<span class="tag tag--must">絶対</span>' : ''}${S.done[a.id] ? '<span class="tag">済み</span>' : ''}${rank.has(a.id) && !S.done[a.id] ? '<span class="tag tag--warn">今おすすめ</span>' : ''}${/日本未上陸/.test(a.japan) ? '<span class="tag">日本にない</span>' : ''}</span></span>
-        <span class="row__wait">${w.wait == null ? `<span class="tag tag--bad">${esc(STATUS_JA[w.status] || '休止')}</span>` : `<b class="${waitClass(w.wait)}">${w.wait}</b><small>分</small><br>${kindTag(w.kind)}`}</span>
-      </button>`).join('') || '<div class="empty">該当なし</div>'}</div>`;
+    html += `<div class="sortrow"><span id="xcount"></span><select data-xsort aria-label="並べ替え">${[['reco', 'おすすめ順'], ['wait', '待ち時間の短い順'], ['dist', '近い順'], ['pop', '人気順'], ['thrill', 'スリル順']].map(([k, n]) => `<option value="${k}" ${S.exploreSort === k ? 'selected' : ''}>${n}</option>`).join('')}</select></div>`;
+    html += `<div id="rideList"></div>`;
     el.innerHTML = html;
-    $('#xcount').textContent = `${list.length}件`;
+    renderRideList(c);
     return;
   }
   if (tab === 'food') {
@@ -1774,6 +1774,41 @@ function renderExplore() {
     <button class="row" data-open-food="${r.id}"><span class="row__body"><span class="row__name">${esc(h.name)}</span><span class="row__meta">${esc(r.ja)}</span></span><span class="row__chev">${ic('chev')}</span></button>`).join('');
   html += `</div><p class="footer">出典：Disney Parks Blog ほか各種報道（2026年8〜10月）</p>`;
   el.innerHTML = html;
+}
+
+function renderRideList(c = ctx()) {
+  const box = $('#rideList'); if (!box) return;
+  let list = ATTRACTIONS.map((a) => ({ a, w: waitInfo(a), walk: walkMin(c.pos, coordsOf(a.id)), d: c.pos ? distanceM(c.pos, coordsOf(a.id)) : null }));
+  const f = S.exploreFilter;
+  list = list.filter(({ a, w }) => f === 'all'
+    || (f === 'short' && w.wait != null && w.wait <= 30)
+    || (f === 'todo' && !S.done[a.id]) || (f === 'done' && S.done[a.id])
+    || (f === 'down' && w.status && w.status !== 'OPERATING' && c.now >= c.openMin)
+    || (f === 'japan' && /日本未上陸|日本にない/.test(a.japan)));
+  const q = fnorm(S.rideQ || '');
+  if (q) list = list.filter(({ a }) => fnorm([a.short, a.ja, a.en, landById[a.land]?.ja].join(' ')).includes(q));
+  const sort = S.exploreSort;
+  const reco = recommend(c);
+  const rank = new Map([reco.primary?.a?.id, ...reco.alts.map((x) => x.a.id)].filter(Boolean).map((id, i) => [id, i]));
+  const must = mustMap();
+  list.sort((x, y) => {
+    if (sort === 'wait') return (x.w.wait ?? 999) - (y.w.wait ?? 999);
+    if (sort === 'dist') return (x.d ?? 1e9) - (y.d ?? 1e9);
+    if (sort === 'pop') return y.a.pop - x.a.pop || (PRIORITY[y.a.id] || 0) - (PRIORITY[x.a.id] || 0);
+    if (sort === 'thrill') return y.a.thrill - x.a.thrill;
+    return (rank.get(x.a.id) ?? 99) - (rank.get(y.a.id) ?? 99) || (!!must[y.a.id] - !!must[x.a.id]) || (PRIORITY[y.a.id] || 0) - (PRIORITY[x.a.id] || 0);
+  });
+  box.innerHTML = `<div class="card rows">${list.map(({ a, w, walk }) => {
+    const tags = `${must[a.id] ? '<span class="tag tag--must">絶対</span>' : ''}${S.done[a.id] ? '<span class="tag">済み</span>' : ''}${rank.has(a.id) && !S.done[a.id] ? '<span class="tag tag--warn">今おすすめ</span>' : ''}${/日本未上陸/.test(a.japan) ? '<span class="tag">日本にない</span>' : ''}`;
+    return `<button class="row ${S.done[a.id] ? 'is-done' : ''}" data-open="${a.id}" type="button">
+      <span class="row__thumb">${rideImg(a)}</span>
+      <span class="row__body"><span class="row__name">${jw(a.short)}</span>
+        <span class="row__sub"><span class="row__meta"><span>${esc(landById[a.land]?.ja)}</span><span>${ic('walk')}${walk}分</span>${sparkSmall(a.id)}</span>
+          ${w.wait == null ? `<span class="wbadge wbadge--off">${esc(STATUS_JA[w.status] || '休止')}</span>` : `<span class="wbadge"><b class="num">${w.wait}</b><small>分</small></span>`}</span>
+        ${tags || w.wait != null ? `<span class="tags" style="margin-top:4px">${w.wait != null ? kindTag(w.kind) : ''}${tags}</span>` : ''}</span>
+      <span class="row__chev">${ic('chev')}</span></button>`;
+  }).join('') || '<div class="empty">該当なし</div>'}</div>`;
+  $('#xcount').textContent = `${list.length}件`;
 }
 
 // ---------- food search: "what do I want to eat" → shops nearest to me first ----------
@@ -2171,13 +2206,13 @@ function go(tab) {
   S.tab = tab; save();
   document.querySelectorAll('.view').forEach((v) => { v.hidden = v.dataset.view !== tab; });
   document.querySelectorAll('.tab').forEach((t) => { t.classList.toggle('is-active', t.dataset.tab === tab); t.setAttribute('aria-current', t.dataset.tab === tab ? 'page' : 'false'); });
+  document.body.classList.toggle('tab-map', tab === 'map');
   renderView(tab);
   window.scrollTo(0, 0);
   if (tab === 'map') { if (S.gps) requestFix(); else gpsIfGranted(); }
 }
 function renderView(tab = S.tab) {
   if (R.dragging) { R.pendingRender = true; return; }
-  if (tab !== 'home') renderActionBar(null);
   if (tab === 'home') renderHome();
   else if (tab === 'plan') renderPlan();
   else if (tab === 'explore') renderExplore();
@@ -2230,11 +2265,11 @@ async function renderMap() {
     }
     const p = r.primary;
     const shop = R.mapFood?.one ? restaurantById[R.mapFood.ids[0]] : null;
-    const dest = shop ? { name: shop.ja, pos: coordsOf(shop.id), open: `data-open-food="${shop.id}"`, k: 'GO' } : p?.type === 'ride' ? { name: p.a.short, pos: coordsOf(p.a.id), wait: p.wait, open: `data-open="${p.a.id}"` } : p?.type === 'anchor' || (p?.type === 'free' && p.next) ? (() => { const x = p.anchor || p.next; return { name: x.title + (x.kind === 'meal' && x.place ? '・' + x.place : ''), pos: x.pos, open: x.kind === 'show' && x.show ? `data-open-show="${x.show}"` : `data-anchor-edit="${x.id}"`, k: p.type === 'free' && r.leaveBy ? `NEXT · ${clock(r.leaveBy)}に移動` : null }; })() : null;
+    const dest = shop ? { name: shop.ja, pos: coordsOf(shop.id), open: `data-open-food="${shop.id}"`, k: '行き先', img: foodImg(shop) } : p?.type === 'ride' ? { name: p.a.short, pos: coordsOf(p.a.id), wait: p.wait, open: `data-open="${p.a.id}"`, img: rideImg(p.a) } : p?.type === 'anchor' || (p?.type === 'free' && p.next) ? (() => { const x = p.anchor || p.next; const rest = x.restaurant && restaurantById[x.restaurant]; const sh = x.show && showById[x.show]; return { name: x.title + (x.kind === 'meal' && x.place ? '・' + x.place : ''), pos: x.pos, open: x.kind === 'show' && x.show ? `data-open-show="${x.show}"` : `data-anchor-edit="${x.id}"`, k: p.type === 'free' && r.leaveBy ? `次の予定 · ${clock(r.leaveBy)}に移動` : null, img: rest ? foodImg(rest) : sh ? showImg(sh) : '' }; })() : null;
     const me = position();
     $('#mapcard').hidden = !dest;
     if (dest) {
-      $('#mapcard').innerHTML = `<button class="mapdest__b" style="text-align:left" ${dest.open}><div class="mapdest__k">${dest.k || 'NEXT'}</div><div class="mapdest__n">${esc(dest.name)}</div>
+      $('#mapcard').innerHTML = `${dest.img ? `<span class="mapdest__thumb" ${dest.open} aria-hidden="true">${dest.img}</span>` : ''}<button class="mapdest__b" style="text-align:left" ${dest.open}><div class="mapdest__k">${ic('spark')}${dest.k || '次の行き先'}</div><div class="mapdest__n">${esc(dest.name)}</div>
         <div class="mapdest__m">${me.lat != null ? `徒歩${walkMin(me, dest.pos)}分` : '現在地未設定'}${dest.wait != null ? ` · 待ち${dest.wait}分` : ''}${mapMod.coordsNote()}</div></button>
         <a class="btn btn--primary btn--sm" ${routeAttr(dest.pos)}>${ic('route')}ルート</a>`;
     }
@@ -2348,6 +2383,7 @@ document.addEventListener('click', async (e) => {
     if (!S.gps) gpsIfGranted();
     return go('map');
   }
+  if (d.rq !== undefined) { S.rideQ = ''; save(); return renderExplore(); }
   if (d.fq !== undefined) { S.foodQ = S.foodQ === d.fq ? '' : d.fq; save(); return renderExplore(); }
   if (d.mf) { S.mapFilter = d.mf; save(); document.querySelectorAll('[data-mf]').forEach((b) => b.classList.toggle('is-active', b.dataset.mf === d.mf)); return renderMap(); }
   if (d.land) { S.land = d.land; S.landAt = Date.now(); save(); if (S.planSnap?.items) checkSuggest(); renderAll(); return toast(landById[d.land].ja, 'ok'); }
@@ -2424,7 +2460,9 @@ document.addEventListener('click', async (e) => {
   switch (d.act) {
     case 'refresh': return fetchLive({ manual: true });
     case 'app-update': return applyUpdate();
-    case 'share-open': return openShare();
+    case 'share-open': case 'qa-share': return openShare();
+    case 'qa-day': return openDaySettings();
+    case 'qa-cond': R.draft = null; return openPlanBuilder();
     case 'food-map': S.mapFilter = 'food'; R.mapFood = { q: S.foodQ, ids: R.foodHits || [] }; save(); return go('map');
     case 'map-food-clear': R.mapFood = null; return renderMap();
     case 'share-start': return startShare();
@@ -2486,6 +2524,7 @@ document.addEventListener('click', async (e) => {
   }
 });
 document.addEventListener('input', (e) => {
+  if (e.target.id === 'rideQ') { S.rideQ = e.target.value; save(); return renderRideList(); }
   if (e.target.id !== 'foodQ') return;
   S.foodQ = e.target.value; save();
   const box = $('#foodList');
