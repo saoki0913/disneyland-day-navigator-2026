@@ -516,12 +516,12 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.evaluate((z) => { const d = window.__dlnavi; const seq = d.S.planSnap.seq; const done = seq.filter((x) => d.S.done[x]); const anchors = seq.filter((x) => !d.S.done[x] && x.includes(':')); d.layoutPlan([...done, ...z.filter((x) => !d.S.done[x]), ...anchors], '並べ替え'); d.checkSuggest(); d.renderAll(); }, zig);
     await page.waitForTimeout(150);
     const before = await page.evaluate(() => window.__dlnavi.S.planSnap.seq.join());
-    assert.equal(await page.locator('#view-plan .sugg').count(), 1, 'suggestion card');
-    assert.match(await page.textContent('#view-plan .sugg__gain'), /−\d+/);
+    assert.equal(await page.locator('#view-plan .sugg-quiet').count(), 1, 'quiet suggestion');
+    assert.doesNotMatch(await page.textContent('#view-plan .sugg-quiet'), /スペース・マウンテン|インディ/);
     assert.equal(await page.evaluate(() => window.__dlnavi.S.planSnap.seq.join()), before, 'not applied on its own');
-    assert.match(await page.textContent('#view-plan .sugg__t'), /\d+:\d{2}\s*\d+:\d{2}/, 'old → new time of the ride that moves');
+    assert.equal(await page.locator('#view-plan .sugg__t').count(), 0, 'times hidden until tapped');
     await page.screenshot({ path: `${SHOTS}/03-plan-suggest.png` });
-    await page.click('#view-plan .sugg__open'); await page.waitForTimeout(250);
+    await page.click('#view-plan [data-act="suggest-preview"]'); await page.waitForTimeout(250);
     assert.ok(await page.locator('#sheet .pv__row').count() >= 3, 'preview timeline');
     assert.ok(await page.locator('#sheet .pv__row.is-moved').count() >= 1, 'moved rows highlighted');
     assert.equal(await page.evaluate(() => window.__dlnavi.S.planSnap.seq.join()), before, 'preview changes nothing');
@@ -529,7 +529,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.click('#sheet [data-act="suggest-apply"]'); await page.waitForTimeout(250);
     assert.notEqual(await page.evaluate(() => window.__dlnavi.S.planSnap.seq.join()), before);
     assert.ok(await page.locator('#view-plan .mv').count() >= 1, 'moved rows marked');
-    assert.equal(await page.locator('#view-plan .sugg').count(), 0);
+    assert.equal(await page.locator('#view-plan .sugg-quiet').count(), 0);
     await page.screenshot({ path: `${SHOTS}/03-plan-moved.png` });
     await page.click('#toastAct'); await page.waitForTimeout(200); // 元に戻す
     assert.equal(await page.evaluate(() => window.__dlnavi.S.planSnap.seq.join()), before, 'undo');
@@ -908,13 +908,13 @@ for (const [t, expect, file] of [['07:00', /開園/, '11-preopen'], ['11:28', /�
     await page.evaluate(() => { const d = window.__dlnavi; const s = d.S.planSnap.seq; const keep = s.filter((x) => x.includes(':') || d.S.done[x]); d.layoutPlan(keep, '削除'); d.checkSuggest(); d.renderAll(); });
     await page.waitForTimeout(200);
     const s0 = await seq();
-    assert.equal(await page.locator('#view-plan .sugg').count(), 1, 'suggestion card');
+    assert.equal(await page.locator('#view-plan .sugg-quiet').count(), 1, 'suggestion available');
     assert.match(await page.textContent('#view-plan .sugg'), /空き時間に追加/);
     assert.equal(await seq(), s0, 'not added on its own');
     await tab(page, 'home');
     assert.equal(await page.evaluate(() => { const d = window.__dlnavi; return d.homeReco(d.ctx()).primary?.type; }), 'free', 'no ride outside the plan is made the next stop');
     await tab(page, 'plan');
-    await page.click('#view-plan .sugg__open'); await page.waitForTimeout(250);
+    await page.click('#view-plan [data-act="suggest-preview"]'); await page.waitForTimeout(250);
     await page.click('#sheet [data-act="suggest-apply"]'); await page.waitForTimeout(300);
     assert.ok((await seq()).split(',').length > s0.split(',').length, 'added after 反映');
   });

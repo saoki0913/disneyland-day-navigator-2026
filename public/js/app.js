@@ -181,8 +181,9 @@ function position() {
   const g = R.gpsPos;
   if (S.gps && g && now - g.at < 5 * 60e3) {
     const d = distanceM(g, PARK_CENTER);
-    if (d < 700) return { lat: g.lat, lon: g.lon, src: 'gps', acc: g.acc, label: `GPS（精度 約${Math.round(g.acc)}m）`, weak: g.acc > 80 };
-    return { ...TRIP.entrance, src: 'outside', acc: g.acc, label: `パーク外（入口から約${Math.round(distanceM(g, TRIP.entrance))}m）→ 入口から計算` };
+    if (d < 850 && Number.isFinite(g.acc) && g.acc <= 120) return { lat: g.lat, lon: g.lon, src: 'gps', acc: g.acc, label: `GPS（精度 約${Math.round(g.acc)}m）`, weak: g.acc > 65 };
+    if (d >= 850 && g.acc <= 120) return { ...TRIP.entrance, src: 'outside', acc: g.acc, label: `パーク外（入口から約${Math.round(distanceM(g, TRIP.entrance))}m）→ 入口から計算` };
+    // Ignore a noisy GPS fix instead of routing from an unreliable point.
   }
   const recentDone = S.lastDone && now - S.lastDone.at < 90 * 60e3 ? S.lastDone : null;
   const recentLand = S.land && now - S.landAt < 90 * 60e3 ? S.land : null;
@@ -1698,9 +1699,10 @@ function applyPlanDraft() {
   if (D.startMode === 'custom') S.sim = null;
   for (const id of Object.keys(S.must)) delete S.excluded[id];
 }
-function applyPlanDraftProposal() {
+async function applyPlanDraftProposal() {
   const D = R.draft;
   if (!D) return;
+  if (S.gps) await freshFix(2500); // explicit rebuild uses a fresh position
   closeSheet();
   R.draft = D;
   proposeRebuild('条件を変更', () => applyPlanDraft());

@@ -588,12 +588,20 @@ export function planMinutes(ctx, seq) {
 export function planCost(ctx, seq) {
   const r = planFromOrder(ctx, seq);
   const plan = effectivePlan(ctx);
-  const walkCost = 1.3 * (WALK_W[ctx.cond?.walk] ?? 1);
+  const walkCost = 1.8 * (WALK_W[ctx.cond?.walk] ?? 1);
   const orig = Object.fromEntries((ctx.anchors || []).map((a) => [a.id, a]));
   let cost = 0;
+  // The first leg starts at the current GPS point; don't discount it.
+  const first = r.items.find((i) => ['ride','meal','show'].includes(i.type) && !i.paused);
+  if (ctx.pos && first) cost += (first.walk || 0) * 1.75;
+  let lastLand = null, priorLand = null;
   for (const it of r.items) {
     if (it.type === 'ride') {
       if (it.paused) continue;
+      const land = it.a?.land || null;
+      if (land && priorLand === land && land !== lastLand) cost += 5; // avoid zig-zagging back
+      if (land && lastLand && land !== lastLand) priorLand = lastLand;
+      if (land) lastLand = land;
       cost += it.walk * walkCost + it.wait;
       if (!it.must && it.wait > plan.maxWait) cost += (it.wait - plan.maxWait);
       if (it.over) cost += it.must ? 5000 : 400;
@@ -779,23 +787,39 @@ function localSearch(ctx, seq0, { locks = {}, pool = [], deadline = Infinity, ke
  * now, not done, not excluded and not an "extra"). Deterministic for the same input.
  */
 export function optimizePlan(ctx, seq0, opts = {}) {
-  const t0 = Date.now(), budget = opts.budgetMs ?? 600;
-  const deadline = t0 + budget * 1.5;
+  const t0 = Date.now(), budget = opts.budgetMs ?? 600, deadline = t0 + budget * 1.5;
   const pool = opts.pool || ATTRACTIONS.filter((a) => !a.extra && !ctx.done?.[a.id] && !ctx.excluded?.[a.id] && availability(a, ctx).ok).map((a) => a.id);
-  // keep: only add rides / reorder — never drop a ride that is already in the plan (used for suggestions)
-  let best = localSearch(ctx, seq0, { locks: opts.locks, pool, deadline, keep: opts.keep });
+  const locks = opts.locks || {};
+  let best = localSearch(ctx, seq0, {locks, pool, deadline, keep: opts.keep});
+  // Multiple starts reduce sensitivity to the greedy seed. Propose nearby first legs, but
+  // accept them only when the complete, time-constrained day is actually better.
+  if (ctx.pos && !ctx.firstRide && Date.now() < deadline) {
+    const done = seq0.filter((id) => ctx.done?.[id]);
+    const open = seq0.filter((id) => !ctx.done?.[id]);
+    const near = pool.filter((id) => !locks[id])
+      .sort((a,b) => walkMin(ctx.pos, ctx.coords?.[a] || attractionById[a]?.pos) - walkMin(ctx.pos, ctx.coords?.[b] || attractionById[b]?.pos)).slice(0,4);
+    for (const id of near) {
+      if (Date.now() >= deadline) break;
+      const seed = [...done, id, ...open.filter((x) => x !== id)];
+      const r = localSearch(ctx, seed, {locks, pool, deadline, keep: opts.keep});
+      if (r.score < best.score - 0.5) best = r;
+    }
+  }
   let seed = 7;
   const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
   const must = mustOf(ctx);
-  // iterated local search: shake (drop two rides) and re-optimise while time allows
   while (Date.now() - t0 < budget) {
-    const cand = best.seq.filter((x) => attractionById[x] && !ctx.done?.[x] && !must[x] && !opts.locks?.[x]);
-    if (cand.length < 2) break;
+    const cand = best.seq.filter((x) => attractionById[x] && !ctx.done?.[x] && !must[x] && !locks[x] && x !== ctx.firstRide);
+    if (cand.length < 2 || opts.keep) break;
     const drop = new Set();
     for (let k = 0; k < 2; k++) drop.add(cand.splice(Math.floor(rnd() * cand.length), 1)[0]);
-    if (opts.keep) break;
-    const r = localSearch(ctx, best.seq.filter((x) => !drop.has(x)), { locks: opts.locks, pool, deadline });
+    const r = localSearch(ctx, best.seq.filter((x) => !drop.has(x)), {locks, pool, deadline});
     if (r.score < best.score - 0.5) best = r;
+  }
+  if (ctx.firstRide && best.seq.includes(ctx.firstRide)) {
+    const done = best.seq.filter((id) => ctx.done?.[id]);
+    best.seq = [...done, ctx.firstRide, ...best.seq.filter((id) => !ctx.done?.[id] && id !== ctx.firstRide)];
+    best.score = planScore(ctx, best.seq);
   }
   return best;
 }

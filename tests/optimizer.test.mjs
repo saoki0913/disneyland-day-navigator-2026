@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { optimizePlan, planFromOrder, buildAnchors, crowdRatio, simulateDay, syncSequence, planScore } from '../public/js/engine.js';
+import { optimizePlan, planFromOrder, buildAnchors, crowdRatio, simulateDay, syncSequence, planScore, planCost } from '../public/js/engine.js';
 import { normalizeTPWLive } from '../lib/server.js';
 import { TRIP, DEFAULT_MUST, attractionById } from '../public/js/data.js';
 
@@ -68,4 +68,12 @@ test('a paused ride stays in place and takes no time', () => {
   assert.equal(rise.start, rise.end);
   assert.deepEqual(r.items.filter((i) => i.type === 'ride').map((i) => i.id), ['indy', 'rise', 'space']);
   assert.equal(r.rides, 2);
+});
+
+test('position changes the walk-cost ranking of a two-ride route', () => {
+  const a=attractionById.space,b=attractionById.haunted;
+  const base=ctxFor({now:600,extra:{anchors:[],must:{},live:{},done:{},closeMin:1200}});
+  const atSpace={...base,pos:a.pos},atHaunted={...base,pos:b.pos};
+  assert.ok(planCost(atSpace,['space','haunted']) < planCost(atSpace,['haunted','space']));
+  assert.ok(planCost(atHaunted,['haunted','space']) < planCost(atHaunted,['space','haunted']));
 });
