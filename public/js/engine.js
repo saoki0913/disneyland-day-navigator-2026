@@ -1,6 +1,9 @@
 // Pure planning / recommendation engine. No DOM, no fetch — unit-testable in Node.
 import { ATTRACTIONS, attractionById, PLANS, PRIORITY, WAIT_CURVE, SHOWS, showById, restaurantById, DEFAULT_MUST } from './data.js';
 export { DEFAULT_MUST };
+// A second visit is an independent itinerary stop (e.g. 'space@2'), not a duplicate DOM key.
+export const baseRideId = (id) => String(id || '').replace(/@\d+$/, '');
+export const rideAt = (id) => attractionById[baseRideId(id)];
 
 // ---------- geometry ----------
 export function distanceM(a, b) {
@@ -467,7 +470,7 @@ export function planFromOrder(ctx, order) {
   const late = [];
   for (const id of order || []) {
     if (ctx.done?.[id]) continue;
-    const a = attractionById[id];
+    const a = rideAt(id);
     if (a) {
       const p = ctx.coords?.[a.id] || a.pos;
       const live = now - startNow <= 30 ? ctx.live : stripDown(ctx.live, ctx);
@@ -521,7 +524,7 @@ export function planFromOrder(ctx, order) {
  */
 export function syncSequence(seq, anchors, prevStarts = {}) {
   const ids = new Set(anchors.map((a) => a.id));
-  const out = seq.filter((id) => attractionById[id] || ids.has(id));
+  const out = seq.filter((id) => rideAt(id) || ids.has(id));
   for (const a of anchors) {
     if (out.includes(a.id)) continue;
     const i = out.findIndex((id) => (prevStarts[id] ?? Infinity) > a.start);
@@ -552,7 +555,7 @@ export function fitShows(ctx, seq) {
 
 /** Locked rides keep their index in the open (not-done) part of the previous sequence. */
 export function applyLocks(fresh, prevSeq, locks = {}, done = {}) {
-  const locked = Object.keys(locks).filter((id) => locks[id] && attractionById[id] && !done[id] && prevSeq.includes(id));
+  const locked = Object.keys(locks).filter((id) => locks[id] && rideAt(id) && !done[id] && prevSeq.includes(id));
   if (!locked.length) return fresh;
   const prevOpen = prevSeq.filter((id) => !done[id]);
   const out = fresh.filter((id) => !locked.includes(id));
@@ -619,13 +622,22 @@ export function planCost(ctx, seq) {
       cost += it.walk * walkCost + (it.anchor.late === 'miss' ? 3000 : it.anchor.late === 'short' ? 120 : 0);
     }
   }
+  // Repeat rides should be separated in time, not ridden back-to-back by the planner.
+  const starts = new Map();
+  for (const it of r.items.filter((x) => x.type === 'ride' && !x.paused && !x.over)) {
+    const base = baseRideId(it.id);
+    const prev = starts.get(base) ?? (ctx.done?.[base] && Number.isFinite(ctx.doneMin?.[base]) ? ctx.doneMin[base] : null);
+    if (prev != null && it.id !== base) cost += Math.max(0, 75 - (it.start - prev)) * 18;
+    if (it.id !== base && !starts.has(base) && !ctx.done?.[base]) cost += 5000;
+    starts.set(base, it.start);
+  }
   return cost + (r.missingMust?.length || 0) * 5000;
 }
 
 // Locked rides keep their index in the open part; everything else is free to be re-merged around them.
 function splitLocks(open, locks) {
   const fixedAt = new Map();
-  open.forEach((id, i) => { if (locks?.[id] && attractionById[id]) fixedAt.set(i, id); });
+  open.forEach((id, i) => { if (locks?.[id] && rideAt(id)) fixedAt.set(i, id); });
   return { fixedAt, free: open.filter((id, i) => !fixedAt.has(i)) };
 }
 function mergeLocks(free, fixedAt, n) {
@@ -652,7 +664,7 @@ export function optimizeOrder(ctx, seq, locks = {}) {
     let improved = false;
     // 1) move one ride to another position
     for (const id of [...best]) {
-      if (!attractionById[id]) continue;
+      if (!rideAt(id)) continue;
       const rest = best.filter((x) => x !== id);
       for (let i = 0; i <= rest.length; i++) {
         const f = [...rest.slice(0, i), id, ...rest.slice(i)];
@@ -664,7 +676,7 @@ export function optimizeOrder(ctx, seq, locks = {}) {
     for (let i = 0; i < best.length; i++) {
       for (let j = i + 2; j < Math.min(best.length, i + 7); j++) {
         const seg = best.slice(i, j + 1);
-        if (!seg.every((x) => attractionById[x])) break;
+        if (!seg.every((x) => rideAt(x))) break;
         const f = [...best.slice(0, i), ...seg.reverse(), ...best.slice(j + 1)];
         const c = planCost(ctx, full(f));
         if (c < bestCost - 0.5) { best = f; bestCost = c; improved = true; }
@@ -701,14 +713,14 @@ export function insertMissing(ctx, seq, ids) {
 export function pickNext(ctx, seq, locks = {}, minGain = 3) {
   const done = seq.filter((id) => ctx.done?.[id]);
   const open = seq.filter((id) => !ctx.done?.[id]);
-  const first = open.findIndex((id) => attractionById[id] && availability(attractionById[id], ctx).ok);
+  const first = open.findIndex((id) => rideAt(id) && availability(rideAt(id), ctx).ok);
   if (first < 0) return seq;
   // only rides before the first meal/show (and before any locked ride) are candidates
   const cands = [];
   for (let i = first; i < open.length && cands.length < 5; i++) {
     const id = open[i];
-    if (!attractionById[id] || locks[id]) break;
-    if (availability(attractionById[id], ctx).ok) cands.push(i);
+    if (!rideAt(id) || locks[id]) break;
+    if (availability(rideAt(id), ctx).ok) cands.push(i);
   }
   if (cands.length < 2 || locks[open[first]]) return seq;
   const cur = planCost(ctx, seq);
@@ -751,7 +763,7 @@ function localSearch(ctx, seq0, { locks = {}, pool = [], deadline = Infinity, ke
   const done = seq0.filter((x) => ctx.done?.[x]);
   let open = seq0.filter((x) => !ctx.done?.[x]);
   const full = (o) => [...done, ...o];
-  const movable = (id) => attractionById[id] && !locks[id];
+  const movable = (id) => !!rideAt(id) && !locks[id];
   let best = planScore(ctx, full(open));
   const take = (r) => { if (r) { open = r.o; best = r.s; return true; } return false; };
   for (let pass = 0; pass < 8 && Date.now() < deadline; pass++) {

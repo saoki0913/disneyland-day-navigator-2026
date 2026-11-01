@@ -77,3 +77,12 @@ test('position changes the walk-cost ranking of a two-ride route', () => {
   assert.ok(planCost(atSpace,['space','haunted']) < planCost(atSpace,['haunted','space']));
   assert.ok(planCost(atHaunted,['haunted','space']) < planCost(atHaunted,['space','haunted']));
 });
+
+test('a repeated visit is simulated as an independent queue and time slot', () => {
+  const c=ctxFor({now:510,extra:{anchors:[],must:{},live:{},closeMin:1320}});
+  const r=planFromOrder(c,['space','haunted','space@2']);
+  const rides=r.items.filter((it)=>it.type==='ride');
+  assert.deepEqual(rides.map((it)=>it.id),['space','haunted','space@2']);
+  assert.ok(rides[2].start > rides[0].end,'second ride is later');
+  assert.ok(rides[2].wait >= 0,'second queue is predicted independently');
+});
