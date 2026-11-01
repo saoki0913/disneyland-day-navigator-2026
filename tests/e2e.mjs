@@ -27,8 +27,8 @@ async function newCtx({ liveMode = 'ok', sim = '10:00', geo = null, photos = 'ok
     viewport: { width: 375, height: 667 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'ja-JP', timezoneId: 'America/Los_Angeles',
     ...(geo ? { geolocation: geo, permissions: ['geolocation'] } : {}),
   });
-  await ctx.route('**/api/live', (r) => liveMode === 'ok' ? r.fulfill({ json: live() }) : r.fulfill({ status: 502, json: { ok: false, errors: ['themeparks.wiki: HTTP 503', 'queue-times.com: timeout'] } }));
-  await ctx.route('**/api/meta', (r) => r.fulfill({ json: meta }));
+  await ctx.route('**/api/live*', (r) => liveMode === 'ok' ? r.fulfill({ json: live() }) : r.fulfill({ status: 502, json: { ok: false, errors: ['themeparks.wiki: HTTP 503', 'queue-times.com: timeout'] } }));
+  await ctx.route('**/api/meta*', (r) => r.fulfill({ json: meta }));
   await ctx.route('**/api/photos*', (r) => photos === 'ok'
     ? r.fulfill({ json: { ok: true, photos: { rise: { src: 'https://upload.wikimedia.org/test/rise.png', page: 'https://commons.wikimedia.org/wiki/File:x', title: 'Rise', author: 'Test', license: 'CC BY 4.0', source: 'Wikimedia Commons' }, indy: { src: 'https://upload.wikimedia.org/test/broken.png', page: '', title: 'Indy', source: 'Wikimedia Commons' } } } })
     : r.fulfill({ status: 502, json: { ok: false } }));
@@ -36,7 +36,7 @@ async function newCtx({ liveMode = 'ok', sim = '10:00', geo = null, photos = 'ok
   await ctx.route('https://upload.wikimedia.org/test/broken.png', (r) => r.fulfill({ status: 404, body: '' }));
   await ctx.route(/tile\.openstreetmap\.org/, (r) => r.abort());
   const [h, m] = sim.split(':').map(Number);
-  await ctx.addInitScript((v) => { if (!localStorage.getItem('dlnavi-1031-v1')) localStorage.setItem('dlnavi-1031-v1', JSON.stringify({ sim: { base: v, setAt: Date.now() } })); }, h * 60 + m);
+  await ctx.addInitScript((v) => { if (!localStorage.getItem('dlnavi-park')) localStorage.setItem('dlnavi-park', 'dl'); if (!localStorage.getItem('dlnavi-1031-v1')) localStorage.setItem('dlnavi-1031-v1', JSON.stringify({ sim: { base: v, setAt: Date.now() } })); }, h * 60 + m);
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -820,6 +820,108 @@ for (const [t, expect, file] of [['07:00', /開園/, '11-preopen'], ['11:28', /�
     await page.screenshot({ path: `${SHOTS}/${file}.png` });
     assert.deepEqual(errors, []);
   });
+  await ctx.close();
+}
+
+// ---------- F: Disney California Adventure (park switch, trip day, map NEXT = plan) ----------
+{
+  const dcaLive = (variant = 0) => ({
+    ok: true, park: 'dca', source: 'themeparks.wiki', sourceLabel: 'ThemeParks.wiki', fetchedAt: new Date().toISOString(), errors: [],
+    attractions: Object.fromEntries([
+      ['rsr', variant ? 25 : 85], ['guardians', 55], ['webslingers', 40], ['incredicoaster', 35], ['soarin', 30], ['tsmm', 45],
+      ['monsters', 15], ['luigi', 20], ['mermaid', 10], ['goofy', 20], ['swings', 10], ['palaround', 15], ['insideout', 10],
+      ['mater', 10], ['turtle', 10], ['zephyr', 5], ['jessie', 5], ['grizzly', 25],
+    ].map(([id, w]) => [id, { name: id, status: 'OPERATING', wait: w, lastUpdated: null, single: null }])),
+    shows: {}, otherShows: [], matched: 18,
+  });
+  const seen = [];
+  const ctx = await browser.newContext({ viewport: { width: 375, height: 667 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'ja-JP', timezoneId: 'America/Los_Angeles' });
+  const isDca = (r) => new URL(r.request().url()).searchParams.get('park') === 'dca';
+  await ctx.route('**/api/live*', (r) => { seen.push(r.request().url()); return r.fulfill({ json: isDca(r) ? dcaLive() : live() }); });
+  await ctx.route('**/api/meta*', (r) => { seen.push(r.request().url()); return r.fulfill({ json: isDca(r) ? { ok: true, coords: {}, schedule: null, errors: [] } : meta }); });
+  await ctx.route('**/api/photos*', (r) => r.fulfill({ json: { ok: true, photos: {} } }));
+  await ctx.route(/tile\.openstreetmap\.org/, (r) => r.abort());
+  await ctx.addInitScript(() => {
+    if (!localStorage.getItem('dlnavi-park')) localStorage.setItem('dlnavi-park', 'dl');
+    for (const k of ['dlnavi-1031-v1', 'dlnavi-dca-v1']) if (!localStorage.getItem(k)) localStorage.setItem(k, JSON.stringify({ sim: { base: 600, setAt: Date.now() } }));
+  });
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(base + '/'); await page.waitForSelector('.next__title'); await page.waitForTimeout(300);
+  const planTimes = () => page.$$eval('.tl--plan > li[data-drag] .tl__time', (els) => els.map((e) => { const [h, m] = e.textContent.trim().split(':').map(Number); return h * 60 + m; }));
+
+  await step('DCA 1. Header switch ランド → カリフォルニア: DCA catalog, park=dca APIs, no horizontal scroll', async () => {
+    assert.equal((await page.textContent('.parksw .is-active')).trim(), 'ランド');
+    await page.click('[data-park="dca"]');
+    await page.waitForSelector('.next__title'); await page.waitForTimeout(500);
+    assert.equal((await page.textContent('.parksw .is-active')).trim(), 'カリフォルニア');
+    assert.equal(await page.evaluate(() => window.__dlnavi.park), 'dca');
+    assert.ok(seen.some((u) => u.includes('/api/live?park=dca')) && seen.some((u) => u.includes('/api/meta?park=dca')), 'requests carry park=dca');
+    const home = await page.textContent('#view-home');
+    assert.doesNotMatch(home, /スター・ウォーズ|レジスタンス|ファルコン/);
+    assert.ok(await page.evaluate(() => !!window.__dlnavi.ctx().must.rsr), 'Radiator Springs is the default must-ride');
+    await noHScroll(page);
+    await page.screenshot({ path: `${SHOTS}/20-dca-home.png` });
+  });
+  await step('DCA 2. Plan: 11/1 8:00→21:00, lunch, 18:30 ご褒美ディナー, World of Color', async () => {
+    await tab(page, 'plan');
+    assert.match(await page.textContent('.dayrow'), /11\/1（日）.*8:00.*21:00/);
+    const t = await page.textContent('#view-plan');
+    assert.match(t, /ラジエーター・スプリングス/); assert.match(t, /ランチ/); assert.match(t, /ご褒美ディナー/); assert.match(t, /ワールド・オブ・カラー/);
+    const ids = await page.$$eval('.tl--plan > li[data-drag]', (els) => els.map((e) => e.dataset.drag));
+    assert.ok(ids.includes('meal:dinner') && ids.includes('show:worldofcolor'), ids.join());
+    await page.screenshot({ path: `${SHOTS}/21-dca-plan.png`, fullPage: true });
+  });
+  await step('DCA 3. Date / entry / exit: plan follows the new window; reset back to park hours', async () => {
+    await page.click('.dayrow'); await page.waitForTimeout(200);
+    assert.match(await page.textContent('#sheetBody'), /カリフォルニアの日程/);
+    await page.screenshot({ path: `${SHOTS}/22-dca-day.png` });
+    await page.fill('#dayEntry', '09:00'); await page.fill('#dayExit', '20:00');
+    await page.click('[data-act="day-save"]'); await page.waitForTimeout(400);
+    const h = await page.evaluate(() => window.__dlnavi.hours());
+    assert.equal(h.open, 540); assert.equal(h.close, 1200);
+    assert.match(await page.textContent('.dayrow'), /入園9:00.*退園20:00/);
+    assert.match(await page.textContent('#view-plan'), /ワールド・オブ・カラー（20:30） は退園後/);
+    const mins = await planTimes();
+    assert.ok(mins.length && mins.every((m) => m < 1200), `timeline before 20:00: ${mins}`);
+    // tapping the active park in the header opens the same sheet
+    await page.click('[data-park="dca"]'); await page.waitForTimeout(200);
+    await page.click('[data-act="day-reset"]'); await page.waitForTimeout(400);
+    const h2 = await page.evaluate(() => window.__dlnavi.hours());
+    assert.equal(h2.open, 480); assert.equal(h2.close, 1260);
+  });
+  await step('DCA 4. Map NEXT / route = home card target = plan, and follows plan changes', async () => {
+    const homeNext = async () => { await tab(page, 'home'); return (await page.textContent('.next__title')).trim(); };
+    const mapNext = async () => { await tab(page, 'map'); await page.waitForTimeout(900); return { n: (await page.textContent('.mapdest__n')).trim(), href: await page.getAttribute('#mapcard a[data-route]', 'href') }; };
+    const h1 = await homeNext(); const m1 = await mapNext();
+    assert.equal(m1.n, h1, 'map NEXT = home');
+    // change the plan on home ("別の候補" moves it back) → the map follows
+    await tab(page, 'home'); await page.click('.actionbar [data-skip]'); await page.waitForTimeout(400);
+    const h2 = await homeNext(); const m2 = await mapNext();
+    assert.notEqual(h2, h1); assert.equal(m2.n, h2, 'map follows the re-ordered plan'); assert.notEqual(m2.href, m1.href);
+    // plan changed while the map stays open → card catches up without leaving the tab
+    await page.evaluate(() => { const S = window.__dlnavi.S; window.__dlnavi.layoutPlan([...S.planSnap.seq].reverse(), '並べ替え'); });
+    const want = await page.evaluate(() => { const r = window.__dlnavi.homeReco(window.__dlnavi.ctx()); return r.primary.a?.short || r.primary.anchor?.title || ''; });
+    await page.evaluate(() => window.__dlnavi.renderMap()); await page.waitForTimeout(600);
+    assert.match((await page.textContent('.mapdest__n')).trim(), new RegExp('^' + want.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    await page.screenshot({ path: `${SHOTS}/23-dca-map.png` });
+  });
+  await step('DCA 5. No Halloween tab; each park keeps its own progress', async () => {
+    await tab(page, 'explore');
+    assert.equal(await page.locator('[data-xtab="halloween"]').count(), 0);
+    await tab(page, 'home');
+    await page.click('.actionbar [data-done]'); await page.waitForTimeout(300);
+    const dcaDone = Object.keys(await page.evaluate(() => window.__dlnavi.S.done));
+    assert.ok(dcaDone.length >= 1);
+    await page.click('[data-park="dl"]'); await page.waitForSelector('.next__title'); await page.waitForTimeout(300);
+    assert.equal(await page.evaluate(() => window.__dlnavi.park), 'dl');
+    const dlDone = Object.keys(await page.evaluate(() => window.__dlnavi.S.done));
+    assert.ok(!dlDone.some((k) => dcaDone.includes(k)), 'progress is separate per park');
+    await page.click('[data-park="dca"]'); await page.waitForSelector('.next__title'); await page.waitForTimeout(300);
+    assert.deepEqual(Object.keys(await page.evaluate(() => window.__dlnavi.S.done)), dcaDone);
+  });
+  await step('No uncaught JS errors (DCA)', async () => assert.deepEqual(errors, []));
   await ctx.close();
 }
 

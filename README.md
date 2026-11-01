@@ -1,6 +1,7 @@
-# 10.31 Disneyland Day Navi
+# Disneyland Resort Day Navi（10/31 ランド・11/1 カリフォルニア）
 
-2026年10月31日（土）ディズニーランド・パーク（カリフォルニア）を2人で回るための、個人用・非公式の当日ナビ。
+2026年10月31日（土）ディズニーランド・パーク、11月1日（日）ディズニー・カリフォルニア・アドベンチャーを
+2人で回るための、個人用・非公式の当日ナビ。
 スマホを開いた瞬間に「今、何をすべきか」「次にどこへ行くか」が分かることを最優先に設計しています。
 
 ## デプロイ（Cloudflare Pages・独立URL）
@@ -26,13 +27,25 @@ API トークンを使う場合の最小権限：`Account › Cloudflare Pages �
 
 ## GitHub push → Cloudflare Pages 自動デプロイ（無料・既存サービス分離）
 
-- GitHub の本番ブランチ `main` への **push** で `.github/workflows/verify.yml` が起動し、単体テスト86件とモバイルE2E53件を実行します。
+- GitHub の本番ブランチ `main` への **push** で `.github/workflows/verify.yml` が起動し、単体テスト94件とモバイルE2E59件を実行します。
 - **検証が成功した最新コミットのみ** `.github/workflows/deploy-pages.yml` が起動して、本番 `https://dl-navi-1031.pages.dev` にデプロイします。失敗したテストや古いコミットは公開されません。GitHub Actions の `workflow_dispatch` からプレビュー/本番を手動選択することもできます。
 - Cloudflare と GitHub のネイティブ Git 連携は使いません（Cloudflare Git installation が 8000011 で失敗するため）。代わりに公式サポートの `wrangler pages deploy public --project-name dl-navi-1031 --branch main` を使います。
 - **初回に1回だけ必要**：Cloudflare ダッシュボードの API Tokens で、対象アカウントの `Account › Cloudflare Pages › Edit` のみを許可したトークンを発行し、この GitHub リポジトリの `Settings › Secrets and variables › Actions › New repository secret` に **`CLOUDFLARE_API_TOKEN`** として保存します。Cloudflare のアカウントIDはワークフローで既存の対象アカウントに固定しているため、Secret は不要です。トークンを git、チャット、ログに貼らないでください。
 - Secret 未設定の場合、自動デプロイのジョブが明確なエラーで失敗し、現在公開中のアプリはそのまま動きます。
 - 本番デプロイは **既存の `dl-navi-1031` Pages** だけです。`mogup-api`、`career-compass-web-production`、`career-compass-web-staging`、`usa-trip-disney-day-1031`、他の Pages、DNS、ルート、カスタムドメイン、他サービスの環境変数・シークレット・課金設定には触れません。
 - このリポジトリは公開設定で、GitHub Actions の通常の `ubuntu-latest` ランナーは無料。Cloudflare Pages も Free 枠内で運用します（月500ビルドが上限、Functionsはアカウント共通のWorkers無料枠を使用）。有料枠の有効化やプラン変更を行う設定はありません。Free枠を超えた際の実行可否はCloudflareの制限に従います。
+
+
+## パークの切り替えと日程
+
+- 画面上部の **「ランド｜カリフォルニア」** で切り替え（ページを読み直します）。初回は日付で自動選択（〜10/31 ランド、11/1〜 カリフォルニア、アナハイム時間）。
+- 選択中のパークをもう一度タップ、またはプランタブ上部の日程行・設定から **日付・入園・退園時刻** を変更。プランは入園〜退園の間で組み直し、退園後のごはん・ショーは外して表示。
+- 進捗・プラン・日程はパークごとに別保存（ランドの記録はそのまま）。2人で共有中なら、同じコードのままパークごとに別の共有プランになります。
+- データは `public/js/parks/dl.js`・`public/js/parks/dca.js`。`public/js/data.js` が選択中のパークを読み込みます。
+- API（`/api/live`・`/api/meta`・`/api/photos`・`/api/share/:code`）は `?park=dca` でカリフォルニア・アドベンチャー。指定なしはランド（従来通り）。
+- カリフォルニアの初期値（しおり通り）：11/1 8:00〜21:00、絶対乗る＝ラジエーター・スプリングス・レーサーズ、ランチ12:00、
+  18:30 ご褒美ディナー（ランプライト・ラウンジほか、パーク内／ダウンタウン・ディズニーの候補から選択）、ワールド・オブ・カラー（時刻は要確認・APIの公式時刻に自動置換）。
+- マップ下の NEXT／ルートは「いま」のカード（＝保存したプランの次の行き先）と同じ行き先。マップを開いたままでもプランが変わると追従します。
 
 ## 画面と使い方
 
@@ -108,9 +121,9 @@ API トークンを使う場合の最小権限：`Account › Cloudflare Pages �
 ## テスト
 
 ```bash
-npm test                               # 76 unit tests（エンジン・API正規化・写真選定）
+npm test                               # 94 unit tests（エンジン・API正規化・写真選定・パークデータ）
 npx wrangler pages dev public --port 8788 &
-node tests/e2e.mjs http://127.0.0.1:8788   # 53 browser E2E steps（iPhoneサイズ）
+node tests/e2e.mjs http://127.0.0.1:8788   # 59 browser E2E steps（iPhoneサイズ・両パーク）
 ```
 
 ## コスト

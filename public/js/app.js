@@ -1,5 +1,6 @@
 import {
   TRIP, LANDS, landById, ATTRACTIONS, attractionById, RESTAURANTS, restaurantById, POPCORN, SHOWS, showById, PLANS, PRIORITY,
+  PARK, PARK_ID, PARKS, PARK_ORDER, PARK_STORE,
 } from './data.js';
 import {
   recommend, simulateDay, planFromOrder, syncSequence, applyLocks, fitShows, buildAnchors, anchorConflicts, crowdRatio, rideRatios, walkMin, distanceM, hhmm, parseHHMM, estimateWait, availability, DEFAULT_MUST, gpsNeedsRedraw, movingPlanMin,
@@ -10,7 +11,9 @@ import { SHARE_FIELDS, mergeDocs, sameDoc, newCode, CODE_RE } from './share.js';
 // =====================================================================
 // State (persisted in localStorage — never sent anywhere)
 // =====================================================================
-const KEY = 'dlnavi-1031-v1';
+// One store per park (Disneyland keeps its original key so existing progress survives).
+const KEY = PARK.storeKey;
+const API_Q = `park=${PARK_ID}`;
 const defaults = {
   plan: 'balance',
   done: {},            // { rideId | 'meal:lunch' | 'show:fantasmic': timestampMs }
@@ -38,6 +41,8 @@ const defaults = {
   exploreTab: 'rides', exploreFilter: 'all', exploreSort: 'reco', foodFilter: 'all', foodQ: '',
   mapFilter: 'rides',
   tab: 'home',
+  cfg: { date: null, entry: null, exit: null }, // this park's trip date / entry / exit (minutes); null → plan/API value
+  shareAdopted: false, // took over the other park's share code once
 };
 let S = load();
 function load() {
@@ -90,7 +95,7 @@ try {
   const p = JSON.parse(localStorage.getItem(KEY + ':photos') || 'null');
   if (p && Date.now() - p.at < 3 * 86400e3 && p.data && Object.values(p.data)[0]?.source) R.photos = p.data;
   const h = JSON.parse(localStorage.getItem(KEY + ':hist') || 'null');
-  if (h?.date === TRIP.date) R.hist = h.data || {};
+  if (h?.date === tripDate()) R.hist = h.data || {};
 } catch { /* ignore */ }
 
 // =====================================================================
@@ -113,22 +118,41 @@ function nowMin() {
   const selectedTime = movingPlanMin(S.planTime, Date.now());
   if (selectedTime != null) return selectedTime;
   const p = laParts();
-  if (p.date < TRIP.date) return TRIP.openMin - 60; // before the trip day: preview as morning
-  if (p.date > TRIP.date) return 24 * 60;
+  if (p.date < tripDate()) return hours().open - 60; // before the trip day: preview as morning
+  if (p.date > tripDate()) return 24 * 60;
   return p.min;
 }
 function dayPhase() {
   const p = laParts();
   if (S.sim) return 'sim';
   if (S.planTime) return 'today';
-  if (p.date < TRIP.date) return 'before';
-  if (p.date > TRIP.date) return 'after';
+  if (p.date < tripDate()) return 'before';
+  if (p.date > tripDate()) return 'after';
   return 'today';
 }
-function hours() {
-  const op = R.meta?.schedule?.operating;
+// ---------- trip day (date / entry / exit — user editable, per park) ----------
+function tripDate() { return S.cfg?.date || TRIP.date; }
+const WD = ['日', '月', '火', '水', '木', '金', '土'];
+function dateLabel(iso = tripDate()) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return `${m}/${d}（${WD[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]}）`;
+}
+// Park operating hours on the trip date: official schedule (API) → plan value.
+function parkHours() {
+  const sc = R.meta?.schedule;
+  const op = sc?.days ? sc.days[tripDate()]?.operating : sc?.date === tripDate() ? sc.operating : null;
   if (op && op.open != null && op.close != null) return { open: op.open, close: op.close === 0 ? 24 * 60 : op.close, src: 'api' };
   return { open: TRIP.openMin, close: TRIP.closeMin, src: 'plan' };
+}
+// The window the plan uses: the user's entry / exit when set, otherwise park opening / closing.
+function hours() {
+  const ph = parkHours();
+  const e = S.cfg?.entry, x = S.cfg?.exit;
+  const open = Number.isFinite(e) ? e : ph.open;
+  const close = Number.isFinite(x) ? x : ph.close;
+  const base = { src: ph.src, parkOpen: ph.open, parkClose: ph.close };
+  if (close - open < 60) return { ...base, open: ph.open, close: ph.close, customOpen: false, customClose: false };
+  return { ...base, open, close, customOpen: Number.isFinite(e), customClose: Number.isFinite(x) };
 }
 const clock = (m) => { const h = Math.floor(m / 60) % 24; return `${h}:${String(Math.floor(m % 60)).padStart(2, '0')}`; };
 
@@ -148,7 +172,7 @@ const coordsMap = () => {
 };
 
 // ---------- position ----------
-const PARK_CENTER = { lat: 33.8121, lon: -117.9200 };
+const PARK_CENTER = PARK.center;
 function position() {
   const now = Date.now();
   const g = R.gpsPos;
@@ -210,7 +234,7 @@ async function fetchLive({ manual = false } = {}) {
   try {
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 12000);
-    const res = await fetch('/api/live', { cache: 'no-store', signal: ctl.signal });
+    const res = await fetch('/api/live?' + API_Q, { cache: 'no-store', signal: ctl.signal });
     clearTimeout(t);
     const j = await res.json().catch(() => null);
     if (!res.ok || !j?.ok) throw new Error(j?.errors?.join(' / ') || `HTTP ${res.status}`);
@@ -265,7 +289,7 @@ function recordHistory(j) {
     arr.push([m, w]);
     if (arr.length > 300) arr.shift();
   }
-  try { localStorage.setItem(KEY + ':hist', JSON.stringify({ date: TRIP.date, data: R.hist })); } catch { /* full */ }
+  try { localStorage.setItem(KEY + ':hist', JSON.stringify({ date: tripDate(), data: R.hist })); } catch { /* full */ }
 }
 // Compare with the previous LIVE sample: a closed ride reopening, or a sudden wait drop.
 function detectAlerts(prev, next) {
@@ -287,7 +311,7 @@ const activeAlerts = () => R.alerts.filter((x) => nowMin() - x.at < 20 && !S.don
 
 async function fetchMeta() {
   try {
-    const res = await fetch('/api/meta');
+    const res = await fetch('/api/meta?' + API_Q);
     const j = await res.json();
     if (j?.ok) { R.meta = j; localStorage.setItem(KEY + ':meta', JSON.stringify({ at: Date.now(), data: j })); renderAll(); }
   } catch { /* fallback coords stay in use */ }
@@ -295,7 +319,7 @@ async function fetchMeta() {
 async function fetchPhotos() {
   // cached set is complete enough (incl. the dish photos added later) → no refetch
   if (Object.keys(R.photos).length > 20 && Object.keys(R.photos).some((k) => k.startsWith('menu_') || k === '_menuChecked')) return;
-  const sets = await Promise.allSettled(['rides', 'food', 'food2', 'shows', 'menu'].map((set) => fetch('/api/photos?set=' + set).then((r) => r.json())));
+  const sets = await Promise.allSettled(['rides', 'food', 'food2', 'shows', 'menu'].map((set) => fetch(`/api/photos?set=${set}&${API_Q}`).then((r) => r.json())));
   const merged = { ...R.photos };
   for (const s2 of sets) if (s2.status === 'fulfilled' && s2.value?.ok) { Object.assign(merged, s2.value.photos); if (s2.value.set === 'menu') merged._menuChecked = { source: 'none' }; }
   if (Object.keys(merged).length) {
@@ -364,14 +388,28 @@ function gpsIfGranted() {
 function showTimesFor(id) {
   const manual = S.prefs.showTimes?.[id];
   if (manual?.length) return { times: manual, src: 'manual' };
-  const api = R.live?.shows?.[id]?.times?.filter((t) => !t.date || t.date === TRIP.date).map((t) => hhmm(t.start));
+  const api = R.live?.shows?.[id]?.times?.filter((t) => !t.date || t.date === tripDate()).map((t) => hhmm(t.start));
   if (api?.length) return { times: [...new Set(api)], src: 'api' };
   return { times: showById[id].times, src: 'pre' };
 }
 function anchors() {
   const showTimes = {};
   for (const s of SHOWS) showTimes[s.id] = showTimesFor(s.id).times;
-  return buildAnchors(S.plan, { ...S.prefs, showTimes }, S.done);
+  return fitAnchors(buildAnchors(S.plan, { ...S.prefs, showTimes }, S.done));
+}
+// Restaurants use the API coordinates (same as the map pins) so home / plan / map route agree,
+// and meals / shows that start after the exit time are left out of the plan. (Ones before the entry
+// time are already treated as over by the planner; a dragged meal is briefly at 0:00 = "on arrival".)
+function fitAnchors(list) {
+  const h = hours();
+  for (const x of list) if (x.restaurant) { const c = coordsOf(x.restaurant); if (c) x.pos = { lat: c.lat, lon: c.lon }; }
+  return list.filter((x) => x.done || x.start < h.close);
+}
+function outsideAnchors() {
+  const showTimes = {};
+  for (const s of SHOWS) showTimes[s.id] = showTimesFor(s.id).times;
+  const kept = new Set(anchors().map((x) => x.id));
+  return buildAnchors(S.plan, { ...S.prefs, showTimes }, S.done).filter((x) => !kept.has(x.id));
 }
 const mustMap = () => S.must || { ...DEFAULT_MUST };
 function ctx(extra = {}) {
@@ -458,7 +496,7 @@ function dishImg(r, i) {
   return p?.src ? `<img class="dish__img" src="${esc(p.src)}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'dish__img dish__img--none',textContent:'${r.emoji || ''}'}))">`
     : `<span class="dish__img dish__img--none" aria-hidden="true">${esc(r.emoji || '')}</span>`;
 }
-const showImgKey = (id) => (id === 'fantasmic' ? 'fantasmic' : id === 'fireworks' ? 'fireworks' : 'cavalcade');
+const showImgKey = (id) => (PARK_ID === 'dl' ? (id === 'fantasmic' ? 'fantasmic' : id === 'fireworks' ? 'fireworks' : 'cavalcade') : id);
 const showImg = (s) => imgFor(showImgKey(s.id), { name: s.en, color: '#5b3f78' });
 
 // =====================================================================
@@ -517,7 +555,7 @@ function markDone(id) {
   if (S.pin?.id === id) S.pin = null;
   // Pressing "乗った" on the day means it really is now: drop a manually chosen start time
   // so the rest of the plan restarts from this moment and this place.
-  if (S.planTime && !S.sim && laParts().date === TRIP.date) S.planTime = null;
+  if (S.planTime && !S.sim && laParts().date === tripDate()) S.planTime = null;
   if (S.gps) requestFix({ force: true });
   nextFromHere('乗った');
   renderAll();
@@ -582,7 +620,7 @@ function renderStatus() {
   if (phase === 'sim') msg = `テスト時刻 ${clock(nowMin())}`;
   else if (S.planTime) msg = `指定時刻 ${clock(nowMin())} から案内中 · プランで変更できます`;
   else if (phase === 'before') msg = '当日の朝としてプレビュー中';
-  else if (phase === 'after') msg = '10/31の営業は終了しました';
+  else if (phase === 'after') msg = `${dateLabel()}の${PARK.short}は終了しました`;
   if (R.liveStatus === 'error' && !R.live?.ok) { msg = (msg ? msg + ' / ' : '') + '待ち時間は推定'; err = true; }
   else if (R.live?.ok && !liveIsFresh()) { msg = (msg ? msg + ' / ' : '') + `待ち時間が${Math.round(age)}分前 · 推定で案内`; err = true; }
   b.hidden = !msg;
@@ -709,7 +747,7 @@ function renderHome() {
   html += progressBand(c, done);
   html += suggestCard();
   if (c.now < h.open) {
-    html += `<div class="card cdrow">${ic('clock')}<span>開園 <b class="num">${clock(h.open)}</b> まで <b>${fmtDur(h.open - c.now)}</b> · 入口に <span class="num">${clock(h.open - 40)}</span> 着が目安</span></div>`;
+    html += `<div class="card cdrow">${ic('clock')}<span>${h.customOpen ? '入園' : '開園'} <b class="num">${clock(h.open)}</b> まで <b>${fmtDur(h.open - c.now)}</b> · ${h.customOpen ? `開園 <span class="num">${clock(h.parkOpen)}</span>` : `入口に <span class="num">${clock(h.open - 40)}</span> 着が目安`}</span></div>`;
   }
   // 3) only actionable alerts stay on screen: reopened / suddenly shorter
   for (const al of activeAlerts()) {
@@ -1145,7 +1183,10 @@ function renderPlan() {
   const coach = !S.seenCoach && sim.items.some((i) => i.type === 'ride');
   const reopened = sim.waiting.filter((id) => liveMap()[id]?.status === 'OPERATING');
   // 1) One-line summary, then the timeline right away — the plan itself is the first thing you see.
-  let html = `<div class="planhead"><div class="planhead__t"><b class="num">${clock(startAt)}→${clock(h.close)}</b>
+  const outside = outsideAnchors();
+  let html = `<button class="dayrow" type="button" data-act="day-edit"><span class="dayrow__k">${esc(PARK.short)}</span><span class="dayrow__v"><b>${dateLabel()}</b> ${h.customOpen ? '入園' : '開園'}<span class="num">${clock(h.open)}</span>→${h.customClose ? '退園' : '閉園'}<span class="num">${clock(h.close)}</span></span><span class="dayrow__e">${ic('edit')}変更</span></button>
+    ${outside.length ? `<div class="note">${ic('info')}<div><div class="note__t">${outside.map((x) => `${esc(x.title)}（${clock(x.start)}）`).join('・')} は退園後なので外しました</div></div></div>` : ''}
+    <div class="planhead"><div class="planhead__t"><b class="num">${clock(startAt)}→${clock(h.close)}</b>
       <span>乗り物 <b class="num">${done.length + sim.rides}</b></span><span>絶対 <b class="num">${mustIds.length - sim.missingMust.length}/${mustIds.length}</b></span>
       <span class="planhead__src">${esc(liveIsFresh() ? 'LIVE' : '推定')}</span></div>
     ${S.share ? `<button class="btn btn--sm sharechip ${R.shareErr ? 'is-err' : ''}" data-act="share-open" aria-label="2人で共有中">${ic('users')}共有中</button>` : ''}
@@ -1526,7 +1567,9 @@ function applyPlanDraft() {
 function renderExplore() {
   const el = $('#view-explore');
   const tab = S.exploreTab;
-  let html = `<div class="seg" role="tablist">${[['rides', '乗り物'], ['food', '食事'], ['shows', 'ショー'], ['halloween', '限定']].map(([k, n]) => `<button class="${tab === k ? 'is-active' : ''}" data-xtab="${k}" role="tab" aria-selected="${tab === k}">${n}</button>`).join('')}</div>`;
+  const xtabs = [['rides', '乗り物'], ['food', '食事'], ['shows', 'ショー'], ...(PARK.limitedTab ? [['halloween', PARK.limitedTab]] : [])];
+  if (!xtabs.some(([k]) => k === tab)) { S.exploreTab = 'rides'; return renderExplore(); }
+  let html = `<div class="seg" role="tablist">${xtabs.map(([k, n]) => `<button class="${tab === k ? 'is-active' : ''}" data-xtab="${k}" role="tab" aria-selected="${tab === k}">${n}</button>`).join('')}</div>`;
   const c = ctx();
   if (tab === 'rides') {
     const filters = [['all', 'すべて'], ['todo', '未体験'], ['short', '30分以下'], ['japan', '日本にない'], ['done', '体験済み'], ['down', '休止中']];
@@ -1566,7 +1609,7 @@ function renderExplore() {
     const q = S.foodQ || '';
     html += `<label class="fsearch">${ic('search')}<input id="foodQ" type="search" enterkeyhint="search" autocomplete="off" placeholder="食べたいもの（例：チキン、アイス、コーヒー）" value="${esc(q)}" aria-label="食べたいもので探す">${q ? `<button type="button" data-fq="" aria-label="消す">${ic('x')}</button>` : ''}</label>`;
     html += `<div class="chips">${FOOD_SUGGEST.map((w) => `<button class="chip ${q === w ? 'is-active' : ''}" data-fq="${w}">${w}</button>`).join('')}</div>`;
-    const filters = [['all', 'すべて'], ['meal', '食事'], ['sweets', 'スイーツ'], ['snack', '軽食'], ['mobile', 'モバイルオーダー'], ['halloween', '限定あり']];
+    const filters = [['all', 'すべて'], ['meal', '食事'], ['sweets', 'スイーツ'], ['snack', '軽食'], ['mobile', 'モバイルオーダー'], ...(PARK.limitedTab ? [['halloween', '限定あり']] : [])];
     html += `<div class="chips">${filters.map(([k, n]) => `<button class="chip ${S.foodFilter === k ? 'is-active' : ''}" data-ff="${k}">${n}</button>`).join('')}</div>`;
     html += `<div id="foodList">${foodListHtml(c)}</div>`;
     el.innerHTML = html;
@@ -1599,7 +1642,7 @@ function renderExplore() {
     <button class="btn btn--block" data-act="plan-edit-shows">${ic('sliders')}見るショーと回を変える</button>`;
     const others = R.live?.otherShows || [];
     if (others.length) {
-      html += `<div class="sec"><h2>その他のショー</h2></div><div class="card card--pad" style="font-size:13.5px;line-height:1.9">${others.slice(0, 12).map((o) => `<div><b>${esc(o.name)}</b> <span class="num">${o.times.filter((t) => !t.date || t.date === TRIP.date).map((t) => hhmm(t.start)).join(' / ') || '—'}</span></div>`).join('')}</div>`;
+      html += `<div class="sec"><h2>その他のショー</h2></div><div class="card card--pad" style="font-size:13.5px;line-height:1.9">${others.slice(0, 12).map((o) => `<div><b>${esc(o.name)}</b> <span class="num">${o.times.filter((t) => !t.date || t.date === tripDate()).map((t) => hhmm(t.start)).join(' / ') || '—'}</span></div>`).join('')}</div>`;
     }
     el.innerHTML = html;
     return;
@@ -1827,6 +1870,8 @@ function openSettings() {
   openSheet(`<div class="sheet__content">
     <h2 class="sheet__title" id="sheetTitle">設定</h2>
     <div>
+      <div class="setrow"><span class="setrow__ico">${ic('clock')}</span><div class="setrow__b"><div class="setrow__t">${esc(PARK.short)}の日程</div><div class="setrow__s">${dateLabel()} · <span class="num">${clock(h.open)}–${clock(h.close)}</span></div></div>
+        <button class="btn btn--sm" data-act="day-edit">変更</button></div>
       <div class="setrow"><span class="setrow__ico">${ic('locate')}</span><div class="setrow__b"><div class="setrow__t">現在地（GPS）</div><div class="setrow__s">${S.gps && R.gpsPos ? `使用中 · 精度 約${Math.round(R.gpsPos.acc)}m` : 'オフ'}</div></div>
         <span class="toggle"><input type="checkbox" data-gps-toggle ${S.gps ? 'checked' : ''} aria-label="現在地を使う"><i></i></span></div>
       ${renderLocRow(position())}
@@ -1839,7 +1884,8 @@ function openSettings() {
     </div>
     <details class="more"><summary>詳細</summary>
       <dl class="kv" style="margin-top:8px">
-        <dt>営業時間</dt><dd><span class="num">${clock(h.open)}–${clock(h.close)}</span>（${h.src === 'api' ? '公式スケジュール' : '予定値'}）</dd>
+        <dt>パーク</dt><dd>${esc(PARK.ja)}</dd>
+        <dt>営業時間</dt><dd><span class="num">${clock(h.parkOpen)}–${clock(h.parkClose)}</span>（${h.src === 'api' ? '公式スケジュール' : '予定値'}）</dd>
         <dt>待ち時間</dt><dd>ThemeParks.wiki → 予備 Queue-Times.com。3分ごとに自動更新、15分以上古いと推定に切替</dd>
         <dt>表示</dt><dd>${kindTag('live')} 外部提供 ${kindTag('manual')} 手入力 ${kindTag('est')} 推定</dd>
         <dt>徒歩</dt><dd>直線距離×1.4 ÷ 分速70mの目安</dd>
@@ -1848,7 +1894,7 @@ function openSettings() {
       ${isStandalone() ? '' : `<div class="box" style="margin-top:10px"><b>ホーム画面に追加</b>Safariの共有ボタン → 「ホーム画面に追加」</div>`}
       <div class="box" style="margin-top:10px"><b>テスト時刻</b>
         <div class="formrow" style="margin-top:6px"><input type="time" id="simAt" value="${S.sim ? hhmm(nowMin()).padStart(5, '0') : '10:00'}"><button class="btn btn--navy btn--sm" data-act="sim-set">表示</button>${S.sim ? '<button class="btn btn--sm" data-act="sim-off">解除</button>' : ''}</div></div>
-      <p style="font-size:13px;margin:10px 0 0"><a href="https://disneyland.disney.go.com/entertainment/disneyland/" target="_blank" rel="noopener">公式エンタメスケジュール</a> · <a href="https://disneyland.disney.go.com/guest-services/mobile-order/" target="_blank" rel="noopener">モバイルオーダー</a></p>
+      <p style="font-size:13px;margin:10px 0 0"><a href="${esc(PARK.officialUrl)}" target="_blank" rel="noopener">公式エンタメスケジュール</a> · <a href="https://disneyland.disney.go.com/guest-services/mobile-order/" target="_blank" rel="noopener">モバイルオーダー</a></p>
     </details>
     <p class="footer">非公式の個人用ツール · ThemeParks.wiki · Queue-Times.com · Wikipedia · © OpenStreetMap</p>
   </div>`);
@@ -1897,7 +1943,7 @@ async function shareFetch(method, body) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), 10000);
   try {
-    const res = await fetch('/api/share/' + S.share.code, { method, cache: 'no-store', signal: ctl.signal, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+    const res = await fetch(`/api/share/${S.share.code}?${API_Q}`, { method, cache: 'no-store', signal: ctl.signal, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
     const j = await res.json().catch(() => null);
     if (!res.ok || !j?.ok) throw new Error(j?.error === 'storage-not-configured' ? '共有の保存先が未設定です' : `HTTP ${res.status}`);
     return j;
@@ -2032,13 +2078,17 @@ async function renderMap() {
   try {
     mapMod = mapMod || await import('./map.js');
     const c = ctx();
-    const r = recommend(c);
+    // Same target as the home card (which follows the saved plan) — not a fresh recommendation.
+    const r = homeReco(c);
+    R.mapNextKey = mapNextKey(r);
     mapMod.draw({
+      bounds: PARK.bounds,
       filter: S.mapFilter, pos: position(), gps: R.gpsPos && S.gps && Date.now() - R.gpsPos.at < 5 * 60e3 ? R.gpsPos : null,
       rides: ATTRACTIONS.map((a) => ({ a, pos: coordsOf(a.id), w: waitInfo(a), done: !!S.done[a.id] })),
       food: RESTAURANTS.filter((x) => !R.mapFood || R.mapFood.ids.includes(x.id)).map((x) => ({ r: x, pos: coordsOf(x.id) })),
       shows: SHOWS.map((s) => ({ s, pos: s.venuePos })),
       nextId: R.mapFood?.one ? null : r.primary?.a?.id || null,
+      nextPos: R.mapFood?.one ? null : (r.primary?.type === 'ride' ? null : (r.primary?.anchor || r.primary?.next)?.pos || null),
       target: R.mapFood?.one ? { id: R.mapFood.ids[0] } : null,
       icons: { food: ic('food'), show: ic('show') },
       coordsSrc: (() => { const n = Object.keys(R.meta?.coords || {}).filter((k) => attractionById[k]).length; return n >= 15 ? 'api' : n > 0 ? 'partial' : 'approx'; })(),
@@ -2064,7 +2114,7 @@ async function renderMap() {
     }
     const p = r.primary;
     const shop = R.mapFood?.one ? restaurantById[R.mapFood.ids[0]] : null;
-    const dest = shop ? { name: shop.ja, pos: coordsOf(shop.id), open: `data-open-food="${shop.id}"`, k: 'GO' } : p?.type === 'ride' ? { name: p.a.short, pos: coordsOf(p.a.id), wait: p.wait, open: `data-open="${p.a.id}"` } : p?.type === 'anchor' || (p?.type === 'free' && p.next) ? (() => { const x = p.anchor || p.next; return { name: x.title + (x.place ? '・' + x.place : ''), pos: x.pos, open: `data-anchor-edit="${x.id}"` }; })() : null;
+    const dest = shop ? { name: shop.ja, pos: coordsOf(shop.id), open: `data-open-food="${shop.id}"`, k: 'GO' } : p?.type === 'ride' ? { name: p.a.short, pos: coordsOf(p.a.id), wait: p.wait, open: `data-open="${p.a.id}"` } : p?.type === 'anchor' || (p?.type === 'free' && p.next) ? (() => { const x = p.anchor || p.next; return { name: x.title + (x.kind === 'meal' && x.place ? '・' + x.place : ''), pos: x.pos, open: x.kind === 'show' && x.show ? `data-open-show="${x.show}"` : `data-anchor-edit="${x.id}"`, k: p.type === 'free' && r.leaveBy ? `NEXT · ${clock(r.leaveBy)}に移動` : null }; })() : null;
     const me = position();
     $('#mapcard').hidden = !dest;
     if (dest) {
@@ -2075,6 +2125,61 @@ async function renderMap() {
   } catch (e) {
     el.innerHTML = `<div class="note note--bad" style="margin:12px">${ic('alert')}<div>地図を読み込めませんでした（${esc(e.message)}）</div></div>`;
   }
+}
+
+// Identity of the map's NEXT target, to notice when the plan has moved on while the map stays open.
+function mapNextKey(r) { const p = r?.primary; return p ? `${p.type}:${p.a?.id || p.anchor?.id || p.next?.id || ''}` : ''; }
+
+// ---------- park switch + trip day ----------
+function renderParkSwitch() {
+  const el = $('#parkSw');
+  if (!el) return;
+  el.innerHTML = PARK_ORDER.map((id) => `<button type="button" class="${id === PARK_ID ? 'is-active' : ''}" data-park="${id}" aria-pressed="${id === PARK_ID}">${esc(PARKS[id].PARK.short)}</button>`).join('');
+}
+function switchPark(id) {
+  if (!PARKS[id]) return;
+  if (id === PARK_ID) return openDaySettings();
+  save();
+  try { localStorage.setItem(PARK_STORE, id); } catch { /* private mode */ }
+  location.reload();
+}
+const toHHMM = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(Math.round(m % 60)).padStart(2, '0')}`;
+function openDaySettings() {
+  const h = hours();
+  const ph = parkHours();
+  const src = ph.src === 'api' ? '公式' : '予定';
+  openSheet(`<div class="sheet__content">
+    <div><div class="kicker">${esc(PARK.en)}</div><h2 class="sheet__title" id="sheetTitle">${esc(PARK.short)}の日程</h2></div>
+    <div class="form">
+      <label class="field"><div class="field__h"><b>日付</b><span>予定 ${esc(dateLabel(TRIP.date))}</span></div>
+        <input type="date" id="dayDate" value="${tripDate()}"></label>
+      <label class="field"><div class="field__h"><b>入園</b><span>開園 ${clock(ph.open)}（${src}）</span></div>
+        <input type="time" id="dayEntry" step="300" value="${toHHMM(h.open)}"></label>
+      <label class="field"><div class="field__h"><b>退園</b><span>閉園 ${clock(ph.close)}（${src}）</span></div>
+        <input type="time" id="dayExit" step="300" value="${toHHMM(Math.min(h.close, 24 * 60 - 1))}"></label>
+      <p class="muted" style="font-size:12.5px;margin:0">入園〜退園の間でプランを組み直します。時間外のごはん・ショーは外します。</p>
+    </div>
+    <div class="btnrow"><button class="btn" data-act="day-reset">開園〜閉園に戻す</button><button class="btn btn--primary" data-act="day-save">保存</button></div>
+  </div>`);
+}
+function setDay(patch, msg) {
+  const before = tripDate();
+  S.cfg = { ...S.cfg, ...patch };
+  if (tripDate() !== before) { R.hist = {}; fetchMeta(); }
+  closeSheet();
+  buildPlan('日程');
+  save(); renderAll();
+  toast(`${msg ? msg + '：' : ''}${dateLabel()} ${clock(hours().open)}〜${clock(hours().close)}`, 'ok');
+}
+function saveDaySettings() {
+  const date = $('#dayDate').value;
+  const e = parseHHMM($('#dayEntry').value || '0:00'), x = parseHHMM($('#dayExit').value || '0:00');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return toast('日付を選んでください', 'error');
+  if (!(x - e >= 60)) return toast('退園は入園の1時間以上あとにしてください', 'error');
+  // date first (park hours depend on it), then keep entry/exit only when they differ from the park hours
+  S.cfg = { ...S.cfg, date: date === TRIP.date ? null : date };
+  const ph = parkHours();
+  setDay({ entry: e === ph.open ? null : e, exit: x === ph.close ? null : x }, '日程を変更');
 }
 
 function renderAll() { renderClock(); renderStatus(); renderView(); if (R.draft && !$('#sheet').hidden) openPlanBuilder(); }
@@ -2090,6 +2195,7 @@ document.addEventListener('click', async (e) => {
     return;
   }
   if (d.tab) return go(d.tab);
+  if (d.park) return switchPark(d.park);
   if (d.tabGo) { closeSheet(); return go(d.tabGo); }
   if (d.open) return openAttraction(d.open);
   if (d.openFood) return openFood(d.openFood);
@@ -2207,7 +2313,7 @@ document.addEventListener('click', async (e) => {
       try { await navigator.clipboard.writeText(shareLink()); toast('リンクをコピーしました', 'ok'); } catch { prompt('このリンクを相手に送ってください', shareLink()); }
       return;
     case 'share-send':
-      if (navigator.share) { try { await navigator.share({ title: '10.31 ディズニー プラン共有', text: '一緒のプランを使おう', url: shareLink() }); } catch { /* cancelled */ } return; }
+      if (navigator.share) { try { await navigator.share({ title: `${dateLabel()} ${PARK.short} プラン共有`, text: '一緒のプランを使おう', url: shareLink() }); } catch { /* cancelled */ } return; }
       try { await navigator.clipboard.writeText(shareLink()); toast('リンクをコピーしました。LINEなどで送ってください', 'ok'); } catch { prompt('このリンクを相手に送ってください', shareLink()); }
       return;
     case 'plan-time-set': {
@@ -2230,6 +2336,9 @@ document.addEventListener('click', async (e) => {
     case 'plan-edit': R.draft = null; return openPlanBuilder();
     case 'plan-edit-shows': R.draft = null; return openPlanBuilder('shows');
     case 'plan-apply': return applyPlanDraft();
+    case 'day-edit': return openDaySettings();
+    case 'day-save': return saveDaySettings();
+    case 'day-reset': return setDay({ entry: null, exit: null }, '開園〜閉園に戻しました');
     case 'plan-add': return openAddSheet();
     case 'sync-paused': syncPaused(); return renderAll();
     case 'plan-edit-order': R.planEdit = true; return renderPlan();
@@ -2246,8 +2355,9 @@ document.addEventListener('click', async (e) => {
     case 'sim-off': S.sim = null; buildPlan('テスト時刻'); closeSheet(); renderAll(); return toast('現在時刻に戻しました');
     case 'reset':
       if (!confirm('済みの記録とプランの条件をすべてリセットしますか？')) return;
-      Object.keys(S).forEach((k) => delete S[k]); Object.assign(S, structuredClone(defaults)); snap = null; save(); closeSheet(); renderAll();
-      return toast('リセットしました（2人の共有もやめました）');
+      { const cfg = S.cfg; Object.keys(S).forEach((k) => delete S[k]); Object.assign(S, structuredClone(defaults), { cfg, shareAdopted: true }); }
+      snap = null; save(); closeSheet(); renderAll();
+      return toast('リセットしました（2人の共有もやめました・日程はそのまま）');
     case 'map-me':
       if (!S.gps || !R.gpsPos) return startGPS(true);
       mapMod?.locate(R.gpsPos);
@@ -2293,6 +2403,16 @@ function measure() {
   document.documentElement.style.setProperty('--hdr', $('.topbar').offsetHeight + 'px');
   document.documentElement.style.setProperty('--tabh', $('.tabbar').offsetHeight + 'px');
 }
+// Two phones already sharing at one park keep sharing at the other (same code, separate plan room).
+if (!S.share && !S.shareAdopted) {
+  for (const id of PARK_ORDER) {
+    if (id === PARK_ID) continue;
+    try { const o = JSON.parse(localStorage.getItem(PARKS[id].PARK.storeKey) || '{}'); if (o.share?.code && CODE_RE.test(o.share.code)) S.share = { code: o.share.code }; } catch { /* ignore */ }
+  }
+  S.shareAdopted = true; save();
+}
+document.title = `${dateLabel()} ${PARK.short} Day Navi`;
+renderParkSwitch();
 measure();
 addEventListener('resize', measure);
 go(S.tab || 'home');
@@ -2310,6 +2430,8 @@ addEventListener('hashchange', offerJoinFromLink);
 setInterval(() => { renderClock(); renderStatus(); }, 15e3);
 // Re-render the current view every minute so countdowns/plans follow the clock (skip while a sheet is open).
 setInterval(() => { if ($('#sheet').hidden && S.tab !== 'map' && document.activeElement?.tagName !== 'INPUT') renderView(); }, 60e3);
+// The map stays put (no redraw that would close popups) unless its NEXT target has changed.
+setInterval(() => { if ($('#sheet').hidden && S.tab === 'map' && mapNextKey(homeReco(ctx())) !== R.mapNextKey) renderMap(); }, 30e3);
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     renderClock(); renderStatus(); if ($('#sheet').hidden) renderView();
@@ -2331,7 +2453,7 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
 // (ETag of the app code) when the app comes back to the foreground and every 10 minutes.
 // If there is one: reload right away when it is safe (coming back after a while, nothing open),
 // otherwise show a banner with a one-tap 更新.
-const UPDATE_FILES = ['/js/app.js', '/js/engine.js', '/js/map.js', '/css/app.css'];
+const UPDATE_FILES = ['/js/app.js', '/js/engine.js', '/js/map.js', '/js/data.js', '/js/parks/dl.js', '/js/parks/dca.js', '/css/app.css'];
 let codeTag = null, hiddenAt = 0;
 async function currentCodeTag() {
   const tags = await Promise.all(UPDATE_FILES.map((u) => fetch(u, { method: 'HEAD', cache: 'no-store' }).then((r) => (r.ok ? r.headers.get('etag') || r.headers.get('last-modified') || '' : '')).catch(() => '')));
@@ -2358,4 +2480,4 @@ document.addEventListener('visibilitychange', () => {
   // Back after 30 s or more: a quick, quiet reload is fine if a new version is out.
   checkForUpdate({ allowAutoReload: hiddenAt && Date.now() - hiddenAt > 30e3 });
 });
-window.__dlnavi = { S, R, ctx, recommend, simulateDay, pullShare, renderMap: () => renderMap(), layoutPlan, checkSuggest, renderAll: () => renderAll() };
+window.__dlnavi = { S, R, ctx, hours, homeReco, park: PARK_ID, recommend, simulateDay, pullShare, renderMap: () => renderMap(), layoutPlan, checkSuggest, renderAll: () => renderAll() };
