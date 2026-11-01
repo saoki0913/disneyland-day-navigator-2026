@@ -427,7 +427,7 @@ function ctx(extra = {}) {
   const now = nowMin();
   return {
     now, openMin: h.open, closeMin: h.close, pos: (() => { const p = position(); return p.lat == null ? null : p; })(),
-    planId: S.plan, done: S.done, excluded: S.excluded, skip: S.skip, live, crowd: crowdRatio(live, now),
+    planId: S.plan, done: S.done, doneMin: S.doneMin, excluded: S.excluded, skip: S.skip, live, crowd: crowdRatio(live, now),
     rideRatio: now >= h.open ? rideRatios(live, now) : {}, liveAt: now,
     // "Next" follows the saved plan (same on both phones); a fresh plan is built from the user's own order.
     order: S.planSnap?.items ? S.planSnap.items.filter((i) => i.type === 'ride' && !S.done[i.id]).map((i) => i.id) : S.order,
@@ -1114,7 +1114,7 @@ function markMoves(before, after) {
 const SUGGEST_MIN = 20;
 function checkSuggest({ trigger = 'manual' } = {}) {
   // Do not display automatic suggestions from opening a tab, GPS or routine polling.
-  if (trigger === 'significant' && (Date.now() - (S.lastSuggestionAt || 0) < 10 * 60e3)) return;
+  if (trigger !== 'manual' && (Date.now() - (S.lastSuggestionAt || 0) < 10 * 60e3)) return;
   R.suggest = null;
   if (!S.planSnap?.items || R.dragging || R.planEdit) return;
   const c = ctx({ order: null, orderReason: null });
