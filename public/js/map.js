@@ -1,6 +1,7 @@
 // Lazy-loaded Leaflet map (self-hosted Leaflet, OpenStreetMap tiles).
 let L = null, map = null, layer = null, meLayer = null, lineLayer = null, lastFitted = false, coordsSrc = 'approx';
-const PARK_BOUNDS = [[33.8095, -117.9248], [33.8168, -117.9160]];
+// Set per park by the caller (opts.bounds); Disneyland Park as the fallback.
+let PARK_BOUNDS = [[33.8095, -117.9248], [33.8168, -117.9160]];
 
 function loadLeaflet() {
   if (window.L) return Promise.resolve(window.L);
@@ -25,13 +26,16 @@ export function coordsNote() {
   return coordsSrc === 'api' ? '' : ' · 位置は概略';
 }
 
+export const isReady = () => !!map && map.getContainer() === document.getElementById('map');
+
 export async function draw(opts) {
   L = await loadLeaflet();
   coordsSrc = opts.coordsSrc;
+  if (opts.bounds) PARK_BOUNDS = opts.bounds;
   const el = document.getElementById('map');
   if (!map || map.getContainer() !== el) {
     map = L.map(el, { zoomControl: false, attributionControl: true, minZoom: 14, maxZoom: 19, zoomSnap: 0.25 });
-    map.setView([33.8125, -117.9200], 16);
+    map.setView([(PARK_BOUNDS[0][0] + PARK_BOUNDS[1][0]) / 2, (PARK_BOUNDS[0][1] + PARK_BOUNDS[1][1]) / 2], 16);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     }).addTo(map);
@@ -48,12 +52,13 @@ export async function draw(opts) {
   if (layer) layer.remove();
   layer = L.layerGroup().addTo(map);
   const f = opts.filter;
-  let nextPos = null;
+  // Line target = the same NEXT destination as the card under the map (ride OR meal/show).
+  const nextPos = opts.next?.pos || null;
+  const nextId = opts.next?.id || null;
   if (f === 'all' || f === 'rides') {
     for (const { a, pos, w, done } of opts.rides) {
       if (!pos) continue;
-      const isNext = a.id === opts.nextId;
-      if (isNext) nextPos = pos;
+      const isNext = a.id === nextId;
       const label = done ? '済' : w.wait == null ? '休' : w.wait;
       const icon = L.divIcon({ className: '', html: `<div class="mk mk--ride ${done ? 'is-done' : cls(w.wait)} ${isNext ? 'is-next' : ''}">${label}</div>`, iconSize: isNext ? [38, 38] : [30, 30], iconAnchor: isNext ? [19, 19] : [15, 15] });
       const m = L.marker([pos.lat, pos.lon], { icon, zIndexOffset: isNext ? 1000 : 0, title: a.short }).addTo(layer);

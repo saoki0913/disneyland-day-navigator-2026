@@ -1,6 +1,6 @@
 name: Deploy Disneyland Navi to Cloudflare Pages
 
-# Automatic production deploy only after the separate 60-unit/29-mobile-E2E verification succeeds.
+# Automatic production deploy only after the separate 72-unit/37-mobile-E2E verification succeeds.
 # Scope: this repo -> existing dl-navi-1031 Pages project ONLY. No Workers/DNS/domain writes.
 on:
   workflow_run:
@@ -75,7 +75,7 @@ jobs:
         if: steps.fresh.outputs.deploy == 'true'
         run: npm ci
 
-      - name: Recheck 60 unit tests and compile Pages Functions
+      - name: Recheck 72 unit tests and compile Pages Functions
         if: steps.fresh.outputs.deploy == 'true'
         run: |
           npm test

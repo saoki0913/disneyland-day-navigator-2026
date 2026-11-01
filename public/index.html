@@ -6,9 +6,9 @@
 <meta name="theme-color" content="#f2e8d5">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="10.31 Navi">
-<meta name="description" content="2026年10月31日 ディズニーランド・パーク当日ナビ（個人用・非公式）">
-<title>10.31 Disneyland Day Navi</title>
+<meta name="apple-mobile-web-app-title" content="Disney Navi">
+<meta name="description" content="2026年10/31 ディズニーランド・パーク／11/1 カリフォルニア・アドベンチャー当日ナビ（個人用・非公式）">
+<title>Disneyland Resort Day Navi</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/icon-180.png">
@@ -19,7 +19,7 @@
 <div id="app">
   <header class="topbar">
     <span class="topbar__clock" id="clock">--:--</span>
-    <span class="topbar__date">10/31 SAT</span>
+    <div class="parksw" id="parkSw" role="group" aria-label="パークの切り替え"></div>
     <span class="topbar__sp"></span>
     <button class="pill" id="livePill" type="button" aria-label="待ち時間を更新">
       <span class="pill__dot"></span><span id="livePillText">確認中</span>

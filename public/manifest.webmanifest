@@ -1,6 +1,6 @@
 {
-  "name": "10.31 Disneyland Day Navi",
-  "short_name": "10.31 Navi",
+  "name": "Disneyland Resort Day Navi",
+  "short_name": "Disney Navi",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f3e8d0",

@@ -1,5 +1,6 @@
 import {
   TRIP, LANDS, landById, ATTRACTIONS, attractionById, RESTAURANTS, restaurantById, POPCORN, SHOWS, showById, PLANS, PRIORITY,
+  PARK, PARK_ID, PARKS, PARK_ORDER, PARK_STORE,
 } from './data.js';
 import {
   recommend, simulateDay, buildAnchors, anchorConflicts, crowdRatio, walkMin, distanceM, hhmm, parseHHMM, estimateWait, availability, DEFAULT_MUST,
@@ -8,7 +9,9 @@ import {
 // =====================================================================
 // State (persisted in localStorage — never sent anywhere)
 // =====================================================================
-const KEY = 'dlnavi-1031-v1';
+// One store per park (Disneyland keeps its original key so existing progress survives).
+const KEY = PARK.storeKey;
+const API_Q = `park=${PARK_ID}`;
 const defaults = {
   plan: 'balance',
   done: {},            // { rideId | 'meal:lunch' | 'show:fantasmic': timestampMs }
@@ -29,6 +32,7 @@ const defaults = {
   exploreTab: 'rides', exploreFilter: 'all', exploreSort: 'reco', foodFilter: 'all',
   mapFilter: 'rides',
   tab: 'home',
+  cfg: { date: null, entry: null, exit: null }, // user-set trip date / entry / exit (minutes); null → plan/API value
 };
 let S = load();
 function load() {
@@ -61,7 +65,7 @@ try {
   const p = JSON.parse(localStorage.getItem(KEY + ':photos') || 'null');
   if (p && Date.now() - p.at < 3 * 86400e3 && p.data && Object.values(p.data)[0]?.source) R.photos = p.data;
   const h = JSON.parse(localStorage.getItem(KEY + ':hist') || 'null');
-  if (h?.date === TRIP.date) R.hist = h.data || {};
+  if (h?.date === tripDate()) R.hist = h.data || {};
 } catch { /* ignore */ }
 
 // =====================================================================
@@ -79,24 +83,44 @@ function laParts(d = new Date()) {
   const [h, m, sec] = time.split(':').map(Number);
   return { date, min: (h % 24) * 60 + m + sec / 60 };
 }
+// ---------- trip day (date / entry / exit — user editable per park) ----------
+function tripDate() { return S.cfg?.date || TRIP.date; }
+const WD = ['日', '月', '火', '水', '木', '金', '土'];
+const WD_EN = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+function dateLabel(iso = tripDate(), en = false) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const wd = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+  return en ? `${m}/${d} ${WD_EN[wd]}` : `${m}/${d}（${WD[wd]}）`;
+}
 function nowMin() {
   if (S.sim) return S.sim.base + (Date.now() - S.sim.setAt) / 60000;
   const p = laParts();
-  if (p.date < TRIP.date) return TRIP.openMin - 60; // before the trip day: preview as morning
-  if (p.date > TRIP.date) return 24 * 60;
+  if (p.date < tripDate()) return hours().open - 60; // before the trip day: preview as morning
+  if (p.date > tripDate()) return 24 * 60;
   return p.min;
 }
 function dayPhase() {
   const p = laParts();
   if (S.sim) return 'sim';
-  if (p.date < TRIP.date) return 'before';
-  if (p.date > TRIP.date) return 'after';
+  if (p.date < tripDate()) return 'before';
+  if (p.date > tripDate()) return 'after';
   return 'today';
 }
-function hours() {
-  const op = R.meta?.schedule?.operating;
+// Park operating hours for the trip date: official schedule (API) → plan value.
+function parkHours() {
+  const sc = R.meta?.schedule;
+  const op = sc?.days ? sc.days[tripDate()]?.operating : sc?.date === tripDate() ? sc.operating : null;
   if (op && op.open != null && op.close != null) return { open: op.open, close: op.close === 0 ? 24 * 60 : op.close, src: 'api' };
   return { open: TRIP.openMin, close: TRIP.closeMin, src: 'plan' };
+}
+// The window the plan uses: the user's entry/exit times when set, otherwise the park hours.
+function hours() {
+  const ph = parkHours();
+  const e = S.cfg?.entry, x = S.cfg?.exit;
+  const open = Number.isFinite(e) ? e : ph.open;
+  const close = Number.isFinite(x) ? x : ph.close;
+  if (close - open < 60) return { ...ph, parkOpen: ph.open, parkClose: ph.close, customOpen: false, customClose: false };
+  return { open, close, src: ph.src, parkOpen: ph.open, parkClose: ph.close, customOpen: Number.isFinite(e), customClose: Number.isFinite(x) };
 }
 const clock = (m) => { const h = Math.floor(m / 60) % 24; return `${h}:${String(Math.floor(m % 60)).padStart(2, '0')}`; };
 
@@ -116,7 +140,7 @@ const coordsMap = () => {
 };
 
 // ---------- position ----------
-const PARK_CENTER = { lat: 33.8121, lon: -117.9200 };
+const PARK_CENTER = PARK.center;
 function position() {
   const now = Date.now();
   const g = R.gpsPos;
@@ -178,7 +202,7 @@ async function fetchLive({ manual = false } = {}) {
   try {
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 12000);
-    const res = await fetch('/api/live', { cache: 'no-store', signal: ctl.signal });
+    const res = await fetch('/api/live?' + API_Q, { cache: 'no-store', signal: ctl.signal });
     clearTimeout(t);
     const j = await res.json().catch(() => null);
     if (!res.ok || !j?.ok) throw new Error(j?.errors?.join(' / ') || `HTTP ${res.status}`);
@@ -203,7 +227,7 @@ function recordHistory(j) {
     arr.push([m, w]);
     if (arr.length > 300) arr.shift();
   }
-  try { localStorage.setItem(KEY + ':hist', JSON.stringify({ date: TRIP.date, data: R.hist })); } catch { /* full */ }
+  try { localStorage.setItem(KEY + ':hist', JSON.stringify({ date: tripDate(), data: R.hist })); } catch { /* full */ }
 }
 // Compare with the previous LIVE sample: a closed ride reopening, or a sudden wait drop.
 function detectAlerts(prev, next) {
@@ -225,14 +249,14 @@ const activeAlerts = () => R.alerts.filter((x) => nowMin() - x.at < 20 && !S.don
 
 async function fetchMeta() {
   try {
-    const res = await fetch('/api/meta');
+    const res = await fetch('/api/meta?' + API_Q);
     const j = await res.json();
     if (j?.ok) { R.meta = j; localStorage.setItem(KEY + ':meta', JSON.stringify({ at: Date.now(), data: j })); renderAll(); }
   } catch { /* fallback coords stay in use */ }
 }
 async function fetchPhotos() {
   if (Object.keys(R.photos).length > 20) return;
-  const sets = await Promise.allSettled(['rides', 'food', 'shows'].map((set) => fetch('/api/photos?set=' + set).then((r) => r.json())));
+  const sets = await Promise.allSettled(['rides', 'food', 'shows'].map((set) => fetch(`/api/photos?set=${set}&${API_Q}`).then((r) => r.json())));
   const merged = { ...R.photos };
   for (const s2 of sets) if (s2.status === 'fulfilled' && s2.value?.ok) Object.assign(merged, s2.value.photos);
   if (Object.keys(merged).length) {
@@ -272,14 +296,28 @@ function stopGPS() {
 function showTimesFor(id) {
   const manual = S.prefs.showTimes?.[id];
   if (manual?.length) return { times: manual, src: 'manual' };
-  const api = R.live?.shows?.[id]?.times?.filter((t) => !t.date || t.date === TRIP.date).map((t) => hhmm(t.start));
+  const api = R.live?.shows?.[id]?.times?.filter((t) => !t.date || t.date === tripDate()).map((t) => hhmm(t.start));
   if (api?.length) return { times: [...new Set(api)], src: 'api' };
   return { times: showById[id].times, src: 'pre' };
 }
 function anchors() {
   const showTimes = {};
   for (const s of SHOWS) showTimes[s.id] = showTimesFor(s.id).times;
-  return buildAnchors(S.plan, { ...S.prefs, showTimes }, S.done);
+  return withCoords(buildAnchors(S.plan, { ...S.prefs, showTimes }, S.done));
+}
+// Use the API coordinates for restaurants (same as the map pins) so plan / home / map route agree,
+// and drop meals/shows that fall outside the entry–exit window.
+function withCoords(list) {
+  const h = hours();
+  for (const x of list) if (x.restaurant) { const c = coordsOf(x.restaurant); if (c) x.pos = { lat: c.lat, lon: c.lon }; }
+  return list.filter((x) => x.done || (x.start < h.close && x.end > h.open));
+}
+function outsideAnchors() {
+  const showTimes = {};
+  for (const s of SHOWS) showTimes[s.id] = showTimesFor(s.id).times;
+  const all = buildAnchors(S.plan, { ...S.prefs, showTimes }, S.done);
+  const kept = new Set(anchors().map((x) => x.id));
+  return all.filter((x) => !kept.has(x.id));
 }
 const mustMap = () => S.must || { ...DEFAULT_MUST };
 function ctx(extra = {}) {
@@ -341,7 +379,7 @@ document.addEventListener('error', (e) => {
 }, true);
 const rideImg = (a) => imgFor(a.id, { name: a.en, color: landById[a.land]?.color });
 const foodImg = (r) => imgFor('food_' + r.id, { name: r.en, color: '#2e6b4f' });
-const showImgKey = (id) => (id === 'fantasmic' ? 'fantasmic' : id === 'fireworks' ? 'fireworks' : 'cavalcade');
+const showImgKey = (id) => id;
 const showImg = (s) => imgFor(showImgKey(s.id), { name: s.en, color: '#5b3f78' });
 
 // =====================================================================
@@ -434,7 +472,7 @@ function renderStatus() {
   let msg = '', err = false;
   if (phase === 'sim') msg = `テスト時刻 ${clock(nowMin())}`;
   else if (phase === 'before') msg = '当日の朝としてプレビュー中';
-  else if (phase === 'after') msg = '10/31の営業は終了しました';
+  else if (phase === 'after') msg = `${dateLabel()}の${PARK.short}は終了しました`;
   if (R.liveStatus === 'error' && !R.live?.ok) { msg = (msg ? msg + ' / ' : '') + '待ち時間は推定'; err = true; }
   else if (R.live?.ok && !liveIsFresh()) { msg = (msg ? msg + ' / ' : '') + `待ち時間が${Math.round(age)}分前 · 推定で案内`; err = true; }
   b.hidden = !msg;
@@ -551,9 +589,10 @@ function renderHome() {
   let html = '';
 
   if (c.now < h.open) {
-    html += `<div class="countdown"><div><div class="countdown__k">BEFORE OPENING</div><div class="countdown__n">開園 <span class="num">${clock(h.open)}</span></div>
-      <div style="font-size:12.5px;opacity:.85">入口に <span class="num">${clock(h.open - 40)}</span> 着が目安</div></div>
-      <div class="countdown__v">${fmtDur(h.open - c.now)}<small>開園まで</small></div></div>`;
+    const lbl = h.customOpen ? '入園' : '開園';
+    html += `<div class="countdown"><div><div class="countdown__k">${esc(PARK.en.toUpperCase())}</div><div class="countdown__n">${lbl} <span class="num">${clock(h.open)}</span></div>
+      <div style="font-size:12.5px;opacity:.85">${h.customOpen ? `開園 <span class="num">${clock(h.parkOpen)}</span>` : `入口に <span class="num">${clock(h.open - 40)}</span> 着が目安`}</div></div>
+      <div class="countdown__v">${fmtDur(h.open - c.now)}<small>${lbl}まで</small></div></div>`;
   }
   if (c.now >= h.close || dayPhase() === 'after') {
     html += `<div class="card card--pad" style="text-align:center"><div class="kicker">See you again</div><h2 style="margin:4px 0">おつかれさま！</h2>
@@ -717,7 +756,7 @@ function renderLocRow(pos) {
     <button class="btn btn--sm" data-act="pick-land">変更</button></div>`;
 }
 function footer() {
-  return `<p class="footer">非公式の個人用ナビ · 待ち時間 ThemeParks.wiki / Queue-Times.com</p>`;
+  return `<p class="footer">${esc(PARK.ja)} · 非公式の個人用ナビ · 待ち時間 ThemeParks.wiki / Queue-Times.com</p>`;
 }
 
 // =====================================================================
@@ -727,7 +766,7 @@ function condSummary(D) {
   const must = Object.keys(D.must).filter((id) => attractionById[id]);
   const meals = PLANS[D.plan].meals.filter((m) => !D.prefs.mealOverrides[m.id]?.off).map((m) => {
     const ov = D.prefs.mealOverrides[m.id] || {};
-    return `${m.id === 'lunch' ? 'ランチ' : m.id === 'dinner' ? 'ディナー' : 'おやつ'} ${restaurantById[ov.restaurant || m.restaurant]?.ja.split('・')[0]}`;
+    return `${m.id === 'snack' ? 'おやつ' : m.ja} ${clock(ov.at ?? m.at)} ${restaurantById[ov.restaurant || m.restaurant]?.ja.split(/[・（]/)[0]}`;
   });
   const shows = SHOWS.filter((s) => D.prefs.shows[s.id]?.on ?? PLANS[D.plan].shows[s.id]).map((s) => s.short.replace('ハロウィン・', ''));
   return [
@@ -746,7 +785,9 @@ function renderPlan() {
   const conflicts = anchorConflicts(c.anchors);
   const D = { plan: S.plan, cond: S.cond, must: mustMap(), prefs: S.prefs };
   const mustIds = Object.keys(mustMap()).filter((id) => attractionById[id]);
+  const hh = hours();
   let html = `<div class="card condsum">
+    <button class="dayrow" data-act="day-edit"><span class="dayrow__k">${esc(PARK.short)}</span><span class="dayrow__v"><b>${dateLabel()}</b> ${hh.customOpen ? '入園' : '開園'} <span class="num">${clock(hh.open)}</span> → ${hh.customClose ? '退園' : '閉園'} <span class="num">${clock(hh.close)}</span></span><span class="dayrow__e">${ic('edit')}変更</span></button>
     <dl class="kv condsum__kv">${condSummary(D).map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
     <button class="btn btn--navy btn--block" data-act="plan-edit">${ic('sliders')}条件を変えてプランを作る</button></div>`;
   html += `<div class="kpis">
@@ -754,6 +795,8 @@ function renderPlan() {
     <div class="card kpi"><b>${mustIds.length - sim.missingMust.length}/${mustIds.length}</b><span>絶対乗る</span></div>
     <div class="card kpi"><b>${c.anchors.length}</b><span>ごはん・ショー</span></div></div>`;
   if (sim.missingMust.length) html += `<div class="note note--bad">${ic('alert')}<div><div class="note__t">${sim.missingMust.map((id) => esc(attractionById[id].short)).join('・')} が入りきらない</div><div class="note__s">休止中なら再開後に最優先で案内</div></div></div>`;
+  const outside = outsideAnchors();
+  if (outside.length) html += `<div class="note">${ic('info')}<div><div class="note__t">${outside.map((x) => `${esc(x.title)}（${clock(x.start)}）`).join('・')} は入園〜退園の時間外なので外しました</div><div class="note__s">日程の「変更」で入園・退園時刻を調整できます</div></div></div>`;
   if (conflicts.length) html += `<div class="note note--bad">${ic('alert')}<div><div class="note__t">ごはんとショーの時間が重なっています</div></div></div>`;
 
   html += `<div class="sec"><h2><span class="sec__en">TIMELINE</span>これから</h2>
@@ -800,7 +843,7 @@ const MEAL_RANGE = { lunch: [10 * 60 + 30, 14 * 60], snack: [13 * 60, 17 * 60 + 
 function draftCtx(D) {
   const showTimes = {};
   for (const s of SHOWS) showTimes[s.id] = showTimesFor(s.id).times;
-  const anchorsD = buildAnchors(D.plan, { ...D.prefs, showTimes }, S.done);
+  const anchorsD = withCoords(buildAnchors(D.plan, { ...D.prefs, showTimes }, S.done));
   return ctx({ planId: D.plan, cond: D.cond, must: D.must, excluded: D.excluded, anchors: anchorsD });
 }
 function openPlanBuilder(focus) {
@@ -867,8 +910,10 @@ function applyPlanDraft() {
 // =====================================================================
 function renderExplore() {
   const el = $('#view-explore');
+  const xtabs = [['rides', '乗り物'], ['food', '食事'], ['shows', 'ショー'], ...(PARK.limitedTab ? [['halloween', PARK.limitedTab]] : [])];
+  if (!xtabs.some(([k]) => k === S.exploreTab)) S.exploreTab = 'rides';
   const tab = S.exploreTab;
-  let html = `<div class="seg" role="tablist">${[['rides', '乗り物'], ['food', '食事'], ['shows', 'ショー'], ['halloween', '限定']].map(([k, n]) => `<button class="${tab === k ? 'is-active' : ''}" data-xtab="${k}" role="tab" aria-selected="${tab === k}">${n}</button>`).join('')}</div>`;
+  let html = `<div class="seg" role="tablist">${xtabs.map(([k, n]) => `<button class="${tab === k ? 'is-active' : ''}" data-xtab="${k}" role="tab" aria-selected="${tab === k}">${n}</button>`).join('')}</div>`;
   const c = ctx();
   if (tab === 'rides') {
     const filters = [['all', 'すべて'], ['todo', '未体験'], ['short', '30分以下'], ['japan', '日本にない'], ['done', '体験済み'], ['down', '休止中']];
@@ -905,7 +950,7 @@ function renderExplore() {
     return;
   }
   if (tab === 'food') {
-    const filters = [['all', 'すべて'], ['meal', '食事'], ['sweets', 'スイーツ'], ['snack', '軽食'], ['mobile', 'モバイルオーダー'], ['halloween', '限定あり']];
+    const filters = [['all', 'すべて'], ['meal', '食事'], ['sweets', 'スイーツ'], ['snack', '軽食'], ['mobile', 'モバイルオーダー'], ...(PARK.limitedTab ? [['halloween', '限定あり']] : [])];
     html += `<div class="chips">${filters.map(([k, n]) => `<button class="chip ${S.foodFilter === k ? 'is-active' : ''}" data-ff="${k}">${n}</button>`).join('')}</div>`;
     let list = RESTAURANTS.map((r) => ({ r, walk: walkMin(c.pos, coordsOf(r.id)), d: c.pos ? distanceM(c.pos, coordsOf(r.id)) : 0 }));
     const f = S.foodFilter;
@@ -949,7 +994,7 @@ function renderExplore() {
     <button class="btn btn--block" data-act="plan-edit-shows">${ic('sliders')}見るショーと回を変える</button>`;
     const others = R.live?.otherShows || [];
     if (others.length) {
-      html += `<div class="sec"><h2>その他のショー</h2></div><div class="card card--pad" style="font-size:13.5px;line-height:1.9">${others.slice(0, 12).map((o) => `<div><b>${esc(o.name)}</b> <span class="num">${o.times.filter((t) => !t.date || t.date === TRIP.date).map((t) => hhmm(t.start)).join(' / ') || '—'}</span></div>`).join('')}</div>`;
+      html += `<div class="sec"><h2>その他のショー</h2></div><div class="card card--pad" style="font-size:13.5px;line-height:1.9">${others.slice(0, 12).map((o) => `<div><b>${esc(o.name)}</b> <span class="num">${o.times.filter((t) => !t.date || t.date === tripDate()).map((t) => hhmm(t.start)).join(' / ') || '—'}</span></div>`).join('')}</div>`;
     }
     el.innerHTML = html;
     return;
@@ -1091,6 +1136,55 @@ function openLandPicker() {
   </div>`);
 }
 
+// ---------- park switch + trip day (date / entry / exit) ----------
+function renderParkSwitch() {
+  const el = $('#parkSw');
+  if (!el) return;
+  el.innerHTML = PARK_ORDER.map((id) => `<button type="button" class="${id === PARK_ID ? 'is-active' : ''}" data-park="${id}" aria-pressed="${id === PARK_ID}">${esc(PARKS[id].PARK.short)}</button>`).join('');
+  const d = $('#tripDate');
+  if (d) d.textContent = dateLabel(tripDate(), true);
+}
+function switchPark(id) {
+  if (!PARKS[id]) return;
+  if (id === PARK_ID) return openDaySettings();
+  save();
+  try { localStorage.setItem(PARK_STORE, id); } catch { /* private mode */ }
+  location.reload();
+}
+const toHHMM = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+function openDaySettings() {
+  const h = hours();
+  const ph = parkHours();
+  openSheet(`<div class="sheet__content">
+    <div><div class="kicker">${esc(PARK.en)}</div><h2 class="sheet__title" id="sheetTitle">${esc(PARK.short)}の日程</h2></div>
+    <div class="form">
+      <label class="field"><div class="field__h"><b>日付</b><span>予定 ${esc(dateLabel(TRIP.date))}</span></div>
+        <input type="date" id="dayDate" value="${tripDate()}"></label>
+      <label class="field"><div class="field__h"><b>入園</b><span>開園 ${clock(ph.open)}${ph.src === 'api' ? '（公式）' : '（予定）'}</span></div>
+        <input type="time" id="dayEntry" step="300" value="${toHHMM(h.open)}"></label>
+      <label class="field"><div class="field__h"><b>退園</b><span>閉園 ${clock(ph.close)}${ph.src === 'api' ? '（公式）' : '（予定）'}</span></div>
+        <input type="time" id="dayExit" step="300" value="${toHHMM(Math.min(h.close, 24 * 60 - 1))}"></label>
+      <p class="muted" style="font-size:12.5px;margin:0">入園〜退園の間でプランを組みます。乗り物・ごはん・ショーはこの時間内で案内します。</p>
+    </div>
+    <div class="btnrow"><button class="btn" data-act="day-reset">開園〜閉園に戻す</button><button class="btn btn--primary" data-act="day-save">保存</button></div>
+  </div>`);
+}
+function saveDaySettings() {
+  const date = $('#dayDate').value;
+  const e = parseHHMM($('#dayEntry').value || '0:00'), x = parseHHMM($('#dayExit').value || '0:00');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return toast('日付を選んでください', 'error');
+  if (!(x - e >= 60)) return toast('退園は入園の1時間以上あとにしてください', 'error');
+  const dateChanged = date !== tripDate();
+  S.cfg = { date: date === TRIP.date ? null : date, entry: null, exit: null };
+  const ph = parkHours();
+  S.cfg.entry = e === ph.open ? null : e;
+  S.cfg.exit = x === ph.close ? null : x;
+  if (dateChanged) R.hist = {};
+  save(); closeSheet(); renderParkSwitch(); renderAll();
+  if (dateChanged) fetchMeta();
+  toast(`${dateLabel()} ${clock(hours().open)}〜${clock(hours().close)} で組み直しました`, 'ok');
+}
+
 function openSettings() {
   const h = hours();
   const l = R.live;
@@ -1098,6 +1192,8 @@ function openSettings() {
   openSheet(`<div class="sheet__content">
     <h2 class="sheet__title" id="sheetTitle">設定</h2>
     <div>
+      <div class="setrow"><span class="setrow__ico">${ic('clock')}</span><div class="setrow__b"><div class="setrow__t">${esc(PARK.short)}の日程</div><div class="setrow__s">${dateLabel()} · <span class="num">${clock(h.open)}–${clock(h.close)}</span></div></div>
+        <button class="btn btn--sm" data-act="day-edit">変更</button></div>
       <div class="setrow"><span class="setrow__ico">${ic('locate')}</span><div class="setrow__b"><div class="setrow__t">現在地（GPS）</div><div class="setrow__s">${S.gps && R.gpsPos ? `使用中 · 精度 約${Math.round(R.gpsPos.acc)}m` : 'オフ'}</div></div>
         <span class="toggle"><input type="checkbox" data-gps-toggle ${S.gps ? 'checked' : ''} aria-label="現在地を使う"><i></i></span></div>
       <div class="setrow"><span class="setrow__ico">${ic('refresh')}</span><div class="setrow__b"><div class="setrow__t">待ち時間</div><div class="setrow__s">${liveTxt}</div></div>
@@ -1107,7 +1203,8 @@ function openSettings() {
     </div>
     <details class="more"><summary>詳細</summary>
       <dl class="kv" style="margin-top:8px">
-        <dt>営業時間</dt><dd><span class="num">${clock(h.open)}–${clock(h.close)}</span>（${h.src === 'api' ? '公式スケジュール' : '予定値'}）</dd>
+        <dt>パーク</dt><dd>${esc(PARK.ja)}</dd>
+        <dt>営業時間</dt><dd><span class="num">${clock(h.parkOpen)}–${clock(h.parkClose)}</span>（${h.src === 'api' ? '公式スケジュール' : '予定値'}）</dd>
         <dt>待ち時間</dt><dd>ThemeParks.wiki → 予備 Queue-Times.com。3分ごとに自動更新、15分以上古いと推定に切替</dd>
         <dt>表示</dt><dd>${kindTag('live')} 外部提供 ${kindTag('manual')} 手入力 ${kindTag('est')} 推定</dd>
         <dt>徒歩</dt><dd>直線距離×1.4 ÷ 分速70mの目安</dd>
@@ -1116,7 +1213,7 @@ function openSettings() {
       ${isStandalone() ? '' : `<div class="box" style="margin-top:10px"><b>ホーム画面に追加</b>Safariの共有ボタン → 「ホーム画面に追加」</div>`}
       <div class="box" style="margin-top:10px"><b>テスト時刻</b>
         <div class="formrow" style="margin-top:6px"><input type="time" id="simAt" value="${S.sim ? hhmm(nowMin()).padStart(5, '0') : '10:00'}"><button class="btn btn--navy btn--sm" data-act="sim-set">表示</button>${S.sim ? '<button class="btn btn--sm" data-act="sim-off">解除</button>' : ''}</div></div>
-      <p style="font-size:13px;margin:10px 0 0"><a href="https://disneyland.disney.go.com/entertainment/disneyland/" target="_blank" rel="noopener">公式エンタメスケジュール</a> · <a href="https://disneyland.disney.go.com/guest-services/mobile-order/" target="_blank" rel="noopener">モバイルオーダー</a></p>
+      <p style="font-size:13px;margin:10px 0 0"><a href="${esc(PARK.officialUrl)}" target="_blank" rel="noopener">公式エンタメスケジュール</a> · <a href="https://disneyland.disney.go.com/guest-services/mobile-order/" target="_blank" rel="noopener">モバイルオーダー</a></p>
     </details>
     <p class="footer">非公式の個人用ツール · ThemeParks.wiki · Queue-Times.com · Wikipedia · © OpenStreetMap</p>
   </div>`);
@@ -1129,6 +1226,7 @@ let mapMod = null;
 function go(tab) {
   if (tab === 'shows') { S.exploreTab = 'shows'; tab = 'explore'; }
   S.tab = tab; save();
+  if (tab === 'map') R.mapSig = null; // the map was hidden: force a full redraw / resize
   document.querySelectorAll('.view').forEach((v) => { v.hidden = v.dataset.view !== tab; });
   document.querySelectorAll('.tab').forEach((t) => { t.classList.toggle('is-active', t.dataset.tab === tab); t.setAttribute('aria-current', t.dataset.tab === tab ? 'page' : 'false'); });
   renderView(tab);
@@ -1151,29 +1249,53 @@ async function renderMap() {
   }
   try {
     mapMod = mapMod || await import('./map.js');
+    if (S.tab !== 'map') return;
+    // Same source as the home card and the plan timeline's first item (recommend + skip/pin).
     const c = ctx();
     const r = recommend(c);
-    mapMod.draw({
-      filter: S.mapFilter, pos: position(), gps: R.gpsPos && S.gps ? R.gpsPos : null,
-      rides: ATTRACTIONS.map((a) => ({ a, pos: coordsOf(a.id), w: waitInfo(a), done: !!S.done[a.id] })),
-      food: RESTAURANTS.map((x) => ({ r: x, pos: coordsOf(x.id) })),
-      shows: SHOWS.map((s) => ({ s, pos: s.venuePos })),
-      nextId: r.primary?.a?.id || null,
-      icons: { food: ic('food'), show: ic('show') },
-      coordsSrc: (() => { const n = Object.keys(R.meta?.coords || {}).filter((k) => attractionById[k]).length; return n >= 15 ? 'api' : n > 0 ? 'partial' : 'approx'; })(),
-    });
-    const p = r.primary;
-    const dest = p?.type === 'ride' ? { name: p.a.short, pos: coordsOf(p.a.id), wait: p.wait, open: `data-open="${p.a.id}"` } : p?.type === 'anchor' ? { name: p.anchor.title + (p.anchor.place ? '・' + p.anchor.place : ''), pos: p.anchor.pos, open: `data-anchor-edit="${p.anchor.id}"` } : null;
+    const dest = nextDest(r);
     const me = position();
-    $('#mapcard').hidden = !dest;
+    const rides = ATTRACTIONS.map((a) => ({ a, pos: coordsOf(a.id), w: waitInfo(a), done: !!S.done[a.id] }));
+    // Redraw markers only when something visible changed (keeps open popups while the clock ticks).
+    const sig = JSON.stringify([S.mapFilter, dest?.id, dest?.pos, me.lat, me.lon, R.gpsPos?.at, rides.map((x) => [x.w.wait, x.done]), !!R.meta]);
+    if (sig !== R.mapSig || !mapMod.isReady()) {
+      R.mapSig = sig;
+      await mapMod.draw({
+        filter: S.mapFilter, pos: me, gps: R.gpsPos && S.gps ? R.gpsPos : null,
+        bounds: PARK.bounds,
+        rides,
+        food: RESTAURANTS.map((x) => ({ r: x, pos: coordsOf(x.id) })),
+        shows: SHOWS.map((s) => ({ s, pos: s.venuePos })),
+        next: dest ? { id: dest.rideId || null, pos: dest.pos } : null,
+        icons: { food: ic('food'), show: ic('show') },
+        coordsSrc: (() => { const n = Object.keys(R.meta?.coords || {}).filter((k) => attractionById[k]).length; return n >= Math.min(15, ATTRACTIONS.length - 3) ? 'api' : n > 0 ? 'partial' : 'approx'; })(),
+      });
+    }
+    const card = $('#mapcard');
+    if (!card) return;
+    card.hidden = !dest;
     if (dest) {
-      $('#mapcard').innerHTML = `<button class="mapdest__b" style="text-align:left" ${dest.open}><div class="mapdest__k">NEXT</div><div class="mapdest__n">${esc(dest.name)}</div>
+      card.innerHTML = `<button class="mapdest__b" style="text-align:left" ${dest.open}><div class="mapdest__k">NEXT${dest.at ? ` · ${esc(dest.at)}` : ''}</div><div class="mapdest__n">${esc(dest.name)}</div>
         <div class="mapdest__m">${me.lat != null ? `徒歩${walkMin(me, dest.pos)}分` : '現在地未設定'}${dest.wait != null ? ` · 待ち${dest.wait}分` : ''}${mapMod.coordsNote()}</div></button>
-        <a class="btn btn--primary btn--sm" href="${routeUrl(dest.pos)}" target="_blank" rel="noopener">${ic('route')}ルート</a>`;
+        <a class="btn btn--primary btn--sm" data-route="${esc(dest.id)}" href="${routeUrl(dest.pos)}" target="_blank" rel="noopener">${ic('route')}ルート</a>`;
     }
   } catch (e) {
     el.innerHTML = `<div class="note note--bad" style="margin:12px">${ic('alert')}<div>地図を読み込めませんでした（${esc(e.message)}）</div></div>`;
   }
+}
+
+// The next destination shown on the map — identical to the home card's target.
+function nextDest(r) {
+  const p = r?.primary;
+  if (!p) return null;
+  if (p.type === 'ride') return { id: p.a.id, rideId: p.a.id, name: p.a.short, pos: coordsOf(p.a.id), wait: p.wait, open: `data-open="${p.a.id}"` };
+  const x = p.type === 'anchor' ? p.anchor : p.type === 'free' ? p.next : null;
+  if (!x?.pos) return null;
+  return {
+    id: x.id, name: x.title + (x.kind === 'meal' && x.place ? '・' + x.place : ''), pos: x.pos,
+    open: x.kind === 'show' ? `data-open-show="${x.show}"` : `data-anchor-edit="${x.id}"`,
+    at: p.type === 'free' && r.leaveBy ? `${clock(r.leaveBy)}に移動` : clock(x.start),
+  };
 }
 
 function renderAll() { renderClock(); renderStatus(); renderView(); if (R.draft && !$('#sheet').hidden) openPlanBuilder(); }
@@ -1183,6 +1305,7 @@ document.addEventListener('click', async (e) => {
   if (!t) return;
   const d = t.dataset;
   if (d.tab) return go(d.tab);
+  if (d.park) return switchPark(d.park);
   if (d.tabGo) { closeSheet(); return go(d.tabGo); }
   if (d.open) return openAttraction(d.open);
   if (d.openFood) return openFood(d.openFood);
@@ -1267,6 +1390,12 @@ document.addEventListener('click', async (e) => {
     case 'plan-edit': R.draft = null; return openPlanBuilder();
     case 'plan-edit-shows': R.draft = null; return openPlanBuilder('shows');
     case 'plan-apply': return applyPlanDraft();
+    case 'day-edit': return openDaySettings();
+    case 'day-save': return saveDaySettings();
+    case 'day-reset': {
+      S.cfg = { ...S.cfg, entry: null, exit: null }; save(); closeSheet(); renderAll();
+      return toast(`開園〜閉園（${clock(hours().open)}〜${clock(hours().close)}）に戻しました`, 'ok');
+    }
     case 'replan': {
       const before = R.lastPlanIds;
       await fetchLive({ manual: false });
@@ -1281,7 +1410,7 @@ document.addEventListener('click', async (e) => {
     case 'sim-off': S.sim = null; save(); closeSheet(); renderAll(); return toast('現在時刻に戻しました');
     case 'reset':
       if (!confirm('済みの記録とプランの条件をすべてリセットしますか？')) return;
-      S = structuredClone(defaults); save(); closeSheet(); renderAll(); return toast('リセットしました');
+      S = { ...structuredClone(defaults), cfg: S.cfg }; save(); closeSheet(); renderAll(); return toast('リセットしました（日程はそのまま）');
     case 'map-me':
       if (!S.gps) return startGPS(true);
       return mapMod?.locate(R.gpsPos);
@@ -1311,6 +1440,8 @@ function measure() {
   document.documentElement.style.setProperty('--hdr', $('.topbar').offsetHeight + 'px');
   document.documentElement.style.setProperty('--tabh', $('.tabbar').offsetHeight + 'px');
 }
+document.title = `${dateLabel(tripDate(), true)} ${PARK.short} Day Navi`;
+renderParkSwitch();
 measure();
 addEventListener('resize', measure);
 go(S.tab || 'home');
@@ -1322,7 +1453,8 @@ fetchLive();
 setInterval(() => { if (document.visibilityState === 'visible' && shouldPoll()) fetchLive(); }, 3 * 60e3);
 setInterval(() => { renderClock(); renderStatus(); }, 15e3);
 // Re-render the current view every minute so countdowns/plans follow the clock (skip while a sheet is open).
-setInterval(() => { if ($('#sheet').hidden && S.tab !== 'map') renderView(); }, 60e3);
+// The map only redraws markers when something changed, so it follows the plan without closing popups.
+setInterval(() => { if ($('#sheet').hidden) renderView(); }, 60e3);
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     renderClock(); renderStatus(); if ($('#sheet').hidden) renderView();
@@ -1334,4 +1466,4 @@ if (S.gps && navigator.permissions?.query) {
   navigator.permissions.query({ name: 'geolocation' }).then((p) => { if (p.state === 'granted') startGPS(false); else { S.gps = false; save(); } }).catch(() => {});
 }
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
-window.__dlnavi = { S, R, ctx, recommend, simulateDay };
+window.__dlnavi = { get S() { return S; }, R, ctx, recommend, simulateDay, hours, nextDest, park: PARK_ID };
