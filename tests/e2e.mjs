@@ -56,7 +56,8 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
   await step('1. iPhone size: home renders the Next Stop card, no horizontal scroll', async () => {
     const t = await page.textContent('.next__title');
     assert.ok(t.trim().length > 0);
-    assert.ok(await page.evaluate(() => document.querySelector('.topbar').offsetHeight <= 60), 'slim header');
+    assert.ok(await page.evaluate(() => document.querySelector('.topbar').offsetHeight <= 140), 'compact artwork header');
+    assert.match(await page.evaluate(() => getComputedStyle(document.querySelector('.topbar')).backgroundImage), /land-(day|sunset|night)\.webp/, 'park skyline artwork');
     await noHScroll(page);
     await page.screenshot({ path: `${SHOTS}/01-home.png` });
     await page.screenshot({ path: `${SHOTS}/01-home-full.png`, fullPage: true });
@@ -84,8 +85,9 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
   });
   await step('Home: next action first, then a slim progress band that expands on tap', async () => {
     const order = await page.$$eval('#view-home > *', (els) => els.map((e) => e.className));
-    assert.match(order[0], /next/, 'next action on top');
-    assert.match(order[1], /pband/, 'progress right below');
+    assert.match(order[0], /qa/, 'quick actions under the header');
+    assert.match(order[1], /next/, 'next action first');
+    assert.match(order[2], /pband/, 'progress right below');
     assert.ok((await page.locator('.pband').boundingBox()).height <= 56, 'slim band');
     assert.equal(await page.locator('.pband__body').count(), 0);
     await page.click('.pband__h'); await page.waitForTimeout(150);
@@ -143,7 +145,8 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.ok(await live.count() >= 1, 'LIVE wait in the timeline');
     assert.match(await live.first().textContent(), /いま\s*\d+分/);
     const top = await page.evaluate(() => document.querySelector('.tl--plan > li[data-ride]').getBoundingClientRect().top);
-    assert.ok(top < 260, `plan timeline is visible right away (first ride at ${top}px)`);
+    // artwork header (~120px) + the テスト時刻 banner shown in these tests: still in the top half of a 667px screen
+    assert.ok(top < 300, `plan timeline is visible right away (first ride at ${top}px)`);
     const replanY = await page.evaluate(() => document.querySelector('.replan').getBoundingClientRect().top);
     const tlBottom = await page.evaluate(() => document.querySelector('.tl--plan').getBoundingClientRect().bottom);
     assert.ok(replanY > tlBottom, 're-plan panel is below the timeline');
@@ -452,7 +455,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
   await step('Map renders markers and next-destination card', async () => {
     await tab(page, 'map'); await page.waitForTimeout(1500);
     assert.ok(await page.locator('.leaflet-marker-icon').count() >= 15);
-    assert.match(await page.textContent('#mapcard'), /NEXT/);
+    assert.match(await page.textContent('#mapcard'), /次の行き先|次の予定/);
     assert.ok((await page.locator('#mapcard').boundingBox()).height <= 64, 'compact destination bar');
     await page.screenshot({ path: `${SHOTS}/04-map.png` });
   });
@@ -778,7 +781,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.click('#foodList [data-open-food="plazainn"]'); await page.waitForTimeout(250);
     await page.click('[data-food-map="plazainn"]'); await page.waitForTimeout(1500);
     assert.equal(await page.locator('.mk--food.is-target').count(), 1);
-    assert.match(await page.textContent('#mapcard'), /GO[\s\S]*プラザ・イン[\s\S]*徒歩\d+分/);
+    assert.match(await page.textContent('#mapcard'), /行き先[\s\S]*プラザ・イン[\s\S]*徒歩\d+分/);
     await page.screenshot({ path: `${SHOTS}/04-map-food.png` });
   });
   await step('ルート opens Google Maps walking directions from my GPS position', async () => {
@@ -931,6 +934,7 @@ for (const [t, expect, file] of [['07:00', /開園/, '11-preopen'], ['11:28', /�
     await page.waitForSelector('.next__title'); await page.waitForTimeout(500);
     assert.equal((await page.textContent('.parksw .is-active')).trim(), 'カリフォルニア');
     assert.equal(await page.evaluate(() => window.__dlnavi.park), 'dca');
+    assert.match(await page.evaluate(() => getComputedStyle(document.querySelector('.topbar')).backgroundImage), /dca-(day|sunset|night)\.webp/, 'California skyline artwork');
     assert.ok(seen.some((u) => u.includes('/api/live?park=dca')) && seen.some((u) => u.includes('/api/meta?park=dca')), 'requests carry park=dca');
     const home = await page.textContent('#view-home');
     assert.doesNotMatch(home, /スター・ウォーズ|レジスタンス|ファルコン/);
