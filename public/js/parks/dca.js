@@ -465,3 +465,18 @@ export const WAIT_CURVE = [
   [8, 0.35], [9, 0.55], [10, 0.75], [11, 0.9], [12, 0.97], [13, 1.0], [14, 1.0], [15, 0.95],
   [16, 0.9], [17, 0.85], [18, 0.8], [19, 0.72], [20, 0.6], [21, 0.45],
 ];
+
+// Restrooms — APPROXIMATE fallback positions (hand-placed near landmarks). At runtime the map uses
+// OpenStreetMap restroom points (/api/restrooms) when available; the UI marks these as 概略.
+export const RESTROOMS = [
+  { id: 'wc-bvs', lat: 33.8086, lon: -117.9185 },       // Buena Vista Street (entrance)
+  { id: 'wc-carthay', lat: 33.8072, lon: -117.9195 },   // Carthay Circle
+  { id: 'wc-holly', lat: 33.8084, lon: -117.9177 },     // Hollywood Land
+  { id: 'wc-avengers', lat: 33.8072, lon: -117.9163 },  // Avengers Campus
+  { id: 'wc-cars', lat: 33.8051, lon: -117.9184 },      // Cars Land (Flo's)
+  { id: 'wc-sfs', lat: 33.8061, lon: -117.9199 },       // San Fransokyo Square
+  { id: 'wc-pixar1', lat: 33.8046, lon: -117.9222 },    // Pixar Pier (Incredicoaster)
+  { id: 'wc-pixar2', lat: 33.8051, lon: -117.9209 },    // Pixar Pier (Toy Story Midway Mania!)
+  { id: 'wc-gardens', lat: 33.8061, lon: -117.9226 },   // Paradise Gardens Park
+  { id: 'wc-grizzly', lat: 33.8068, lon: -117.9209 },   // Grizzly Peak
+];

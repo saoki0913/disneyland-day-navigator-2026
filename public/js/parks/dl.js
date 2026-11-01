@@ -852,3 +852,22 @@ export const WAIT_CURVE = [
   [8, 0.3], [9, 0.5], [10, 0.7], [11, 0.85], [12, 0.95], [13, 1.0], [14, 1.0], [15, 0.97],
   [16, 0.92], [17, 0.88], [18, 0.85], [19, 0.82], [20, 0.78], [21, 0.6], [22, 0.5], [23, 0.4],
 ];
+
+// Restrooms — APPROXIMATE fallback positions (hand-placed near landmarks). At runtime the map uses
+// OpenStreetMap restroom points (/api/restrooms) when available; the UI marks these as 概略.
+export const RESTROOMS = [
+  { id: 'wc-town', lat: 33.8103, lon: -117.9186 },      // Town Square (City Hall side)
+  { id: 'wc-plaza', lat: 33.8117, lon: -117.9181 },     // end of Main Street, by Plaza Inn / First Aid
+  { id: 'wc-adv', lat: 33.8113, lon: -117.9207 },       // Adventureland (Bengal Barbecue)
+  { id: 'wc-nos', lat: 33.8111, lon: -117.9224 },       // New Orleans Square (Pirates exit)
+  { id: 'wc-bayou', lat: 33.8129, lon: -117.9235 },     // Bayou Country (Hungry Bear)
+  { id: 'wc-front', lat: 33.8126, lon: -117.9203 },     // Frontierland (Rancho del Zócalo)
+  { id: 'wc-sw1', lat: 33.8144, lon: -117.9238 },       // Galaxy's Edge (Docking Bay 7)
+  { id: 'wc-sw2', lat: 33.8152, lon: -117.9222 },       // Galaxy's Edge (Smugglers Run side)
+  { id: 'wc-fan1', lat: 33.8139, lon: -117.9192 },      // Fantasyland (Village Haus)
+  { id: 'wc-fan2', lat: 33.8128, lon: -117.9185 },      // Fantasy Faire / Matterhorn
+  { id: 'wc-sw', lat: 33.8146, lon: -117.9176 },        // it's a small world
+  { id: 'wc-toon', lat: 33.8158, lon: -117.9185 },      // Mickey's Toontown
+  { id: 'wc-tom1', lat: 33.8116, lon: -117.9168 },      // Tomorrowland (Space Mountain)
+  { id: 'wc-tom2', lat: 33.8121, lon: -117.9173 },      // Tomorrowland (Galactic Grill)
+];

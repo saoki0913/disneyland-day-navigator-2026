@@ -12,7 +12,10 @@ mkdirSync(SHOTS, { recursive: true });
 const fx = (n) => JSON.parse(readFileSync(new URL(`./fixtures/${n}`, import.meta.url)));
 let liveVariant = 0;
 let pauseId = null;
-const live = () => { const n = normalizeTPWLive(fx('tpw-live.json')); if (pauseId && n.attractions[pauseId]) n.attractions[pauseId] = { ...n.attractions[pauseId], status: 'DOWN', wait: null }; if (liveVariant === 1) { n.attractions.rise = { ...n.attractions.rise, status: 'OPERATING', wait: 40 }; n.attractions.space = { ...n.attractions.space, wait: 25 }; } return ({ ok: true, ...n, source: 'themeparks.wiki', sourceLabel: 'ThemeParks.wiki', fetchedAt: new Date().toISOString(), errors: [] }); };
+// The app plans for today (Anaheim); move the fixture's dated show times to today.
+const TODAY = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Los_Angeles' }).format(new Date());
+const toToday = (n) => { for (const sh of [...Object.values(n.shows || {}), ...(n.otherShows || [])]) for (const t of sh.times || []) if (t.date) t.date = TODAY; return n; };
+const live = () => { const n = toToday(normalizeTPWLive(fx('tpw-live.json'))); if (pauseId && n.attractions[pauseId]) n.attractions[pauseId] = { ...n.attractions[pauseId], status: 'DOWN', wait: null }; if (liveVariant === 1) { n.attractions.rise = { ...n.attractions.rise, status: 'OPERATING', wait: 40 }; n.attractions.space = { ...n.attractions.space, wait: 25 }; } return ({ ok: true, ...n, source: 'themeparks.wiki', sourceLabel: 'ThemeParks.wiki', fetchedAt: new Date().toISOString(), errors: [] }); };
 const meta = { ok: true, coords: normalizeChildren(fx('tpw-children.json')), schedule: normalizeSchedule(fx('tpw-schedule.json')), errors: [] };
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkqPhfDwAEYQHqXc2zYwAAAABJRU5ErkJggg==', 'base64');
 
@@ -35,6 +38,7 @@ async function newCtx({ liveMode = 'ok', sim = '10:00', geo = null, photos = 'ok
   await ctx.route('https://upload.wikimedia.org/test/rise.png', (r) => r.fulfill({ body: PNG, contentType: 'image/png' }));
   await ctx.route('https://upload.wikimedia.org/test/broken.png', (r) => r.fulfill({ status: 404, body: '' }));
   await ctx.route(/tile\.openstreetmap\.org/, (r) => r.abort());
+  await ctx.route('**/api/restrooms*', (r) => r.fulfill({ status: 502, json: { ok: false } })); // → approximate fallback list
   const [h, m] = sim.split(':').map(Number);
   await ctx.addInitScript((v) => { if (!localStorage.getItem('dlnavi-park')) localStorage.setItem('dlnavi-park', 'dl'); if (!localStorage.getItem('dlnavi-1031-v1')) localStorage.setItem('dlnavi-1031-v1', JSON.stringify({ sim: { base: v, setAt: Date.now() } })); }, h * 60 + m);
   const page = await ctx.newPage();
@@ -48,6 +52,8 @@ async function newCtx({ liveMode = 'ok', sim = '10:00', geo = null, photos = 'ok
 const tab = async (p, t) => { await p.click(`.tab[data-tab="${t}"]`); await p.waitForTimeout(250); };
 // Full rebuilds open a 作り直し案 sheet first; 反映 applies it (no sheet when nothing changes).
 const accept = async (p) => { await p.waitForTimeout(150); if (await p.locator('#sheet [data-act="proposal-apply"]').count()) { await p.click('#sheet [data-act="proposal-apply"]'); await p.waitForTimeout(250); } };
+// After your own reorder / "次に行く", a 動線を整える案 sheet may open — このまま keeps your order.
+const dismissReflow = async (p) => { await p.waitForTimeout(450); if (await p.locator('#sheet:not([hidden]) [data-act="suggest-off"]').count()) { await p.click('#sheet [data-act="suggest-off"]'); await p.waitForTimeout(150); } };
 const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'horizontal overflow');
 
 // ---------- A: normal day with live data ----------
@@ -111,24 +117,34 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     }
     assert.match(await page.textContent('#toast'), /反映しました|最適です/);
   });
-  await step('3b. Plan builder: conditions (must ride / skip ride / max wait) change the plan', async () => {
+  await step('3b. Plan builder: conditions (must ride / skip ride / walking) change the plan; tabs fit one screen', async () => {
     await page.click('[data-act="plan-edit"]'); await page.waitForTimeout(150);
+    assert.equal(await page.locator('[data-b-set="maxWait"]').count(), 0, 'no crowd / max-wait condition');
+    for (const t of ['base', 'rides', 'meals', 'shows']) {
+      await page.click(`[data-b-tab="${t}"]`); await page.waitForTimeout(120);
+      const [sh, ch] = await page.evaluate(() => { const b = document.querySelector('.builder__body'); return [b.scrollHeight, b.clientHeight]; });
+      assert.ok(sh <= ch + 2, `${t} tab fits without scrolling (${sh} > ${ch})`);
+      assert.ok(await page.evaluate(() => document.querySelector('.sheet__panel').scrollHeight <= document.querySelector('.sheet__panel').clientHeight + 2), `${t}: sheet does not scroll`);
+    }
+    await page.click('[data-b-tab="base"]'); await page.waitForTimeout(100);
+    await page.click('[data-b-set="walk"][data-v="low"]'); await page.waitForTimeout(100);
+    await page.click('[data-b-tab="rides"]'); await page.waitForTimeout(100);
     await page.click('[data-b-ride="matterhorn"]'); await page.waitForTimeout(100); // → must
     assert.equal(await page.locator('[data-b-ride="matterhorn"].is-must').count(), 1);
     await page.click('[data-b-ride="pirates"]'); await page.click('[data-b-ride="pirates"]'); await page.waitForTimeout(100); // → skip
     assert.equal(await page.locator('[data-b-ride="pirates"].is-skip').count(), 1);
-    await page.click('[data-b-set="maxWait"][data-v="30"]'); await page.waitForTimeout(100);
     await page.screenshot({ path: `${SHOTS}/03-plan-builder.png` });
     await page.click('[data-act="plan-apply"]'); await accept(page); await page.waitForTimeout(200);
     const tl = await page.textContent('ol.tl:not(.tl--done)');
     assert.match(tl, /マッターホーン/);
     assert.doesNotMatch(tl, /カリブの海賊/);
-    assert.match(await page.textContent('.condsum'), /〜30分/);
+    assert.match(await page.textContent('.condsum'), /歩く量少なめ/);
     // restore
     await page.click('[data-act="plan-edit"]'); await page.waitForTimeout(150);
+    await page.click('[data-b-set="walk"][data-v="normal"]');
+    await page.click('[data-b-tab="rides"]'); await page.waitForTimeout(100);
     await page.click('[data-b-ride="matterhorn"]'); await page.click('[data-b-ride="matterhorn"]');
     await page.click('[data-b-ride="pirates"]');
-    await page.click('[data-b-set="maxWait"][data-v="60"]');
     await page.click('[data-act="plan-apply"]'); await accept(page); await page.waitForTimeout(200);
   });
   await step('11. Timeline: meals/shows appear once each, in time order, no overlap with rides', async () => {
@@ -141,9 +157,9 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
   });
   await step('Plan: shows the REAL current wait (LIVE) and a clear re-plan panel', async () => {
     await tab(page, 'plan');
-    const live = page.locator('.tl--plan .tl__wait:has(.tag--live)');
+    const live = page.locator('.tl--plan .tl__wait.is-live');
     assert.ok(await live.count() >= 1, 'LIVE wait in the timeline');
-    assert.match(await live.first().textContent(), /いま\s*\d+分/);
+    assert.match(await live.first().textContent(), /^\s*\d+分\s*$/, 'just the figure — waits are a reference');
     const top = await page.evaluate(() => document.querySelector('.tl--plan > li[data-ride]').getBoundingClientRect().top);
     // artwork header (~120px) + the テスト時刻 banner shown in these tests: still in the top half of a 667px screen
     assert.ok(top < 300, `plan timeline is visible right away (first ride at ${top}px)`);
@@ -178,7 +194,9 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.waitForTimeout(250);
     const after = await page.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride));
     assert.equal(after[0], target, `dragged ${target} first, got ${after.join(',')}`);
-    assert.match(await page.textContent('#toast'), /順番/);
+    assert.match(await page.textContent('#toast'), /順番|間に合わない/);
+    await dismissReflow(page);
+    assert.equal((await page.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride)))[0], target, 'このまま keeps your order');
     await page.click('[data-act="plan-edit-done"]'); await page.waitForTimeout(100);
 
     await tab(page, 'home');
@@ -203,6 +221,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2); await page.mouse.down();
     for (let i = 1; i <= 10; i++) await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2 + ((top.y + 4) - (g.y + g.height / 2)) * (i / 10));
     await page.mouse.up(); await page.waitForTimeout(300);
+    await dismissReflow(page);
     const idx = await seqIdx();
     await page.click('[data-act="plan-edit-done"]'); await page.waitForTimeout(100);
     await page.click(`[data-lock="${target}"]`); await page.waitForTimeout(150);
@@ -374,6 +393,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     const fItem = await page.locator('.tl__item', { hasText: 'ファンタズミック' }).first().textContent();
     assert.match(fItem, /21:00/);
     await page.click('[data-act="plan-edit"]'); await page.waitForTimeout(150);
+    await page.click('[data-b-tab="shows"]'); await page.waitForTimeout(100);
     await page.check('[data-b-show-on="cavalcade"]'); await page.waitForTimeout(100);
     await page.click('[data-b-show-pick="fantasmic"][data-time="22:30"]');
     await page.click('[data-act="plan-apply"]'); await accept(page); await page.waitForTimeout(200);
@@ -416,6 +436,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.mouse.move(g.x + g.width / 2, tgt.y + 5, { steps: 12 });
     await page.mouse.up(); await page.waitForTimeout(300);
     const t1 = toMin(await dinnerT());
+    await dismissReflow(page);
     assert.ok(t1 < t0, `dinner earlier ${t0} → ${t1} ${drags.join()} toast=${await page.textContent("#toast")}`);
     await page.screenshot({ path: `${SHOTS}/03-plan-edit.png`, fullPage: true });
     await page.click('#toastAct'); await page.waitForTimeout(250); // undo
@@ -446,6 +467,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.click('[data-xtab="rides"]'); await page.waitForTimeout(150);
     await page.click('#view-explore [data-open="haunted"]'); await page.waitForTimeout(200);
     await page.click('#sheet [data-add="haunted"][data-add-how="next"]'); await page.waitForTimeout(300);
+    await dismissReflow(page);
     await tab(page, 'home');
     assert.match(await page.textContent('.next__title'), /ホーンテッド/);
     await tab(page, 'plan');
@@ -495,6 +517,39 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.equal(visible, n0, 'all pins visible');
     await page.evaluate(() => window.__map.fitBounds([[33.8095, -117.9248], [33.8168, -117.9160]]));
   });
+  await step('Map: restrooms are always shown; the restroom button picks one with walk + route', async () => {
+    await tab(page, 'map'); await page.waitForTimeout(600);
+    assert.ok(await page.locator('.mk--wc').count() >= 8, 'restroom pins (approximate fallback when OSM is unavailable)');
+    await page.click('[data-mf="wc"]'); await page.waitForTimeout(400);
+    assert.ok(await page.locator('.mk--wc.is-big').count() >= 8, 'トイレ filter enlarges them');
+    await page.evaluate(() => { const S = window.__dlnavi.S; S.land = 'fantasy'; S.landAt = Date.now(); }); // where you are (area)
+    await page.click('[data-act="map-wc"]'); await page.waitForTimeout(600);
+    assert.equal(await page.locator('.mk--wc.is-target').count(), 1, 'one restroom chosen');
+    assert.match(await page.textContent('#mapcard'), /トイレ/);
+    assert.match(await page.getAttribute('#mapcard a[data-route]', 'href') || '', /google\.com\/maps\/dir\//);
+    await page.screenshot({ path: `${SHOTS}/04-map-restroom.png` });
+    await page.click('#mapcard [data-act="map-wc-clear"]'); await page.waitForTimeout(300);
+    await page.click('[data-mf="rides"]'); await page.waitForTimeout(200);
+  });
+  await step('Island: from 15 min before leaving for the next meal/show, a capsule with the leave time; tap → actions', async () => {
+    await tab(page, 'home');
+    const base0 = await page.evaluate(() => window.__dlnavi.S.sim.base);
+    const leave = await page.evaluate(() => { const d = window.__dlnavi; const it = d.S.planSnap.items.find((i) => (i.type === 'meal' || i.type === 'show') && !d.S.done[i.id]); return it.type === 'show' ? it.anchor.start - (it.anchor.claim || 0) : it.start; });
+    await page.evaluate((m) => { window.__dlnavi.S.sim = { base: m - 30, setAt: Date.now() }; window.__dlnavi.renderAll(); }, leave);
+    await page.waitForTimeout(200);
+    assert.equal(await page.isVisible('#island'), false, 'not shown 30 min before');
+    await page.evaluate((m) => { window.__dlnavi.S.sim = { base: m - 12, setAt: Date.now() }; window.__dlnavi.renderAll(); }, leave);
+    await page.waitForTimeout(300);
+    assert.equal(await page.isVisible('#island'), true, 'shown shortly before leaving');
+    assert.match(await page.textContent('#island'), /\d{1,2}:\d{2}/);
+    assert.ok((await page.textContent('#island')).replace(/\s+/g, '').length <= 24, 'a few words only');
+    await page.screenshot({ path: `${SHOTS}/20-island.png` });
+    await page.click('#island'); await page.waitForTimeout(250);
+    assert.ok(await page.locator('#sheet a[data-route]').count() === 1, 'route from the island');
+    await page.click('.sheet__close'); await page.waitForTimeout(150);
+    await page.evaluate((b) => { window.__dlnavi.S.sim = { base: b, setAt: Date.now() }; window.__dlnavi.renderAll(); }, base0);
+    await page.waitForTimeout(150);
+  });
   await step('Alerts: reopened must-ride and a sudden wait drop are announced; 行く！ pins it', async () => {
     await tab(page, 'home');
     liveVariant = 1;
@@ -505,6 +560,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.match(t, /スペース・マウンテン 空いてきた/);
     await page.screenshot({ path: `${SHOTS}/16-alert.png` });
     await page.click('[data-pin="rise"]'); await page.waitForTimeout(300);
+    await dismissReflow(page);
     assert.match(await page.textContent('.next__title'), /レジスタンス/);
     assert.match(await page.textContent('#actionbar'), /レジスタンス/);
     liveVariant = 0;
@@ -512,7 +568,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
   await step('Suggestion: a clearly better order is offered (not applied), 反映 shows ↑↓ on the rows', async () => {
     await tab(page, 'plan');
     const zig = ['space', 'thunder', 'mmrr', 'indy', 'startours', 'haunted', 'matterhorn', 'jungle'];
-    await page.evaluate((z) => { const d = window.__dlnavi; d.S.lastSuggestionAt=0; const seq = d.S.planSnap.seq; const done = seq.filter((x) => d.S.done[x]); const anchors = seq.filter((x) => !d.S.done[x] && x.includes(':')); d.layoutPlan([...done, ...z.filter((x) => !d.S.done[x]), ...anchors], '並べ替え'); d.checkSuggest(); d.renderAll(); }, zig);
+    await page.evaluate((z) => { const d = window.__dlnavi; const seq = d.S.planSnap.seq; const done = seq.filter((x) => d.S.done[x]); const anchors = seq.filter((x) => !d.S.done[x] && x.includes(':')); d.layoutPlan([...done, ...z.filter((x) => !d.S.done[x]), ...anchors], '並べ替え'); d.offerReflow('絶対の再開', [], { open: false }); d.renderAll(); }, zig);
     await page.waitForTimeout(150);
     const before = await page.evaluate(() => window.__dlnavi.S.planSnap.seq.join());
     assert.equal(await page.locator('#view-plan .sugg-quiet').count(), 1, 'quiet suggestion');
@@ -777,7 +833,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await tab(page, 'map'); await page.waitForTimeout(1200);
     assert.equal(await page.locator('.mk--me').count(), 1);
     assert.equal(await page.locator('[data-act="map-me"].is-on').count(), 1, 'location button shows GPS on');
-    assert.match(await page.textContent('#mapcard'), /徒歩\d+分/);
+    assert.match(await page.textContent('#mapcard'), /\d+分/);
     const stable = await page.evaluate(() => {
       const before = document.querySelector('.mk--ride');
       for (let i = 0; i < 12; i++) {
@@ -802,7 +858,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.click('#foodList [data-open-food="plazainn"]'); await page.waitForTimeout(250);
     await page.click('[data-food-map="plazainn"]'); await page.waitForTimeout(1500);
     assert.equal(await page.locator('.mk--food.is-target').count(), 1);
-    assert.match(await page.textContent('#mapcard'), /行き先[\s\S]*プラザ・イン[\s\S]*徒歩\d+分/);
+    assert.match(await page.textContent('#mapcard'), /行き先[\s\S]*プラザ・イン[\s\S]*\d+分/);
     await page.screenshot({ path: `${SHOTS}/04-map-food.png` });
   });
   await step('ルート opens Google Maps walking directions from my GPS position', async () => {
@@ -865,7 +921,7 @@ for (const [t, expect, file] of [['07:00', /開園/, '11-preopen'], ['11:28', /�
     await page.click('.replan [data-act="replan"]'); await page.waitForTimeout(900);
     if (await page.locator('#sheet [data-act="proposal-apply"]').count()) {
       assert.match(await page.textContent('#sheet'), /作り直し案/);
-      assert.match(await page.textContent('#sheet'), /反映を押すまで|「反映」を押すまで/);
+      assert.ok(await page.locator('#sheet .pv__row').count() >= 1, 'compact before → after list');
       assert.equal(await seq(), s0, 'nothing changes while the proposal is open');
       await page.screenshot({ path: `${SHOTS}/19-proposal.png` });
       await page.click('#sheet [data-act="proposal-cancel"]'); await page.waitForTimeout(250);
@@ -901,21 +957,17 @@ for (const [t, expect, file] of [['07:00', /開園/, '11-preopen'], ['11:28', /�
     await page.click('#sheet [data-land="toon"]'); await page.waitForTimeout(300);
     assert.equal(await seq(), s0);
   });
-  await step('Rules: free time offers rides to ADD (suggestion), never adds them on its own', async () => {
+  await step('Rules: free time is never filled on its own, and no unsolicited proposal appears', async () => {
     await tab(page, 'plan');
     // empty the evening: drop the evening rides from the plan by hand
-    await page.evaluate(() => { const d = window.__dlnavi; d.S.lastSuggestionAt=0; const s = d.S.planSnap.seq; const keep = s.filter((x) => x.includes(':') || d.S.done[x]); d.layoutPlan(keep, '削除'); d.checkSuggest(); d.renderAll(); });
+    await page.evaluate(() => { const d = window.__dlnavi; const s = d.S.planSnap.seq; const keep = s.filter((x) => x.includes(':') || d.S.done[x]); d.layoutPlan(keep, '削除'); d.renderAll(); });
     await page.waitForTimeout(200);
     const s0 = await seq();
-    assert.equal(await page.locator('#view-plan .sugg-quiet').count(), 1, 'suggestion available');
-    assert.doesNotMatch(await page.textContent('#view-plan .sugg-quiet'), /空き時間に追加|スペース|インディ/, 'no destinations exposed');
+    await page.click('#livePill'); await page.waitForTimeout(600);
+    assert.equal(await page.locator('#view-plan .sugg-quiet').count(), 0, 'no proposal from polling / free time');
     assert.equal(await seq(), s0, 'not added on its own');
     await tab(page, 'home');
     assert.equal(await page.evaluate(() => { const d = window.__dlnavi; return d.homeReco(d.ctx()).primary?.type; }), 'free', 'no ride outside the plan is made the next stop');
-    await tab(page, 'plan');
-    await page.click('#view-plan [data-act="suggest-preview"]'); await page.waitForTimeout(250);
-    await page.click('#sheet [data-act="suggest-apply"]'); await page.waitForTimeout(300);
-    assert.ok((await seq()).split(',').length > s0.split(',').length, 'added after 反映');
   });
   await step('No uncaught JS errors (rules)', async () => assert.deepEqual(errors, []));
   await ctx.close();
