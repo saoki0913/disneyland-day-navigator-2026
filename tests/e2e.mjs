@@ -159,6 +159,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
   });
   await step('Plan: drag & drop changes the ride order (and the home "next")', async () => {
     await tab(page, 'plan');
+    await page.click('[data-act="plan-edit-order"]'); await page.waitForTimeout(100);
     const ids = await page.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride));
     assert.ok(ids.length >= 3);
     const target = ids.find((id, i) => i > 0 && id !== 'rise'); // rise is DOWN in the fixture (can't go first now)
@@ -176,6 +177,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     const after = await page.$$eval('.tl--plan > li[data-ride]', (els) => els.map((e) => e.dataset.ride));
     assert.equal(after[0], target, `dragged ${target} first, got ${after.join(',')}`);
     assert.match(await page.textContent('#toast'), /順番/);
+    await page.click('[data-act="plan-edit-done"]'); await page.waitForTimeout(100);
 
     await tab(page, 'home');
     assert.equal(await page.getAttribute('#actionbar [data-done]', 'data-done'), target, 'home follows the custom order');
@@ -192,6 +194,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     const target = ids[ids.length - 1];
     const seqIdx = () => page.evaluate((t) => { const s = window.__dlnavi.S; return s.planSnap.seq.filter((x) => !s.done[x]).indexOf(t); }, target);
     // move it to the top, lock it there, then 更新
+    await page.click('[data-act="plan-edit-order"]'); await page.waitForTimeout(100);
     await page.evaluate((t) => { const r = document.querySelector(`.tl--plan > li[data-ride="${t}"]`).getBoundingClientRect(); scrollBy(0, r.top - 400); }, target);
     const g = await page.locator(`[data-grip="${target}"]`).boundingBox();
     const top = await page.locator('.tl--plan > li[data-drag]').first().boundingBox();
@@ -199,6 +202,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     for (let i = 1; i <= 10; i++) await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2 + ((top.y + 4) - (g.y + g.height / 2)) * (i / 10));
     await page.mouse.up(); await page.waitForTimeout(300);
     const idx = await seqIdx();
+    await page.click('[data-act="plan-edit-done"]'); await page.waitForTimeout(100);
     await page.click(`[data-lock="${target}"]`); await page.waitForTimeout(150);
     assert.match(await page.textContent('#toast'), /固定しました/);
     assert.equal(await page.locator(`[data-lock="${target}"].is-on`).count(), 1);
