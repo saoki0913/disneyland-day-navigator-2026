@@ -2531,8 +2531,6 @@ if (!S.share && !S.shareAdopted) {
   S.shareAdopted = true; save();
 }
 document.title = `${dateLabel()} ${PARK.short} Day Navi`;
-document.documentElement.dataset.park = PARK_ID;
-document.querySelector('meta[name=theme-color]')?.setAttribute('content', PARK_ID === 'dca' ? '#123329' : '#0f1a45');
 renderParkSwitch();
 measure();
 addEventListener('resize', measure);
@@ -2574,7 +2572,7 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
 // (ETag of the app code) when the app comes back to the foreground and every 10 minutes.
 // If there is one: reload right away when it is safe (coming back after a while, nothing open),
 // otherwise show a banner with a one-tap 更新.
-const UPDATE_FILES = ['/css/theme.css', '/js/app.js', '/js/engine.js', '/js/map.js', '/js/data.js', '/js/parks/dl.js', '/js/parks/dca.js', '/css/app.css'];
+const UPDATE_FILES = ['/js/app.js', '/js/engine.js', '/js/map.js', '/js/data.js', '/js/parks/dl.js', '/js/parks/dca.js', '/css/app.css'];
 let codeTag = null, hiddenAt = 0;
 async function currentCodeTag() {
   const tags = await Promise.all(UPDATE_FILES.map((u) => fetch(u, { method: 'HEAD', cache: 'no-store' }).then((r) => (r.ok ? r.headers.get('etag') || r.headers.get('last-modified') || '' : '')).catch(() => '')));

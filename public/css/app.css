@@ -659,3 +659,31 @@ body.is-dragging { -webkit-user-select: none; user-select: none; cursor: grabbin
 .chipx { display: inline-flex; align-items: center; gap: 3px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); font-size: 12.5px; max-width: 100%; overflow-wrap: anywhere; }
 .chipx.is-add { border-color: var(--good); color: var(--good); font-weight: 700; }
 .chipx.is-rm { border-color: var(--bad); color: var(--bad); text-decoration: line-through; }
+
+/* ---------- no clipped text (iPhone SE 320/375 … Pro Max 430) ---------- */
+.actionbar__main { gap: 8px; padding: 6px 12px; text-align: left; }
+.actionbar__main .ab__n { flex: 1 1 auto; min-width: 0; white-space: normal; overflow: visible; text-overflow: clip; font-size: 14.5px; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.actionbar__main .ab__v { flex: none; padding: 5px 10px; border-radius: 999px; background: var(--mustard); color: var(--navy); font-size: 14px; }
+.dayrow { white-space: normal; overflow: visible; }
+.dayrow__v { overflow: visible; text-overflow: clip; line-height: 1.35; }
+.mapdest { height: auto; min-height: 56px; padding: 6px 6px 6px 12px; }
+.mapdest__n, .mapdest__m { white-space: normal; overflow: visible; text-overflow: clip; }
+.parksw { flex: none; }
+.pill { min-width: 0; flex: 0 1 auto; overflow: hidden; }
+@media (max-width: 400px) {
+  .topbar { gap: 6px; padding-left: 10px; padding-right: 6px; }
+  .topbar__clock { font-size: 19px; }
+  .parksw button { padding: 0 8px; font-size: 11.5px; }
+  .pill { padding: 0 8px; gap: 4px; font-size: 11px; height: 28px; }
+  .iconbtn { width: 30px; }
+}
+@media (max-width: 360px) {
+  .topbar__clock { font-size: 17px; }
+  .parksw button { padding: 0 6px; font-size: 11px; }
+}
+.formrow { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.formrow input[type=text], .formrow input[type=time], .formrow input[type=number] { flex: 1 1 auto; min-width: 0; width: auto; }
+.formrow .btn { flex: none; }
+@media (max-width: 380px) {
+  .pill #livePillText { display: none; }
+}
