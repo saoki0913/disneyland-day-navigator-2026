@@ -241,7 +241,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.deepEqual(ids1, rest0, '乗った keeps the order of the rest');
     const t0 = await page.textContent('.tl__item--now .tl__time');
     const t1 = await page.textContent('.tl--plan > li[data-ride]:not(.tl__item--paused) .tl__time');
-    const toMin = (x) => { const [h, m] = x.split(':').map(Number); return h * 60 + m; };
+    const toMin = (x) => { const m = String(x).match(/(\d{1,2}):(\d{2})/); return m ? Number(m[1]) * 60 + Number(m[2]) : NaN; }; // ignore brief ↑↓ move markers
     assert.ok(Math.abs(toMin(t0) - Math.floor(Object.values(now)[0])) <= 1, 'plan starts at the check-in time');
     assert.ok(Number.isFinite(toMin(t1)) && toMin(t1) >= toMin(t0), 'next operating ride is after check-in');
     assert.notEqual(await page.getAttribute('.tl--plan > li[data-ride]', 'data-ride'), first);
