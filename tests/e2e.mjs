@@ -384,6 +384,16 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.click(`#sheet [data-add="${victim}"]`); await page.waitForTimeout(300);
     assert.ok((await rides()).includes(victim), 'added back');
     assert.match(await page.textContent('#toast'), /追加しました/);
+    await page.click('[data-act="plan-edit-order"]'); await page.waitForTimeout(100);
+    // iPhone-friendly ↑↓ controls must reorder the saved sequence and remain reversible.
+    const editable = () => page.$eval('.tl--plan > li[data-drag]', (els) => els.map((e) => e.dataset.drag));
+    const original = await editable();
+    assert.ok(original.length >= 3, 'enough stops to reorder');
+    const moving = original[1];
+    await page.click(`[data-shift="${moving}"][data-step="1"]`);
+    assert.deepEqual(await editable(), [original[0], original[2], original[1], ...original.slice(3)], 'down arrow swaps adjacent stops');
+    await page.click(`[data-shift="${moving}"][data-step="-1"]`);
+    assert.deepEqual(await editable(), original, 'up arrow restores the exact sequence');
     // drag dinner up above the ride before it → dinner gets earlier
     const dinnerT = async () => page.textContent('.tl--plan > li[data-drag="meal:dinner"] .tl__time');
     const toMin = (t) => { const [h, m] = t.replace(/[^\d:]/g, '').split(':').map(Number); return h * 60 + m; };
@@ -404,6 +414,8 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.screenshot({ path: `${SHOTS}/03-plan-edit.png`, fullPage: true });
     await page.click('#toastAct'); await page.waitForTimeout(250); // undo
     assert.equal(toMin(await dinnerT()), t0, 'undo restores dinner time');
+    await page.click('[data-act="plan-edit-done"]');
+    assert.equal(await page.locator('[data-shift]').count(), 0, 'normal mode stays uncluttered');
   });
   await step('All attractions are listed (e.g. くまのプーさん) and can be added to the plan', async () => {
     await tab(page, 'explore');
