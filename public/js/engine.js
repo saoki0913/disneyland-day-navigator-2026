@@ -1,5 +1,5 @@
 // Pure planning / recommendation engine. No DOM, no fetch — unit-testable in Node.
-import { ATTRACTIONS, attractionById, PLANS, PRIORITY, WAIT_CURVE, SHOWS, showById, restaurantById, DEFAULT_MUST } from './data.js';
+import { ATTRACTIONS, attractionById, PLANS, PRIORITY, WAIT_CURVE, SHOWS, showById, restaurantById, DEFAULT_MUST, LANDS } from './data.js';
 export { DEFAULT_MUST };
 // A second visit is an independent itinerary stop (e.g. 'space@2'), not a duplicate DOM key.
 export const baseRideId = (id) => String(id || '').replace(/@\d+$/, '');
@@ -26,6 +26,13 @@ export function walkMin(a, b) {
   const d = distanceM(a, b);
   if (d == null) return 8; // unknown position: assume a typical cross-land walk
   return Math.max(2, Math.round((d * DETOUR) / PACE));
+}
+// The area (land) a point belongs to: nearest land centre. Used to keep the route flowing area by area.
+export function landOfPos(p) {
+  if (!p || p.lat == null) return null;
+  let best = null, bd = Infinity;
+  for (const l of LANDS) { const d = distanceM(p, l.pos); if (d < bd) { bd = d; best = l.id; } }
+  return best;
 }
 
 // ---------- time ----------
@@ -183,11 +190,11 @@ const WALK_W = { low: 1.8, normal: 1, any: 0.5 };
 export function effectivePlan(ctx) {
   const base = PLANS[ctx.planId] || PLANS.balance;
   const c = ctx.cond || {};
+  // Posted waits are only a reference (they are often off): they decide little; walking and flow decide.
   return {
     ...base,
-    maxWait: c.maxWait ?? base.maxWait,
     walkWeight: base.walkWeight * (WALK_W[c.walk] ?? 1),
-    waitWeight: base.waitWeight * (c.maxWait != null && c.maxWait <= 30 ? 1.5 : 1),
+    waitWeight: base.waitWeight * 0.4,
   };
 }
 
@@ -588,25 +595,34 @@ function stripDown(live, ctx) {
 export function planMinutes(ctx, seq) {
   return planFromOrder(ctx, seq).items.reduce((t, it) => t + (it.walk || 0) + (it.type === 'ride' && !it.over && !it.paused ? it.wait : 0), 0);
 }
+// Flow-first cost (minutes you'd rather not spend):
+//  * walking dominates (weighted by the walk condition), the first leg from where you are counts double;
+//  * waits are only a light reference (posted waits are often wrong) — they shape times, not the order;
+//  * leaving an area and coming back later is penalised, so the day goes round area by area;
+//  * meals moved / shows reached late / rides past closing as before.
+export const FLOW = { wait: 0.25, landChange: 3, revisit: 12, first: 1 };
 export function planCost(ctx, seq) {
   const r = planFromOrder(ctx, seq);
-  const plan = effectivePlan(ctx);
   const walkCost = 1.8 * (WALK_W[ctx.cond?.walk] ?? 1);
   const orig = Object.fromEntries((ctx.anchors || []).map((a) => [a.id, a]));
   let cost = 0;
-  // The first leg starts at the current GPS point; don't discount it.
-  const first = r.items.find((i) => ['ride','meal','show'].includes(i.type) && !i.paused);
-  if (ctx.pos && first) cost += (first.walk || 0) * 1.75;
-  let lastLand = null, priorLand = null;
+  // The first leg starts where you are now: going far away first is what feels most wrong.
+  const first = r.items.find((i) => ['ride', 'meal', 'show'].includes(i.type) && !i.paused);
+  if (ctx.pos && first) cost += (first.walk || 0) * walkCost * FLOW.first;
+  // area flow: count area changes and returns to an area already left (rides, meals and shows)
+  const left = new Set();
+  let land = ctx.pos ? landOfPos(ctx.pos) : null;
+  const visit = (l) => {
+    if (!l || l === land) return;
+    if (land) { cost += FLOW.landChange; left.add(land); }
+    if (left.has(l)) cost += FLOW.revisit;
+    land = l;
+  };
   for (const it of r.items) {
     if (it.type === 'ride') {
       if (it.paused) continue;
-      const land = it.a?.land || null;
-      if (land && priorLand === land && land !== lastLand) cost += 5; // avoid zig-zagging back
-      if (land && lastLand && land !== lastLand) priorLand = lastLand;
-      if (land) lastLand = land;
-      cost += it.walk * walkCost + it.wait;
-      if (!it.must && it.wait > plan.maxWait) cost += (it.wait - plan.maxWait);
+      visit(it.a?.land || null);
+      cost += it.walk * walkCost + it.wait * FLOW.wait;
       if (it.over) cost += it.must ? 5000 : 400;
       else if (it.must) {
         // keep a safety margin: a must-ride planned into the last 90 minutes may slip out if waits rise
@@ -614,11 +630,13 @@ export function planCost(ctx, seq) {
         if (tail > 0) cost += tail * 2;
       }
     } else if (it.type === 'meal') {
+      visit(landOfPos(it.anchor?.pos));
       // moving a meal costs a little per minute; beyond the allowed window (mealFlex) it costs a lot
       const dev = it.start - (orig[it.id]?.start ?? it.start), flex = ctx.mealFlex || 0;
       const lateOver = Math.max(0, dev - flex);
       cost += it.walk * walkCost + (flex ? Math.abs(dev) * 0.4 + lateOver * 3 : Math.max(0, dev) * 1.5);
     } else if (it.type === 'show') {
+      visit(landOfPos(it.anchor?.pos));
       cost += it.walk * walkCost + (it.anchor.late === 'miss' ? 3000 : it.anchor.late === 'short' ? 120 : 0);
     }
   }
@@ -632,6 +650,23 @@ export function planCost(ctx, seq) {
     starts.set(base, it.start);
   }
   return cost + (r.missingMust?.length || 0) * 5000;
+}
+/** Simple flow figures of a sequence, for tests and the proposal sheet: walking minutes, area changes, returns. */
+export function flowStats(ctx, seq, { ridesOnly = false } = {}) {
+  const r = planFromOrder(ctx, seq);
+  const left = new Set();
+  let land = ctx.pos ? landOfPos(ctx.pos) : null, changes = 0, revisits = 0, walk = 0;
+  for (const it of r.items) {
+    if (!['ride', 'meal', 'show'].includes(it.type) || it.paused || it.over) continue;
+    walk += it.walk || 0;
+    if (ridesOnly && it.type !== 'ride') continue;
+    const l = it.type === 'ride' ? it.a?.land : landOfPos(it.anchor?.pos);
+    if (!l || l === land) continue;
+    if (land) { changes++; left.add(land); }
+    if (left.has(l)) revisits++;
+    land = l;
+  }
+  return { walk, changes, revisits, rides: r.rides };
 }
 
 // Locked rides keep their index in the open part; everything else is free to be re-merged around them.
@@ -743,8 +778,10 @@ const PACE_VALUE = { relax: 0.65, balance: 1, rides: 1.35 };
 export const rideValue = (a, ctx) => (15 + a.pop * 12 + (PRIORITY[a.id] || 0)) * (PACE_VALUE[ctx.planId] ?? 1);
 export function planScore(ctx, seq) {
   const r = planFromOrder(ctx, seq);
-  let v = 0;
-  for (const it of r.items) if (it.type === 'ride' && !it.over && !it.paused) v += rideValue(it.a, ctx);
+  const target = (PLANS[ctx.planId] || PLANS.balance).targetRides;
+  const vals = r.items.filter((it) => it.type === 'ride' && !it.over && !it.paused).map((it) => rideValue(it.a, ctx)).sort((a, b) => b - a);
+  // the pace sets how full the day is: rides beyond its target still count, but much less
+  const v = vals.reduce((t, x, i) => t + (i < target ? x : x * 0.35), 0);
   return planCost(ctx, seq) - v;
 }
 function bestInsert(ctx, full, base, id, bound) {
@@ -788,6 +825,18 @@ function localSearch(ctx, seq0, { locks = {}, pool = [], deadline = Infinity, ke
       if (!seg.every(movable)) break;
       const o = [...open.slice(0, i), ...seg.reverse(), ...open.slice(j + 1)], sc = planScore(ctx, full(o));
       if (sc < best - 0.5) { open = o; best = sc; improved = true; }
+    }
+    // move a run of 2–3 neighbouring rides together (keeps an area's rides grouped when the group moves)
+    for (let len = 2; len <= 3 && Date.now() < deadline; len++) for (let i = 0; i + len <= open.length; i++) {
+      const seg = open.slice(i, i + len);
+      if (!seg.every(movable)) continue;
+      const rest = [...open.slice(0, i), ...open.slice(i + len)];
+      for (let k = 0; k <= rest.length; k++) {
+        if (k === i) continue;
+        if (ctx.firstRide && k === 0 && rest[0] === ctx.firstRide) continue;
+        const o = [...rest.slice(0, k), ...seg, ...rest.slice(k)], sc = planScore(ctx, full(o));
+        if (sc < best - 0.5) { open = o; best = sc; improved = true; break; }
+      }
     }
     if (!improved) break;
   }

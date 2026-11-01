@@ -103,3 +103,20 @@ test('share API: two phones converge through the KV room', async () => {
   assert.equal(off.status, 503);
 });
 
+
+test('restrooms from OpenStreetMap: inside the park only, public only, duplicates merged', async () => {
+  const { normalizeRestrooms } = await import('../lib/server.js');
+  const { PARKS } = await import('../public/js/data.js');
+  const P = PARKS.dl;
+  const out = normalizeRestrooms({ elements: [
+    { type: 'node', id: 1, lat: 33.8117, lon: -117.9181, tags: { amenity: 'toilets', wheelchair: 'yes' } },
+    { type: 'way', id: 2, center: { lat: 33.81175, lon: -117.91815 }, tags: { amenity: 'toilets' } }, // same block
+    { type: 'node', id: 3, lat: 33.8139, lon: -117.9192, tags: { amenity: 'toilets', access: 'private' } },
+    { type: 'node', id: 4, lat: 33.70, lon: -117.9, tags: { amenity: 'toilets' } }, // outside
+    { type: 'node', id: 5, lat: 33.8146, lon: -117.9176, tags: { amenity: 'toilets', changing_table: 'yes' } },
+  ] }, P);
+  assert.deepEqual(out.map((x) => x.id), ['osm-node-1', 'osm-node-5']);
+  assert.equal(out[0].wheelchair, true);
+  assert.equal(out[1].baby, true);
+  for (const id of Object.keys(PARKS)) assert.ok(PARKS[id].RESTROOMS.length >= 8, `${id} fallback restrooms`);
+});

@@ -126,6 +126,15 @@ function apply(opts) {
         `<b>${esc(s.ja)}</b><br>${esc(s.venue)}<br><button class="linkbtn" data-open-show="${s.id}">くわしく</button>`, { title: s.short });
     }
   }
+  // Restrooms: always on (small, quiet pins) — larger in the トイレ filter; the chosen one is highlighted.
+  for (const w of opts.restrooms || []) {
+    if (!valid(w)) continue;
+    const isT = opts.wcTarget === w.id;
+    if (isT) nextPos = w;
+    const big = f === 'wc' || isT;
+    upsert(seen, 'w:' + w.id, w, `<div class="mk mk--wc ${big ? 'is-big' : ''} ${isT ? 'is-target' : ''}">${opts.icons?.wc || 'WC'}</div>`, isT ? 34 : big ? 28 : 20,
+      `<b>トイレ</b>${w.approx ? '<br><small>位置は概略</small>' : ''}<br><button class="linkbtn" data-wc="${esc(w.id)}">ここへ</button>`, { title: 'トイレ', z: isT ? 1100 : big ? 50 : -50 });
+  }
   for (const [key, cur] of markers) if (!seen.has(key)) { cur.m.remove(); markers.delete(key); }
 
   setMe(opts.gps);
@@ -162,3 +171,4 @@ export function fitTo(points) {
   map.fitBounds(pts, { paddingTopLeft: [40, 70], paddingBottomRight: [60, 110], maxZoom: 18 });
 }
 export function fit() { if (map) map.fitBounds(PARK_BOUNDS, FIT_PAD); }
+export function closePopup() { if (map) map.closePopup(); }

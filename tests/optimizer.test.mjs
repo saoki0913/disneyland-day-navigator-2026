@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { optimizePlan, planFromOrder, buildAnchors, crowdRatio, simulateDay, syncSequence, planScore, planCost } from '../public/js/engine.js';
+import { optimizePlan, planFromOrder, buildAnchors, crowdRatio, simulateDay, syncSequence, planScore, planCost, flowStats, walkMin } from '../public/js/engine.js';
 import { normalizeTPWLive } from '../lib/server.js';
 import { TRIP, DEFAULT_MUST, attractionById } from '../public/js/data.js';
 
@@ -37,11 +37,34 @@ test('must-rides are not simply put first: placed by cost', () => {
   assert.ok(!(rides[0] in DEFAULT_MUST && rides[1] in DEFAULT_MUST), `first two rides are not both must-rides: ${rides.slice(0, 3)}`);
 });
 
-test('a popular ride is planned when the day has room (balance, from opening)', () => {
+test('the day is filled to the pace target (balance ≈ 9 rides, from opening)', () => {
   const c = ctxFor({ now: 480 });
   const { seq } = optimizePlan(c, draft(c), { budgetMs: 400 });
   const r = planFromOrder(c, seq);
-  assert.ok(r.rides >= 11, `rides ${r.rides}`);
+  assert.ok(r.rides >= 9, `rides ${r.rides}`);
+});
+
+test('flow first: the route goes area by area (few returns to an area already left)', () => {
+  for (const [planId, now, live] of [['balance', 480, false], ['balance', 600, true], ['rides', 600, true]]) {
+    const c = ctxFor({ planId, now, live: live ? liveOf() : {} });
+    const { seq } = optimizePlan(c, draft(c), { budgetMs: 400 });
+    const f = flowStats(c, seq, { ridesOnly: true });
+    assert.ok(f.revisits <= 2, `${planId}@${now} revisits ${f.revisits}`);
+  }
+});
+
+test('flow first: the first stop is near where you are, not across the park for a shorter posted wait', () => {
+  const pos = attractionById.space.pos;
+  const c = { ...ctxFor({ now: 600, live: liveOf() }), pos };
+  const { seq } = optimizePlan(c, draft(c), { budgetMs: 400 });
+  const first = seq.find((id) => attractionById[id]);
+  assert.ok(walkMin(pos, attractionById[first].pos) <= 6, `first ${first}`);
+});
+
+test('waits are only a reference: a nearby ride beats a far one with a slightly shorter posted wait', () => {
+  const base = ctxFor({ now: 600, extra: { anchors: [], must: {}, closeMin: 1200 } });
+  const c = { ...base, pos: attractionById.space.pos, live: { startours: { status: 'OPERATING', wait: 30, kind: 'live' }, indy: { status: 'OPERATING', wait: 15, kind: 'live' } } };
+  assert.ok(planCost(c, ['startours', 'indy']) < planCost(c, ['indy', 'startours']));
 });
 
 test('keep: suggestions only add rides, never drop planned ones', () => {
