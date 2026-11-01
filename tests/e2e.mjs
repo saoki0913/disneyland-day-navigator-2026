@@ -390,7 +390,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.match(await page.textContent('#toast'), /追加しました/);
     await page.click('[data-act="plan-edit-order"]'); await page.waitForTimeout(100);
     // iPhone-friendly ↑↓ controls must reorder the saved sequence and remain reversible.
-    const editable = () => page.$eval('.tl--plan > li[data-drag]', (els) => els.map((e) => e.dataset.drag));
+    const editable = () => page.locator('.tl--plan > li[data-drag]').evaluateAll((els) => els.map((e) => e.dataset.drag));
     const original = await editable();
     assert.ok(original.length >= 3, 'enough stops to reorder');
     const moving = original[1];
