@@ -12,7 +12,10 @@ mkdirSync(SHOTS, { recursive: true });
 const fx = (n) => JSON.parse(readFileSync(new URL(`./fixtures/${n}`, import.meta.url)));
 let liveVariant = 0;
 let pauseId = null;
-const live = () => { const n = normalizeTPWLive(fx('tpw-live.json')); if (pauseId && n.attractions[pauseId]) n.attractions[pauseId] = { ...n.attractions[pauseId], status: 'DOWN', wait: null }; if (liveVariant === 1) { n.attractions.rise = { ...n.attractions.rise, status: 'OPERATING', wait: 40 }; n.attractions.space = { ...n.attractions.space, wait: 25 }; } return ({ ok: true, ...n, source: 'themeparks.wiki', sourceLabel: 'ThemeParks.wiki', fetchedAt: new Date().toISOString(), errors: [] }); };
+// The app plans for today (Anaheim); move the fixture's dated show times to today.
+const TODAY = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Los_Angeles' }).format(new Date());
+const toToday = (n) => { for (const sh of [...Object.values(n.shows || {}), ...(n.otherShows || [])]) for (const t of sh.times || []) if (t.date) t.date = TODAY; return n; };
+const live = () => { const n = toToday(normalizeTPWLive(fx('tpw-live.json'))); if (pauseId && n.attractions[pauseId]) n.attractions[pauseId] = { ...n.attractions[pauseId], status: 'DOWN', wait: null }; if (liveVariant === 1) { n.attractions.rise = { ...n.attractions.rise, status: 'OPERATING', wait: 40 }; n.attractions.space = { ...n.attractions.space, wait: 25 }; } return ({ ok: true, ...n, source: 'themeparks.wiki', sourceLabel: 'ThemeParks.wiki', fetchedAt: new Date().toISOString(), errors: [] }); };
 const meta = { ok: true, coords: normalizeChildren(fx('tpw-children.json')), schedule: normalizeSchedule(fx('tpw-schedule.json')), errors: [] };
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkqPhfDwAEYQHqXc2zYwAAAABJRU5ErkJggg==', 'base64');
 
@@ -519,6 +522,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.ok(await page.locator('.mk--wc').count() >= 8, 'restroom pins (approximate fallback when OSM is unavailable)');
     await page.click('[data-mf="wc"]'); await page.waitForTimeout(400);
     assert.ok(await page.locator('.mk--wc.is-big').count() >= 8, 'トイレ filter enlarges them');
+    await page.evaluate(() => { const S = window.__dlnavi.S; S.land = 'fantasy'; S.landAt = Date.now(); }); // where you are (area)
     await page.click('[data-act="map-wc"]'); await page.waitForTimeout(600);
     assert.equal(await page.locator('.mk--wc.is-target').count(), 1, 'one restroom chosen');
     assert.match(await page.textContent('#mapcard'), /トイレ/);
