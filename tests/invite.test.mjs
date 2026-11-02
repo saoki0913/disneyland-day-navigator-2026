@@ -22,7 +22,7 @@ test('invitation routes fail closed without a valid Access JWT', async () => {
   assert.equal(OWNER, 'shunsuke.aoki0913@gmail.com');
 });
 
-test('verified owner can invite an email and recipient resolves the same room', async () => {
+test('verified owner can invite an email: access only, never an automatic shared plan', async () => {
   const { webcrypto } = await import('node:crypto');
   const { privateKey, publicKey } = await webcrypto.subtle.generateKey(
     { name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
@@ -70,12 +70,12 @@ test('verified owner can invite an email and recipient resolves the same room', 
     const reply = await handleInvite(ownerCtx);
     assert.equal(reply.status, 200, await reply.text());
     assert.deepEqual(updatedPolicy.include.map(x => x.email.email), [OWNER, 'partner@example.com']);
-    assert.equal(storage.get('invite:owner'), 'abcdefgh');
+    assert.equal(storage.size, 0, 'an invitation stores no plan / room association');
     const partnerCtx = { env: { SHARE: kv }, request: new Request(origin + '/api/invite/me', {
       headers: { 'cf-access-jwt-assertion': partnerToken }
     }) };
     const me = await (await handleInviteMe(partnerCtx)).json();
-    assert.equal(me.roomCode, 'abcdefgh');
+    assert.equal(me.roomCode, null, 'invitees are not joined to anybody\'s plan');
     assert.equal(me.isOwner, false);
     const outsiderAttempt = await handleInvite({ ...ownerCtx, request: new Request(origin + '/api/invite', {
       method: 'POST', headers: { origin, 'content-type': 'application/json', 'cf-access-jwt-assertion': partnerToken },

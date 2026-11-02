@@ -2,9 +2,9 @@
    Park Blue — royal blue + sky, white rounded cards, M PLUS Rounded 1c.
    No left accent borders: emphasis comes from fills, soft shadows and the park artwork.
    ===================================================================== */
-@font-face { font-family: 'M PLUS Rounded 1c'; font-weight: 500; font-display: swap; src: url('/fonts/mplus-rounded-1c-500.woff2') format('woff2'); }
-@font-face { font-family: 'M PLUS Rounded 1c'; font-weight: 700; font-display: swap; src: url('/fonts/mplus-rounded-1c-700.woff2') format('woff2'); }
-@font-face { font-family: 'M PLUS Rounded 1c'; font-weight: 800; font-display: swap; src: url('/fonts/mplus-rounded-1c-800.woff2') format('woff2'); }
+@font-face { font-family: 'M PLUS Rounded 1c'; font-weight: 500; font-display: swap; src: url('/fonts/mplus-rounded-1c-500.woff2?v=3') format('woff2'); }
+@font-face { font-family: 'M PLUS Rounded 1c'; font-weight: 700; font-display: swap; src: url('/fonts/mplus-rounded-1c-700.woff2?v=3') format('woff2'); }
+@font-face { font-family: 'M PLUS Rounded 1c'; font-weight: 800; font-display: swap; src: url('/fonts/mplus-rounded-1c-800.woff2?v=3') format('woff2'); }
 
 :root {
   --bg: #eef5ff;
@@ -421,7 +421,7 @@ main { position: relative; z-index: 31; padding: 0 14px calc(var(--tabh, 64px) +
 .mealrow__ctl { display: grid; grid-template-columns: 1fr 84px 84px; gap: 6px; margin-top: 8px; }
 @media (max-width: 400px) { .mealrow__ctl { grid-template-columns: 1fr 1fr; } .mealrow__ctl select:first-child { grid-column: 1 / -1; } }
 .mealrow__ctl select { width: 100%; min-width: 0; }
-select, input[type=time], input[type=date], input[type=number], input[type=text] {
+select, input[type=time], input[type=date], input[type=number], input[type=text], input[type=email] {
   min-height: 42px; border: 1.5px solid #dce7f6; border-radius: 12px; background: #f5f8fd; padding: 0 10px; font-size: 15px; color: var(--navy);
 }
 select { appearance: none; -webkit-appearance: none; padding-right: 26px; background-image: linear-gradient(45deg, transparent 50%, var(--blue) 50%), linear-gradient(-45deg, transparent 50%, var(--blue) 50%); background-position: right 13px center, right 8px center; background-size: 5px 5px; background-repeat: no-repeat; }
@@ -483,7 +483,7 @@ select { appearance: none; -webkit-appearance: none; padding-right: 26px; backgr
 .menu li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
 .menu li span:last-child { font-family: var(--num); white-space: nowrap; }
 .formrow { display: flex; gap: 6px; align-items: center; min-width: 0; }
-.formrow input[type=text], .formrow input[type=time], .formrow input[type=number] { flex: 1 1 auto; min-width: 0; width: auto; }
+.formrow input[type=text], .formrow input[type=email], .formrow input[type=time], .formrow input[type=number] { flex: 1 1 auto; min-width: 0; width: auto; }
 .formrow .btn { flex: none; }
 details.more summary { cursor: pointer; font-weight: 800; font-size: 13.5px; color: var(--blue); list-style: none; padding: 6px 0; }
 details.more summary::-webkit-details-marker { display: none; }
@@ -1164,3 +1164,132 @@ html.tab-map, html.tab-map body { height: 100%; overflow: hidden; overscroll-beh
 .pv .pv__row[hidden], .pv__more[hidden] { display: none; }
 .builder .rp.has-rep .rp__n { padding-right: 24px; }
 .builder #b-rides { gap: 8px; }
+
+/* =====================================================================
+   Round 3: day records & PDF, reset modal, invite, folded conditions,
+   other shows, edge-to-edge map, and sizing for every phone width.
+   ===================================================================== */
+/* ---------- buttons ---------- */
+.btn--danger { background: linear-gradient(180deg, #ef5a5f, #d63c42); color: #fff; border-color: rgba(255, 255, 255, .4); box-shadow: 0 6px 14px rgba(214, 60, 66, .28); }
+/* ---------- confirmation modal (sheet) ---------- */
+.modal { text-align: center; align-items: center; }
+.modal .para { text-align: left; margin: 0; }
+.modal .btnrow { width: 100%; }
+.modal__ico { width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; font-size: 26px; color: var(--red); background: var(--red-l); margin: 4px auto 0; }
+/* ---------- invite ---------- */
+.invite { display: flex; flex-direction: column; gap: 12px; }
+.invite__steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.invite__steps li { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; line-height: 1.5; color: var(--ink); }
+.invite__steps b { flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; background: var(--blue-l); color: var(--blue-d); font-size: 12px; margin-top: 1px; }
+.invite__sent { padding: 12px; border-radius: 16px; background: var(--card-2); }
+.invite__ok { display: flex; align-items: center; gap: 6px; font-size: 13.5px; margin-bottom: 6px; color: var(--good); }
+.invite__ok b { color: var(--navy); word-break: break-all; }
+/* ---------- plan: folded conditions ---------- */
+.condsum { padding: 0; gap: 0; }
+.condsum__h { list-style: none; display: flex; align-items: center; gap: 8px; padding: 13px 14px; cursor: pointer; font-size: 14px; font-weight: 800; color: var(--navy); }
+.condsum__h::-webkit-details-marker { display: none; }
+.condsum__h .ico { color: var(--blue); font-size: 17px; }
+.condsum__h .ico:last-child { margin-left: auto; color: #9aaac4; font-size: 15px; transition: transform .2s; }
+.condsum[open] .condsum__h .ico:last-child { transform: rotate(90deg); }
+.condsum__p { font-size: 12px; font-weight: 700; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.condsum .condsum__kv { padding: 0 14px 14px; }
+/* ---------- day records ---------- */
+.rec__status { display: flex; align-items: center; gap: 6px; margin: 0; }
+.rec__status .ico { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.reclist { display: flex; flex-direction: column; gap: 10px; }
+.recc { display: grid; grid-template-columns: auto 1fr auto; grid-template-areas: 'd s c' 'd t c'; align-items: center; gap: 2px 12px; text-align: left; padding: 12px 12px 12px 14px; border-radius: 18px; background: #fff; box-shadow: var(--shadow); }
+.recc__d { grid-area: d; display: flex; flex-direction: column; min-width: 92px; padding-right: 10px; border-right: 1px solid var(--line); }
+.recc__d b { font-size: 17px; color: var(--navy); line-height: 1.3; }
+.recc__d small { font-size: 11.5px; color: var(--blue); font-weight: 800; }
+.recc__s { grid-area: s; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12.5px; color: var(--muted); font-weight: 700; }
+.recc__s > span { display: inline-flex; align-items: center; gap: 3px; }
+.recc__s b { color: var(--ink); font-size: 15px; }
+.recc__s .ico { color: var(--blue); }
+.recc__tags { grid-area: t; display: flex; gap: 4px; flex-wrap: wrap; }
+.recc .row__chev { grid-area: c; }
+.rec__foot { font-size: 12px; margin: 0; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.rec__foot .ico { color: var(--good); }
+.recstats { display: grid; grid-template-columns: repeat(4, 1fr); border-radius: 18px; background: #fff; box-shadow: var(--shadow); padding: 12px 4px; }
+.recstats > div { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.recstats > div + div { border-left: 1px solid var(--line); }
+.recstats b { font-size: 22px; line-height: 1.1; color: var(--blue); }
+.recstats > div:nth-child(2) b { color: var(--mid); }
+.recstats > div:nth-child(3) b { color: var(--purple); }
+.recstats > div:nth-child(4) b { color: var(--navy); font-size: 17px; line-height: 1.5; }
+.recstats span { font-size: 11px; color: var(--muted); font-weight: 700; }
+.rec__tl { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.rec__i { position: relative; display: grid; grid-template-columns: 46px 14px 1fr auto; align-items: center; gap: 8px; min-height: 44px; }
+.rec__i::before { content: ''; position: absolute; left: 59px; top: 0; bottom: 0; width: 2px; background: #d3e2f6; }
+.rec__i:first-child::before { top: 50%; }
+.rec__i:last-child::before { bottom: 50%; }
+.rec__i:only-child::before { display: none; }
+.rec__t { font-size: 14px; color: var(--blue); text-align: right; }
+.rec__dot { position: relative; z-index: 1; width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 3px solid var(--blue); }
+.rec__i--meal .rec__dot { border-color: var(--mid); }
+.rec__i--show .rec__dot { border-color: var(--purple); }
+.rec__n { font-weight: 800; font-size: 14px; color: var(--navy); line-height: 1.35; padding: 6px 0; }
+.rec__k { font-size: 11px; font-weight: 800; color: var(--muted); }
+
+/* ---------- map: edge to edge, square corners, no strip under the map ----------
+   iOS home-screen apps (status bar "black-translucent") can place fixed bottom:0 a status bar's
+   height above the real bottom. The map layer therefore runs past the bottom edge (clipped by the
+   screen), and the floating controls are fixed to the viewport like the tab bar, so they always
+   line up with it. */
+.mapwrap { border-radius: 0; box-shadow: none; bottom: -120px; }
+#map .leaflet-control-container .leaflet-bottom { bottom: 120px; }
+.mapwrap .mapdest { position: fixed; bottom: calc(var(--tabspace) + 6px); max-width: 536px; margin: 0 auto; }
+.mapwrap .mapfab { position: fixed; bottom: calc(var(--tabspace) + 84px); }
+@media (min-width: 560px) { .mapwrap .mapfab { right: max(12px, calc(50% - 268px)); } }
+html.tab-map, html.tab-map body { background: #dcebff; }
+#map .leaflet-control-attribution { font-size: 9px; opacity: .8; }
+
+/* ---------- every phone width: SE (320–375) → standard (390–393) → Plus / Pro Max (414–440) ---------- */
+/* fluid widths for horizontal cards; sheets use the screen height instead of a fixed size */
+.altc { flex-basis: clamp(148px, 40vw, 190px); }
+.altc__img { height: clamp(88px, 25vw, 118px); }
+.builder { height: min(calc(92dvh - 22px), 860px); }
+@media (min-width: 390px) {
+  body { font-size: 15.5px; }
+  .next__title { font-size: 25px; }
+  .stat__v { font-size: 29px; }
+  .act, .next .acts .act, .actionbar .act { height: 50px; font-size: 15px; }
+  .qa__b { height: 40px; font-size: 13px; }
+  .tl__name { font-size: 14.5px; }
+  .tl__card { min-height: 60px; }
+  .row__name { font-size: 15px; }
+  .sheet__title { font-size: 21px; }
+  .tab { height: 54px; }
+  .tab span { font-size: 11.5px; }
+}
+@media (min-width: 414px) {
+  main { padding-left: 16px; padding-right: 16px; }
+  .next__title { font-size: 27px; }
+  .stat__v { font-size: 31px; }
+  .ptitle h1 { font-size: 26px; }
+  .sec h2 { font-size: 17.5px; }
+  .tl__name { font-size: 15px; }
+  .mapbar .chip { height: 38px; font-size: 13.5px; }
+  .mapfab button { width: 50px; height: 50px; font-size: 20px; }
+}
+/* tall screens: the 4-tab condition sheet and option tiles grow into the extra height */
+@media (min-height: 780px) {
+  .builder .opt { min-height: 60px; }
+  .builder .rp { min-height: 46px; }
+  .builder__body { gap: 18px; }
+  .builder .mealrow { padding: 10px 12px; }
+}
+@media (min-height: 880px) {
+  .builder .opt { min-height: 66px; }
+  .builder .rp { min-height: 50px; }
+  .builder__body { gap: 22px; }
+}
+/* very small phones (320–359) */
+@media (max-width: 359px) {
+  main { padding-left: 10px; padding-right: 10px; }
+  .next__title { font-size: 20px; }
+  .stat__v { font-size: 23px; }
+  .recc { grid-template-columns: auto 1fr auto; gap: 2px 8px; padding: 10px; }
+  .recc__d { min-width: 78px; padding-right: 8px; }
+}
+.flip { display: inline-flex; transform: scaleX(-1); }

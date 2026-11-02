@@ -8,6 +8,7 @@ import {
   visitId, visitNo, visitsDone, wantedVisits,
 } from './engine.js';
 import { SHARE_FIELDS, mergeDocs, sameDoc, newCode, CODE_RE } from './share.js';
+import { cleanRecord, mergeRecords, recordFrom, recoverFromDoc, recoverFromTombstones, recordFromLegacyLog, recordStats } from './records.js';
 
 // =====================================================================
 // State (persisted in localStorage — never sent anywhere)
@@ -39,7 +40,7 @@ const defaults = {
   locks: {},           // { rideId: true } rides locked in place (kept even when the plan is re-optimised)
   planSnap: null,      // the saved plan: { at, base, items, waiting, missingMust } — changes only on 更新 / 乗った / edits
   a2hsDismissed: false,
-  exploreTab: 'rides', exploreFilter: 'all', exploreSort: 'reco', foodFilter: 'all', rideLand: 'all', foodLand: 'all', foodQ: '', rideQ: '',
+  exploreTab: 'rides', exploreFilter: 'all', exploreSort: 'reco', foodFilter: 'all', rideLand: 'all', foodLand: 'all', foodQ: '', rideQ: '', showQ: '',
   mapFilter: 'rides',
   tab: 'home',
   cfg: { date: null, entry: null, exit: null }, // this park's trip date / entry / exit (minutes); null → plan/API value
@@ -74,6 +75,7 @@ function save() {
   snap = cur;
   try { localStorage.setItem(KEY, JSON.stringify(S)); } catch { /* storage full / private mode */ }
   if (changed && S.share) schedulePush();
+  if (changed && Object.keys(S.done || {}).length) scheduleRecordBackup();
 }
 // A new day starts clean: yesterday's ticks, order and saved plan are cleared (preferences such as
 // must-rides, meals, shows and pace are kept). The app works on any date — today in Anaheim by default.
@@ -82,7 +84,13 @@ function newDayReset() {
   const last = S.day || S.cfg?.date || TRIP.date;
   if (S.cfg?.date && S.cfg.date < today) S.cfg = { ...S.cfg, date: null };
   if (last >= today) { S.day = today; return; }
-  try { if (Object.keys(S.done || {}).length) localStorage.setItem(`${KEY}:log:${last}`, JSON.stringify({ done: S.done, doneMin: S.doneMin })); } catch { /* full */ }
+  // Keep yesterday as a day record (merged with anything already archived for that day).
+  try {
+    if (Object.keys(S.done || {}).length) {
+      const prev = JSON.parse(localStorage.getItem(`${KEY}:log:${last}`) || 'null');
+      localStorage.setItem(`${KEY}:log:${last}`, JSON.stringify({ done: { ...(prev?.done || {}), ...S.done }, doneMin: { ...(prev?.doneMin || {}), ...S.doneMin }, base: prev?.items ? prev : prev?.base || null }));
+    }
+  } catch { /* full */ }
   const gone = Object.keys(S.done || {});
   Object.assign(S, { done: {}, doneMin: {}, skip: {}, manual: {}, pin: null, order: null, locks: {}, planSnap: null, planTime: null, lastDone: null, land: null, suggestOff: null });
   S.doneDel = Object.fromEntries(gone.map((id) => [id, Date.now()])); // a shared partner drops them too
@@ -447,6 +455,34 @@ function showTimesFor(id) {
   if (api?.length) return { times: [...new Set(api)], src: 'api' };
   return { times: showById[id].times, src: 'pre' };
 }
+// The park's other shows (live schedule entries that are not in the catalog — e.g. street shows):
+// searchable in 探す › ショー and shown on the map when ThemeParks.wiki knows their place.
+const snorm = (t) => String(t || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]/g, '');
+function otherShows() {
+  const places = R.meta?.showPlaces || {};
+  const seen = new Set();
+  return (R.live?.otherShows || []).map((o) => {
+    const key = snorm(o.name);
+    const times = (o.times || []).filter((t) => !t.date || t.date === tripDate()).map((t) => t.start).filter(Number.isFinite).sort((a, b) => a - b);
+    const p = places[key];
+    return { id: 'x' + key.slice(0, 40), name: o.name, status: o.status, times, pos: p ? { lat: p.lat, lon: p.lon } : null };
+  }).filter((x) => x.times.length && x.id.length > 1 && !seen.has(x.id) && seen.add(x.id));
+}
+const otherShowById = (id) => otherShows().find((x) => x.id === id);
+function openOtherShow(id) {
+  const x = otherShowById(id);
+  if (!x) return toast('このショーの情報は今日はありません', 'warn');
+  const c = ctx();
+  const next = x.times.find((t) => t >= c.now - 5);
+  openSheet(`<div class="sheet__content">
+    <div><div class="kicker">${ic('show')}ショー</div><h2 class="sheet__title" id="sheetTitle">${esc(x.name)}</h2></div>
+    <div class="times">${x.times.map((t) => `<span class="time ${t < c.now - 5 ? 'is-past' : ''} ${t === next ? 'is-on' : ''}"><span class="num">${clock(t)}</span></span>`).join('')}</div>
+    ${next != null ? `<p class="para" style="margin:0">次の回 <b class="num">${clock(next)}</b>${next > c.now ? `（あと${fmtDur(next - c.now)}）` : ''}${x.pos && c.pos ? ` · ${ic('walk')}徒歩${walkHere(x.pos, c)}分` : ''}</p>` : '<p class="para muted" style="margin:0">今日の回は終わりました</p>'}
+    ${x.pos ? `<div class="btnrow"><button class="btn" data-xshow-map="${esc(x.id)}">${ic('pin')}地図で見る</button><a class="btn btn--primary" ${routeAttr(x.pos)}>${ic('route')}ルート</a></div>` : '<p class="muted" style="font-size:12.5px;margin:0">場所の情報がありません。公式アプリで確認してください。</p>'}
+    <p class="muted" style="font-size:12px;margin:0">時刻は ThemeParks.wiki（公式スケジュール）より。中止・変更は公式アプリで確認。</p>
+  </div>`);
+}
+
 function anchors() {
   const showTimes = {};
   for (const s of SHOWS) showTimes[s.id] = showTimesFor(s.id).times;
@@ -524,6 +560,8 @@ const IC = {
   spark: '<path d="M12 2.5c.5 4.6 2.9 7 7.5 7.5-4.6.5-7 2.9-7.5 7.5-.5-4.6-2.9-7-7.5-7.5 4.6-.5 7-2.9 7.5-7.5Z"/><path d="M19 15.5c.2 1.8 1.2 2.8 3 3-1.8.2-2.8 1.2-3 3-.2-1.8-1.2-2.8-3-3 1.8-.2 2.8-1.2 3-3Z"/>',
   bell: '<path d="M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15Z"/><path d="M10 21h4"/>',
   down: '<path d="M12 4v14M6 12l6 6 6-6"/>',
+  book: '<path d="M5 4.5A1.5 1.5 0 0 1 6.5 3H19v15H6.5A1.5 1.5 0 0 0 5 19.5Z"/><path d="M5 19.5A1.5 1.5 0 0 0 6.5 21H19v-3M9 7.5h6M9 11h4"/>',
+  file: '<path d="M6 3h8l4 4v14H6Z"/><path d="M14 3v4h4M9 13h6M9 17h4"/>',
 };
 const RIDE_IC = PARK_ID === 'dca' ? 'ride' : 'castle';
 const ic = (k) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${IC[k] || ''}</svg>`;
@@ -1432,22 +1470,9 @@ function renderPlan() {
   }
   html += `</ol><button class="btn btn--block addbtn" data-act="plan-add">${ic('plus')}乗り物・ごはん・ショーを追加</button>`;
 
-  // 2) Below the plan: re-plan options and the conditions summary.
-  html += `<div class="sec"><h2><span class="sec__en">REPLAN</span>作り直す</h2></div>
-    <div class="card replan">
-      <button class="btn btn--navy btn--block ${busy ? 'is-busy' : ''}" data-act="replan" ${busy ? 'disabled' : ''}>${ic('refresh')}今から作り直す</button>
-      <div class="replan__time">
-        <label for="planTimeInput"><b>別の時刻から</b></label>
-        <div class="plan-start__row"><input type="time" id="planTimeInput" value="${clock(startAt)}" aria-label="プランの開始時刻">
-          <button class="btn btn--sm btn--navy" data-act="plan-time-set">この時刻から作る</button></div>
-      </div>
-    </div>
-    <div class="card condsum">
-    <dl class="kv condsum__kv">${condSummary(D).map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
-    <button class="btn btn--navy btn--block" data-act="plan-edit">${ic('sliders')}条件を変えてプランを作る</button></div>
-    <div class="card sharecard"><div class="sharecard__t">${ic('users')}<div><b>${S.share ? '2人で共有中' : '2人で同じプランを使う'}</b>
-      ${S.share ? `<small>${esc(shareStatus())}</small>` : ''}</div></div>
-      <button class="btn btn--sm ${S.share ? '' : 'btn--navy'}" data-act="share-open">${S.share ? '管理' : '始める'}</button></div>`;
+  // 2) Below the plan: the current conditions, folded (open with a tap). Changing them = 条件 at the top.
+  html += `<details class="card condsum"><summary class="condsum__h">${ic('sliders')}<span>いまの条件</span><span class="condsum__p">${esc(PACE[D.plan])} · 歩く量${esc(WALK_JA[D.cond.walk])}</span>${ic('chev')}</summary>
+    <dl class="kv condsum__kv">${condSummary(D).map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl></details>`;
 
   const doneIds = Object.keys(S.done).sort((a, b) => (S.doneMin[a] ?? 0) - (S.doneMin[b] ?? 0) || S.done[a] - S.done[b]);
   if (doneIds.length) {
@@ -1882,34 +1907,9 @@ function renderExplore() {
     el.innerHTML = html; return;
   }
   if (tab === 'shows') {
-    const an = c.anchors.filter((a) => a.kind === 'show' && !a.done && a.end > c.now);
-    if (an[0]) {
-      const x = an[0];
-      html += `<div class="countdown"><div><div class="countdown__k">NEXT SHOW</div><div class="countdown__n">${jw(x.title)} <span class="num">${clock(x.start)}</span></div>
-        <div style="font-size:12.5px;color:var(--mustard)">場所取り <span class="num">${clock(x.start - x.claim)}</span>〜</div></div>
-        <div class="countdown__v">${fmtDur(x.start - c.now)}<small>開演まで</small></div></div>`;
-    }
-    const fw = c.anchors.find((a) => a.show === 'fireworks'), fm = c.anchors.find((a) => a.show === 'fantasmic');
-    if (fw && fm) {
-      const steps = fw.start < fm.start
-        ? [[clock(fw.start - fw.claim), '川沿いへ'], [clock(fw.start), '花火'], [clock(fw.end), 'その場で待つ'], [clock(fm.start), 'ファンタズ<wbr>ミック']]
-        : [[clock(fm.start - fm.claim), '川沿いへ'], [clock(fm.start), 'ファンタズミック'], [clock(fm.end), 'そのまま'], [clock(fw.start), '花火']];
-      html += `<div class="card card--pad"><div class="sec" style="margin:0 0 10px"><h2><span class="sec__en">NIGHT</span>夜の動き方</h2><span class="sec__sub">移動ほぼなし</span></div>
-        <div class="flow">${steps.map(([t, s]) => `<div class="flow__step"><div class="flow__t">${t}</div><div class="flow__s">${s}</div></div>`).join('')}</div></div>`;
-    }
-    html += `<div class="card rows">${SHOWS.map((s) => {
-      const st = showTimesFor(s.id);
-      const pick = c.anchors.find((a) => a.show === s.id);
-      return `<button class="row" data-open-show="${s.id}" type="button"><span class="row__thumb">${showImg(s)}</span>
-        <span class="row__body"><span class="row__name">${jw(s.short)}</span>
-          <span class="row__meta"><span class="num">${st.times.join(' / ')}</span>${st.src === 'pre' ? '<span class="tag tag--warn">要確認</span>' : st.src === 'api' ? '<span class="tag tag--live">公式</span>' : '<span class="tag tag--manual">手入力</span>'}</span></span>
-        <span class="row__wait">${pick ? `<span class="tag tag--must">予定 ${hhmm(pick.start)}</span>` : '<span class="tag">予定なし</span>'}</span></button>`;
-    }).join('')}</div>
-    <button class="btn btn--block" data-act="plan-edit-shows">${ic('sliders')}見るショーと回を変える</button>`;
-    const others = R.live?.otherShows || [];
-    if (others.length) {
-      html += `<div class="sec"><h2>その他のショー</h2></div><div class="card card--pad" style="font-size:13.5px;line-height:1.9">${others.slice(0, 12).map((o) => `<div><b>${esc(o.name)}</b> <span class="num">${o.times.filter((t) => !t.date || t.date === tripDate()).map((t) => hhmm(t.start)).join(' / ') || '—'}</span></div>`).join('')}</div>`;
-    }
+    const sq = S.showQ || '';
+    html += `<label class="fsearch">${ic('search')}<input id="showQ" type="search" enterkeyhint="search" autocomplete="off" placeholder="ショーを検索" value="${esc(sq)}" aria-label="ショーを検索">${sq ? `<button type="button" data-sq="" aria-label="消す">${ic('x')}</button>` : ''}</label>`;
+    html += `<div id="showList">${showListHtml(c)}</div>`;
     el.innerHTML = html;
     return;
   }
@@ -1924,6 +1924,53 @@ function renderExplore() {
     <button class="row" data-open-food="${r.id}"><span class="row__body"><span class="row__name">${esc(h.name)}</span><span class="row__meta">${esc(r.ja)}</span></span><span class="row__chev">${ic('chev')}</span></button>`).join('');
   html += `</div><p class="footer">出典：Disney Parks Blog ほか各種報道（2026年8〜10月）</p>`;
   el.innerHTML = html;
+}
+
+// 探す › ショー: catalog shows + the park's other shows (all searchable by name).
+function showListHtml(c = ctx()) {
+  const q = fnorm(S.showQ || '');
+  const hit = (...t) => !q || fnorm(t.join(' ')).includes(q);
+  let html = '';
+  const an = c.anchors.filter((a) => a.kind === 'show' && !a.done && a.end > c.now);
+  if (an[0] && !q) {
+    const x = an[0];
+    html += `<div class="countdown"><div><div class="countdown__k">NEXT SHOW</div><div class="countdown__n">${jw(x.title)} <span class="num">${clock(x.start)}</span></div>
+      <div style="font-size:12.5px;color:var(--mustard)">場所取り <span class="num">${clock(x.start - x.claim)}</span>〜</div></div>
+      <div class="countdown__v">${fmtDur(x.start - c.now)}<small>開演まで</small></div></div>`;
+  }
+  const fw = c.anchors.find((a) => a.show === 'fireworks'), fm = c.anchors.find((a) => a.show === 'fantasmic');
+  if (fw && fm && !q) {
+    const steps = fw.start < fm.start
+      ? [[clock(fw.start - fw.claim), '川沿いへ'], [clock(fw.start), '花火'], [clock(fw.end), 'その場で待つ'], [clock(fm.start), 'ファンタズ<wbr>ミック']]
+      : [[clock(fm.start - fm.claim), '川沿いへ'], [clock(fm.start), 'ファンタズミック'], [clock(fm.end), 'そのまま'], [clock(fw.start), '花火']];
+    html += `<div class="card card--pad"><div class="sec" style="margin:0 0 10px"><h2><span class="sec__en">NIGHT</span>夜の動き方</h2><span class="sec__sub">移動ほぼなし</span></div>
+      <div class="flow">${steps.map(([t, s]) => `<div class="flow__step"><div class="flow__t">${t}</div><div class="flow__s">${s}</div></div>`).join('')}</div></div>`;
+  }
+  const mine = SHOWS.filter((s) => hit(s.ja, s.short, s.en, s.venue));
+  if (mine.length) {
+    html += `<div class="card rows">${mine.map((s) => {
+      const st = showTimesFor(s.id);
+      const pick = c.anchors.find((a) => a.show === s.id);
+      return `<button class="row" data-open-show="${s.id}" type="button"><span class="row__thumb">${showImg(s)}</span>
+        <span class="row__body"><span class="row__name">${jw(s.short)}</span>
+          <span class="row__meta"><span class="num">${st.times.join(' / ')}</span>${st.src === 'pre' ? '<span class="tag tag--warn">要確認</span>' : st.src === 'api' ? '<span class="tag tag--live">公式</span>' : '<span class="tag tag--manual">手入力</span>'}</span></span>
+        <span class="row__wait">${pick ? `<span class="tag tag--must">予定 ${hhmm(pick.start)}</span>` : '<span class="tag">予定なし</span>'}</span></button>`;
+    }).join('')}</div>`;
+    if (!q) html += `<button class="btn btn--block" data-act="plan-edit-shows">${ic('sliders')}見るショーと回を変える</button>`;
+  }
+  const others = otherShows().filter((x) => hit(x.name));
+  if (others.length) {
+    if (mine.length) html += `<div class="sec"><h2>${ic('show')}パークのショー</h2><span class="sec__sub">${others.length}件 · 公式スケジュール</span></div>`;
+    html += `<div class="card rows">${others.map((x) => {
+      const next = x.times.find((t) => t >= c.now - 5);
+      return `<button class="row" data-open-xshow="${esc(x.id)}" type="button"><span class="row__thumb">${poster(x.name, '#7a5bd6')}</span>
+        <span class="row__body"><span class="row__name">${esc(x.name)}</span>
+          <span class="row__meta"><span class="num">${x.times.map(clock).join(' / ')}</span><span class="tag tag--live">公式</span>${x.pos ? `<span>${ic('pin')}地図あり</span>` : ''}</span></span>
+        <span class="row__wait">${next != null ? `<span class="tag tag--must">次 ${clock(next)}</span>` : '<span class="tag">終了</span>'}</span></button>`;
+    }).join('')}</div>`;
+  }
+  if (!mine.length && !others.length) html += `<div class="card card--pad empty">「${esc(S.showQ)}」に合うショーはありません</div>`;
+  return html;
 }
 
 function renderRideList(c = ctx()) {
@@ -2195,9 +2242,13 @@ function openSettings() {
       ${renderLocRow(position())}
       <div class="setrow"><span class="setrow__ico">${ic('refresh')}</span><div class="setrow__b"><div class="setrow__t">待ち時間</div><div class="setrow__s">${liveTxt}</div></div>
         <button class="btn btn--sm" data-act="refresh">更新</button></div>
-      <div class="setrow"><span class="setrow__ico">${ic('users')}</span><div class="setrow__b"><div class="setrow__t">メンバー招待・プラン共有</div><div class="setrow__s">${S.share ? 'プランを共有中' : 'メールで招待して自動共有'}</div></div>
-        <button class="btn btn--sm" data-act="share-open">${R.inviteIdentity?.isOwner ? '招待' : (S.share ? '管理' : '開く')}</button></div>
-      <div class="setrow"><span class="setrow__ico">${ic('x')}</span><div class="setrow__b"><div class="setrow__t">記録をリセット</div><div class="setrow__s">済み・プランの条件を消去</div></div>
+      <div class="setrow"><span class="setrow__ico">${ic('users')}</span><div class="setrow__b"><div class="setrow__t">プランを共有</div><div class="setrow__s">${S.share ? 'プランを共有中' : '共有コードを送って同じプランを使う'}</div></div>
+        <button class="btn btn--sm" data-act="share-open">${S.share ? '管理' : '開く'}</button></div>
+      ${R.inviteIdentity?.isOwner ? `<div class="setrow"><span class="setrow__ico">${ic('plus')}</span><div class="setrow__b"><div class="setrow__t">メンバーを招待</div><div class="setrow__s">メールで招待（アプリの利用許可）</div></div>
+        <button class="btn btn--sm" data-act="invite-open">招待</button></div>` : ''}
+      <div class="setrow"><span class="setrow__ico">${ic('book')}</span><div class="setrow__b"><div class="setrow__t">過去の記録</div><div class="setrow__s">日ごとの記録を見る・PDFで保存</div></div>
+        <button class="btn btn--sm" data-act="records-open">見る</button></div>
+      <div class="setrow"><span class="setrow__ico">${ic('x')}</span><div class="setrow__b"><div class="setrow__t">記録をリセット</div><div class="setrow__s">今日の記録を保存して新しい1日に</div></div>
         <button class="btn btn--sm" data-act="reset">リセット</button></div>
     </div>
     <details class="more"><summary>詳細</summary>
@@ -2294,55 +2345,305 @@ async function pullShare({ quiet = false } = {}) {
 }
 const shareLink = () => `${location.origin}/#share=${S.share.code}`;
 
-// Email invitations grant Cloudflare Access and bind the recipient to the same room.
+// =====================================================================
+// Day records (過去の記録): every day is kept on this phone AND backed up to the server for the
+// signed-in person (/api/records), so it survives a new day, a reset, a cleared phone or a new device.
+// Old days that were lost before the backup existed are recovered from traces (see recoverRecords).
+// =====================================================================
+function nameFor(park) {
+  const P = PARKS[park];
+  return (id) => {
+    if (park === PARK_ID) { const n = doneName(id); if (n && n !== '予定') return n; }
+    const [base, k] = String(id).split('@');
+    const a = P.attractionById[base];
+    if (a) return a.short + (k ? `（${k}回目）` : '');
+    if (id.startsWith('show:')) return P.showById[id.slice(5)]?.short || 'ショー';
+    if (id.startsWith('meal:')) {
+      const m = P.PLANS.balance?.meals?.find((x) => x.id === id.slice(5));
+      return m?.ja || MEAL_JA[id.slice(5)] || 'ごはん';
+    }
+    return id;
+  };
+}
+const logKey = (park, date) => `${PARKS[park].PARK.storeKey}:log:${date}`;
+const recKey = (r) => `${r.park}:${r.date}`;
+function localRecords() {
+  const out = [];
+  try {
+    for (const park of PARK_ORDER) {
+      const pre = `${PARKS[park].PARK.storeKey}:log:`;
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || !k.startsWith(pre)) continue;
+        const date = k.slice(pre.length);
+        try { const r = recordFromLegacyLog(JSON.parse(localStorage.getItem(k)), { park, date, nameOf: nameFor(park) }); if (r) out.push(r); } catch { /* broken entry */ }
+      }
+    }
+  } catch { /* storage unavailable */ }
+  return out;
+}
+function saveLocalRecord(rec) {
+  rec = cleanRecord(rec);
+  if (!rec) return null;
+  try {
+    const cur = recordFromLegacyLog(JSON.parse(localStorage.getItem(logKey(rec.park, rec.date)) || 'null'), { park: rec.park, date: rec.date, nameOf: nameFor(rec.park) });
+    rec = cur ? mergeRecords(cur, rec) : rec;
+    localStorage.setItem(logKey(rec.park, rec.date), JSON.stringify(rec));
+  } catch { /* full / private mode */ }
+  return rec;
+}
+// This park's current day as a record (what is checked off right now).
+function todayRecord() {
+  if (!Object.keys(S.done || {}).length) return null;
+  return recordFrom({ park: PARK_ID, date: S.day || laParts().date, done: S.done, doneMin: S.doneMin, nameOf: nameFor(PARK_ID) });
+}
+async function pushRecord(rec) {
+  if (R.recServer === false) return null; // not signed in here (e.g. local preview): this phone only
+  try {
+    const res = await fetch('/api/records', { method: 'POST', cache: 'no-store', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ record: rec }) });
+    const j = await res.json().catch(() => null);
+    if (res.ok && j?.ok) { R.recServer = true; return cleanRecord(j.record); }
+    if (res.status === 401) R.recServer = false;
+  } catch { /* offline: retried on the next change / launch */ }
+  return null;
+}
+async function fetchServerRecords() {
+  try {
+    const res = await fetch('/api/records', { cache: 'no-store', credentials: 'same-origin' });
+    const j = await res.json().catch(() => null);
+    if (res.ok && j?.ok) { R.recServer = true; return (j.records || []).map(cleanRecord).filter(Boolean); }
+    if (res.status === 401) R.recServer = false;
+  } catch { /* offline */ }
+  return null;
+}
+// Today's record goes to the server shortly after each change (at most every 20 s).
+function scheduleRecordBackup() {
+  if (R.recTimer) return;
+  R.recTimer = setTimeout(async () => {
+    R.recTimer = 0;
+    const rec = todayRecord();
+    if (rec) await pushRecord(rec);
+  }, 20e3);
+}
+// Archive the current day (before a reset): this phone + server.
+async function archiveToday() {
+  const rec = todayRecord();
+  if (!rec) return null;
+  const merged = saveLocalRecord(rec);
+  await pushRecord(merged);
+  return merged;
+}
+// Push every record kept only on this phone (e.g. days archived before the server backup existed).
+async function syncLocalRecords(server) {
+  const have = new Map((server || []).map((r) => [recKey(r), r]));
+  for (const r of localRecords()) {
+    const s = have.get(recKey(r));
+    if (!s || mergeRecords(s, r).items.length !== s.items.length || (s.partial && !mergeRecords(s, r).partial)) await pushRecord(r);
+  }
+}
+// Share codes this phone has used (to look for traces of old days in shared plans).
+function knownCodes() {
+  const codes = new Set();
+  try { (JSON.parse(localStorage.getItem('dlnavi-codes') || '[]')).forEach((c) => codes.add(c)); } catch { /* ignore */ }
+  if (S.share?.code) codes.add(S.share.code);
+  for (const id of PARK_ORDER) {
+    try { const o = JSON.parse(localStorage.getItem(PARKS[id].PARK.storeKey) || '{}'); if (o.share?.code) codes.add(o.share.code); } catch { /* ignore */ }
+  }
+  return [...codes].filter((c) => CODE_RE.test(c));
+}
+function rememberCode(code) {
+  try {
+    const list = JSON.parse(localStorage.getItem('dlnavi-codes') || '[]').filter((c) => c !== code);
+    localStorage.setItem('dlnavi-codes', JSON.stringify([code, ...list].slice(0, 12)));
+  } catch { /* ignore */ }
+}
+// Recovery for each park's planned trip day that has passed without a full record:
+//  1) the shared plans (done records still there, or the tombstones a new day left),
+//  2) this phone's own tombstones (doneDel) for that park.
+async function recoverRecords(existing) {
+  const today = laParts().date;
+  const found = [];
+  const codes = knownCodes();
+  for (const park of PARK_ORDER) {
+    const date = PARKS[park].TRIP.date;
+    if (date >= today) continue;
+    const have = existing.find((r) => r.park === park && r.date === date);
+    if (have && !have.partial) continue;
+    const nameOf = nameFor(park);
+    let rec = null;
+    for (const code of codes) {
+      try {
+        const res = await fetch(`/api/share/${code}?park=${park}`, { cache: 'no-store' });
+        const j = await res.json().catch(() => null);
+        if (res.ok && j?.ok && j.exists) { const r = recoverFromDoc(j.doc, { park, date, nameOf }); if (r) rec = rec ? mergeRecords(rec, r) : r; }
+      } catch { /* offline */ }
+    }
+    try {
+      const o = park === PARK_ID ? S : JSON.parse(localStorage.getItem(PARKS[park].PARK.storeKey) || '{}');
+      const r = recoverFromTombstones(o.doneDel, { park, date, nameOf });
+      if (r) rec = rec ? mergeRecords(rec, r) : r;
+    } catch { /* ignore */ }
+    if (rec) found.push(rec);
+  }
+  return found;
+}
+// All records: this phone + server (+ recovered), merged per park and day. Newest first.
+async function loadRecords({ recover = true } = {}) {
+  const local = localRecords();
+  const server = await fetchServerRecords();
+  const by = new Map();
+  const add = (r) => { const k = recKey(r); by.set(k, by.has(k) ? mergeRecords(by.get(k), r) : r); };
+  local.forEach(add); (server || []).forEach(add);
+  if (recover) {
+    for (const r of await recoverRecords([...by.values()])) {
+      const before = by.get(recKey(r));
+      add(r);
+      const after = by.get(recKey(r));
+      if (!before || after.items.length > before.items.length) { saveLocalRecord(after); await pushRecord(after); R.recRecovered = (R.recRecovered || 0) + 1; }
+    }
+  }
+  if (server) syncLocalRecords(server);
+  // keep a local copy of what the server has (another phone's days, too)
+  (server || []).forEach((r) => saveLocalRecord(r));
+  return [...by.values()].sort((a, b) => (b.date + b.park).localeCompare(a.date + a.park));
+}
+
+const parkJa = (park) => PARKS[park].PARK.short;
+const REC_KIND_JA = { ride: "乗り物", meal: "ごはん", show: "ショー" };
+function recordRows(rec) {
+  return `<ol class="rec__tl">${rec.items.map((i) => `<li class="rec__i rec__i--${i.kind}"><span class="rec__t num">${i.min != null ? clock(i.min) : '—'}</span><span class="rec__dot"></span><span class="rec__n">${jw(i.name)}</span><span class="rec__k">${REC_KIND_JA[i.kind]}</span></li>`).join('')}</ol>`;
+}
+async function openRecords() {
+  R.recList = null;
+  const cur = todayRecord();
+  const render = (list, loading) => {
+    const items = [...(cur ? [{ ...cur, live: true }] : []), ...(list || []).filter((r) => !(cur && recKey(r) === recKey(cur)))];
+    openSheet(`<div class="sheet__content">
+      <div><div class="kicker">${ic('book')}Memories</div><h2 class="sheet__title" id="sheetTitle">過去の記録</h2></div>
+      ${loading ? `<p class="para muted rec__status">${ic('refresh')}サーバーと端末から記録を探しています…</p>` : ''}
+      ${items.length ? `<div class="reclist">${items.map((r) => {
+        const st = recordStats(r);
+        return `<button class="recc" type="button" data-rec="${recKey(r)}${r.live ? ':live' : ''}">
+          <span class="recc__d"><b>${dateLabel(r.date)}</b><small>${esc(parkJa(r.park))}</small></span>
+          <span class="recc__s"><span>${ic(r.park === 'dca' ? 'ride' : 'castle')}乗り物 <b class="num">${st.ride}</b></span><span>${ic('food')}<b class="num">${st.meal}</b></span><span>${ic('show')}<b class="num">${st.show}</b></span></span>
+          <span class="recc__tags">${r.live ? '<span class="tag tag--live">記録中</span>' : ''}${r.partial ? '<span class="tag tag--warn">一部の時刻なし</span>' : ''}</span>
+          <span class="row__chev">${ic('chev')}</span></button>`;
+      }).join('')}</div>` : loading ? '' : '<div class="empty">まだ記録はありません。「乗った」を押すと、その日の記録が残ります。</div>'}
+      ${!loading ? `<p class="muted rec__foot">${R.recServer ? `${ic('check')}サーバーにも保存済み（ログイン中のメールアドレスごと）` : 'この端末に保存しています（サーバーに接続できないときは、つながったときに保存）'}${R.recRecovered ? ` · ${R.recRecovered}日分を復元しました` : ''}</p>` : ''}
+    </div>`, { keepScroll: true });
+  };
+  render(null, true);
+  const list = await loadRecords();
+  R.recList = list;
+  if (!$('#sheet').hidden && $('#sheetTitle')?.textContent === '過去の記録') render(list, false);
+}
+function findRecord(key) {
+  const live = key.endsWith(':live');
+  const k = live ? key.slice(0, -5) : key;
+  if (live) return todayRecord();
+  return (R.recList || []).find((r) => recKey(r) === k) || localRecords().find((r) => recKey(r) === k) || null;
+}
+function openRecord(key) {
+  const rec = findRecord(key);
+  if (!rec) return toast('記録が見つかりませんでした', 'error');
+  const st = recordStats(rec);
+  R.pdf = { key, blob: null, busy: true };
+  openSheet(`<div class="sheet__content">
+    <div class="rech"><div class="kicker">${ic('book')}${esc(PARKS[rec.park].PARK.ja)}</div><h2 class="sheet__title" id="sheetTitle">${dateLabel(rec.date)}の記録</h2></div>
+    <div class="recstats"><div><b class="num">${st.ride}</b><span>乗り物</span></div><div><b class="num">${st.meal}</b><span>ごはん</span></div><div><b class="num">${st.show}</b><span>ショー</span></div>
+      <div><b class="num">${st.first != null ? `${clock(st.first)}` : '—'}</b><span>${st.last != null && st.last !== st.first ? `〜${clock(st.last)}` : 'はじめ'}</span></div></div>
+    ${rec.partial ? `<div class="note">${ic('info')}<div class="note__t">共有プランに残っていた痕跡から復元したため、一部の時刻が分かりません</div></div>` : ''}
+    ${recordRows(rec)}
+    <div class="btnrow"><button class="btn" data-act="rec-back"><span class="flip">${ic('chev')}</span>一覧</button><button class="btn btn--primary" data-act="rec-pdf" id="recPdfBtn">${ic('file')}PDFで保存</button></div>
+  </div>`);
+  buildPdf(rec, key);
+}
+let pdfMod = null;
+async function buildPdf(rec, key) {
+  try {
+    pdfMod = pdfMod || await import('./pdf.js');
+    const blob = await pdfMod.recordPdf(rec, { parkName: PARKS[rec.park].PARK.ja, parkShort: parkJa(rec.park), dateLabel: dateLabel(rec.date), art: `/img/park/${rec.park === 'dca' ? 'dca' : 'land'}-day.webp` });
+    if (R.pdf?.key === key) R.pdf = { key, blob, busy: false, name: `ParkNavi_${rec.date}_${rec.park === 'dca' ? 'CaliforniaAdventure' : 'Disneyland'}.pdf` };
+  } catch (e) {
+    if (R.pdf?.key === key) R.pdf = { key, blob: null, busy: false, err: e.message };
+  }
+}
+// Called straight from the tap (iOS needs the user gesture for the share sheet / download).
+async function savePdf() {
+  const p = R.pdf;
+  if (!p) return;
+  if (p.busy) { toast('PDFを作成中です…'); const key = p.key; const t0 = Date.now(); while (R.pdf?.key === key && R.pdf.busy && Date.now() - t0 < 8000) await new Promise((r) => setTimeout(r, 150)); if (R.pdf?.blob) toast('できました。もう一度「PDFで保存」を押してください', 'ok'); return; }
+  if (!p.blob) return toast(`PDFを作れませんでした${p.err ? `（${p.err}）` : ''}`, 'error');
+  const file = new File([p.blob], p.name, { type: 'application/pdf' });
+  if (navigator.canShare?.({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: p.name }); return; }
+    catch (e) { if (e?.name === 'AbortError') return; }
+  }
+  const url = URL.createObjectURL(p.blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = p.name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60e3);
+}
+
+// Reset: keep today's day as a record, then start a clean new day (after a confirmation).
+function openResetConfirm() {
+  const n = Object.keys(S.done || {}).length;
+  openSheet(`<div class="sheet__content modal">
+    <div class="modal__ico">${ic('refresh')}</div>
+    <h2 class="sheet__title" id="sheetTitle">記録をリセットしますか？</h2>
+    <p class="para">${n ? `${dateLabel(S.day || laParts().date)}の記録（<b class="num">${n}</b>件）は「過去の記録」に保存してから、` : ''}プラン・済み・条件を初期状態に戻して、新しい1日として使えるようにします。</p>
+    ${S.share ? '<p class="para muted" style="font-size:13px;margin:0">2人の共有もやめます（相手の端末の記録は消えません）。</p>' : ''}
+    <div class="btnrow"><button class="btn" data-close>やめる</button><button class="btn btn--danger" data-act="reset-do">リセットする</button></div>
+  </div>`);
+}
+async function doReset() {
+  const btn = $('[data-act="reset-do"]');
+  if (btn) btn.disabled = true;
+  const rec = await archiveToday();
+  Object.keys(S).forEach((k) => delete S[k]);
+  Object.assign(S, structuredClone(defaults), { shareAdopted: true, day: laParts().date, tab: 'home' });
+  R.draft = null; R.planEdit = false; R.alerts = []; R.moves = null; R.flash = null; R.replanned = null; R.suggest = null; R.shareAt = 0; R.shareErr = null;
+  snap = null; save(); closeSheet(); go('home'); renderAll();
+  toast(rec ? `リセットしました。${dateLabel(rec.date)}の記録は「過去の記録」に保存済み` : 'リセットしました。新しい1日として使えます', 'ok');
+}
+
+// Email invitations only let a person into the app (Cloudflare Access allow-list).
+// They never join anybody's plan: plans are shared with a share code (openShare).
 // No access-management token is ever sent to the browser.
 function inviteForm() {
   if (!R.inviteIdentity?.isOwner) return '';
   const pending = R.pendingInvite;
-  return `<div class="box" style="margin-top:12px">
-    <b>メールアドレスで招待</b>
-    <p class="para muted" style="margin:5px 0 10px">① メールアドレスを許可して共有プランに登録 ② 招待リンクを送信。リンクの送信は別の操作です。</p>
+  return `<div class="invite">
+    <ol class="invite__steps"><li><b>1</b><span>メールアドレスを登録すると、その人がアプリを開けるようになります</span></li><li><b>2</b><span>招待リンクを送ります（自動では送られません）</span></li></ol>
     <div class="formrow">
       <input type="email" id="inviteEmailIn" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="friend@example.com" style="flex:1;min-width:0" aria-label="招待するメールアドレス">
-      <button class="btn btn--primary btn--sm" type="button" data-act="invite-email" ${R.inviteSending ? 'disabled' : ''}>許可・次へ</button>
+      <button class="btn btn--primary btn--sm" type="button" data-act="invite-email" ${R.inviteSending ? 'disabled' : ''}>登録</button>
     </div>
-    ${pending ? `<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
-      <b>アクセス許可済み・招待リンクは未送信</b>
-      <p class="para" style="font-size:13px;margin:6px 0">宛先：<strong>${esc(pending.email)}</strong></p>
-      <p class="para muted" style="font-size:13px;margin:0 0 10px">相手はリンクを開き、同じメールアドレスのPINで認証すると、プランに自動参加できます。</p>
+    ${pending ? `<div class="invite__sent">
+      <div class="invite__ok">${ic('check')}<span><b>${esc(pending.email)}</b> を登録しました</span></div>
+      <p class="para muted" style="font-size:13px;margin:0 0 10px">相手はリンクを開き、このメールアドレスに届く確認コード（PIN）でログインします。</p>
       <div class="btnrow">
         <button class="btn btn--primary" type="button" data-act="invite-share-link">招待リンクを送る</button>
-        <button class="btn" type="button" data-act="invite-send-mail">メールを作成</button>
+        <button class="btn" type="button" data-act="invite-send-mail">メールで送る</button>
       </div>
       <button class="btn btn--sm" style="margin-top:8px" type="button" data-act="invite-copy-link">リンクをコピー</button>
-      <p class="muted" style="font-size:12px;margin:7px 0 0">「送る」または「メールを作成」から、LINE・メールなどの送信操作を完了してください。ボタンだけでは自動送信しません。</p>
-    </div>` : `<p class="muted" style="font-size:12px;margin:8px 0 0">許可後に招待リンクの送信ボタンが表示されます。自動メール送信ではありません。</p>`}
+    </div>` : ''}
+    <p class="muted" style="font-size:12px;margin:10px 0 0">招待だけではプランは共有されません。同じプランを使うときは「プランを共有」の共有コードを送ってください。</p>
   </div>`;
 }
-function inviteMailUrl(recipient, url) {
-  const subject = 'Park Navi のプランに招待します';
-  const body = `Park Naviで同じプランを共有しましょう。
-${url}
-招待されたメールアドレスでCloudflareのワンタイムPIN認証をしてください。ログイン後は同じプランに自動参加します。`;
-  return `mailto:${encodeURIComponent(recipient)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+function openInvite() {
+  if (!R.inviteIdentity?.isOwner) return openShare();
+  openSheet(`<div class="sheet__content">
+    <div><div class="kicker">${ic('users')}Invite</div><h2 class="sheet__title" id="sheetTitle">メンバーを招待</h2></div>
+    ${inviteForm()}
+  </div>`);
 }
-async function ensureShareForInvite() {
-  const created = !S.share;
-  if (created) {
-    // Preserve the existing synchronisation model and use a crypto-secure room code.
-    const alphabet = 'abcdefghjkmnpqrstuvwxyz23456789';
-    const bytes = crypto.getRandomValues(new Uint8Array(8));
-    S.share = { code: [...bytes].map(b => alphabet[b % alphabet.length]).join('') };
-    const now = Date.now();
-    for (const k of SHARE_FIELDS) S.fieldAt[k] = S.fieldAt[k] || now;
-    save();
-  }
-  await pushShare();
-  if (R.shareErr) {
-    if (created) { S.share = null; save(); }
-    throw new Error('共有プランを保存できませんでした');
-  }
-  return S.share.code;
+function inviteMailUrl(recipient, url) {
+  const subject = 'Park Navi に招待します';
+  const body = `Park Navi（ディズニーの当日ナビ）に招待しました。
+${url}
+このメールアドレスで、届く確認コード（PIN）を入力してログインしてください。`;
+  return `mailto:${encodeURIComponent(recipient)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 async function sendEmailInvite() {
   if (!R.inviteIdentity?.isOwner || R.inviteSending) return;
@@ -2350,45 +2651,23 @@ async function sendEmailInvite() {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return toast('メールアドレスを確認してください', 'error');
   R.inviteSending = true;
   try {
-    const roomCode = await ensureShareForInvite();
     const res = await fetch('/api/invite', {
       method: 'POST', cache: 'no-store', credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, roomCode })
+      body: JSON.stringify({ email })
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.ok) throw new Error(data.error === 'invite-configuration-missing'
-      ? '招待のサーバー設定が未完了です' : data.error === 'owner-room-mismatch'
-      ? '共有プランのコードが異なります。ページを再読み込みしてください' : '招待を登録できませんでした');
+      ? '招待のサーバー設定が未完了です' : '招待を登録できませんでした');
     R.inviteSending = false;
     R.pendingInvite = { email, url: location.origin + '/' };
-    openShare();
-    toast('アクセスを許可しました。次に招待リンクを送信してください', 'ok');
+    openInvite();
+    toast('登録しました。次に招待リンクを送ってください', 'ok');
   } catch (err) {
     toast(err.message || '招待に失敗しました', 'error');
   } finally {
     R.inviteSending = false;
   }
-}
-async function autoJoinAssignedRoom(code) {
-  if (!CODE_RE.test(code) || S.share?.code === code) return;
-  try {
-    const res = await fetch(`/api/share/${code}?${API_Q}`, { cache: 'no-store' });
-    const data = await res.json();
-    if (!res.ok || !data.ok) return;
-    S.share = { code };
-    S.shareAdopted = true;
-    save();
-    if (data.exists) applyDoc(data.doc, { quiet: true });
-    else {
-      const now = Date.now();
-      for (const k of SHARE_FIELDS) S.fieldAt[k] = S.fieldAt[k] || now;
-      await pushShare();
-    }
-    R.shareAt = Date.now(); R.shareErr = null;
-    renderAll();
-    toast('招待された共有プランに参加しました', 'ok');
-  } catch { /* try again next page load */ }
 }
 async function loadInviteIdentity() {
   if (R.inviteLoading) return;
@@ -2398,15 +2677,13 @@ async function loadInviteIdentity() {
     if (!res.ok) return;
     const info = await res.json();
     if (!info.ok) return;
-    R.inviteIdentity = info;
-    if (info.roomCode) await autoJoinAssignedRoom(info.roomCode);
-    if (!$('#sheet').hidden && $('#inviteEmailIn') == null && $('#sheetTitle')?.textContent?.includes('共有'))
-      openShare();
+    R.inviteIdentity = { isOwner: !!info.isOwner };
   } catch { /* local dev, offline, or temporary network outage */ }
   finally { R.inviteLoading = false; }
 }
 function startShare() {
   S.share = { code: newCode() };
+  rememberCode(S.share.code);
   // Stamp current settings so they become the shared starting point.
   const now = Date.now();
   for (const k of SHARE_FIELDS) S.fieldAt[k] = S.fieldAt[k] || now;
@@ -2421,7 +2698,7 @@ function startShare() {
 function joinShare(code) {
   code = String(code || '').trim().toLowerCase();
   if (!CODE_RE.test(code)) return toast('8文字の共有コードを入力してください', 'error');
-  S.share = { code }; save();
+  S.share = { code }; rememberCode(code); save();
   if (location.hash) history.replaceState(null, '', location.pathname);
   pullShare({ quiet: true }).then(() => {
     const err = R.shareErr;
@@ -2445,10 +2722,9 @@ function openShare() {
   if (S.share) {
     openSheet(`<div class="sheet__content">
       <div><div class="kicker">Share</div><h2 class="sheet__title" id="sheetTitle">プランを共有中</h2></div>
-      ${inviteForm()}
       <div class="sharecode"><span>共有コード</span><b class="num">${esc(S.share.code)}</b></div>
       <div class="btnrow"><button class="btn btn--primary" data-act="share-send">${ic('users')}リンクを送る</button><button class="btn" data-act="share-copy">コピー</button></div>
-      <p class="para muted" style="font-size:13px;margin:0">相手はリンクを開くか、設定の「2人で共有」でこのコードを入力すると参加できます。</p>
+      <p class="para muted" style="font-size:13px;margin:0">相手はリンクを開くか、設定の「プランを共有」でこのコードを入力すると参加できます。</p>
       <dl class="kv"><dt>状態</dt><dd>${esc(shareStatus())}</dd>
         <dt>共有する</dt><dd>乗った記録・順番・条件・ごはんとショー・手入力の待ち時間</dd>
         <dt>共有しない</dt><dd>現在地・テスト時刻・指定した開始時刻</dd></dl>
@@ -2458,12 +2734,11 @@ function openShare() {
   }
   openSheet(`<div class="sheet__content">
     <div><div class="kicker">Share</div><h2 class="sheet__title" id="sheetTitle">プランを共有する</h2></div>
-    ${inviteForm()}
-    <p class="para" style="margin:0">どちらかが「乗った」を押したり、順番・条件を変えると、もう1台のプランも自動で変わります（数十秒〜1分ほど）。</p>
-    <button class="btn btn--primary btn--block" data-act="share-start">${ic('users')}共有を始める（リンクを作る）</button>
-    <details class="more"><summary>共有コードで参加（従来方式）</summary><div style="margin-top:8px">
-    <div class="formrow"><input type="text" id="shareCodeIn" autocapitalize="off" autocomplete="off" spellcheck="false" maxlength="8" placeholder="8文字のコード" style="flex:1"><button class="btn btn--navy btn--sm" data-act="share-join">参加</button></div>
-    </div></details><p class="muted" style="font-size:12px;margin:0">保存するのはプランと記録だけで、位置情報は送りません。7日で自動削除。</p>
+    <p class="para" style="margin:0">共有コードを送った相手と同じプランを使えます。どちらかが「乗った」を押したり、順番・条件を変えると、もう1台も自動で変わります。</p>
+    <button class="btn btn--primary btn--block" data-act="share-start">${ic('users')}共有を始める（コードを作る）</button>
+    <div class="box"><b>共有コードで参加</b>
+    <div class="formrow" style="margin-top:8px"><input type="text" id="shareCodeIn" autocapitalize="off" autocomplete="off" spellcheck="false" maxlength="8" placeholder="8文字のコード" style="flex:1;min-width:0"><button class="btn btn--navy btn--sm" data-act="share-join">参加</button></div></div>
+    <p class="muted" style="font-size:12px;margin:0">保存するのはプランと記録だけで、位置情報は送りません。7日で自動削除。</p>
   </div>`);
 }
 function offerJoinFromLink() {
@@ -2522,9 +2797,10 @@ async function renderMap() {
       rides: ATTRACTIONS.map((a) => ({ a, pos: coordsOf(a.id), w: waitInfo(a), done: !!S.done[a.id] })),
       food: RESTAURANTS.filter((x) => !R.mapFood || R.mapFood.ids.includes(x.id)).map((x) => ({ r: x, pos: coordsOf(x.id) })),
       shows: SHOWS.map((s) => ({ s, pos: s.venuePos })),
-      nextId: R.mapFood?.one || R.mapWc ? null : r.primary?.a?.id || null,
-      nextPos: R.mapFood?.one || R.mapWc ? null : (r.primary?.type === 'ride' ? null : (r.primary?.anchor || r.primary?.next)?.pos || null),
-      target: R.mapFood?.one ? { id: R.mapFood.ids[0] } : null,
+      xshows: otherShows().map((x) => ({ ...x, timesText: x.times.map(clock).join(' / ') })),
+      nextId: R.mapFood?.one || R.mapWc || R.mapShow ? null : r.primary?.a?.id || null,
+      nextPos: R.mapFood?.one || R.mapWc || R.mapShow ? null : (r.primary?.type === 'ride' ? null : (r.primary?.anchor || r.primary?.next)?.pos || null),
+      target: R.mapFood?.one ? { id: R.mapFood.ids[0] } : R.mapShow ? { id: R.mapShow } : null,
       icons: { food: ic('food'), show: ic('show'), wc: ic('wc') },
       restrooms: restrooms(), wcTarget: R.mapWc || null,
       coordsSrc: (() => { const n = Object.keys(R.meta?.coords || {}).filter((k) => attractionById[k]).length; return n >= 15 ? 'api' : n > 0 ? 'partial' : 'approx'; })(),
@@ -2535,8 +2811,17 @@ async function renderMap() {
       const g = R.gpsPos && S.gps ? R.gpsPos : null;
       setTimeout(() => mapMod.fitTo([g, coordsOf(R.mapFood.ids[0])]), 220);
     }
+    if (R.mapShow && !R.mapShowFitted) {
+      R.mapShowFitted = R.mapShow;
+      const x = otherShowById(R.mapShow);
+      const g = R.gpsPos && S.gps ? R.gpsPos : null;
+      if (x?.pos) setTimeout(() => mapMod.fitTo([g, x.pos]), 220);
+    }
     let fc = el.querySelector('#mapFoodChip');
-    if (R.mapFood) {
+    if (R.mapShow && !R.mapFood) {
+      if (!fc) { fc = document.createElement('button'); fc.id = 'mapFoodChip'; fc.className = 'chip is-active'; fc.dataset.act = 'map-food-clear'; el.querySelector('.mapbar').prepend(fc); }
+      fc.innerHTML = `${esc(otherShowById(R.mapShow)?.name || 'ショー')} ${ic('x')}`;
+    } else if (R.mapFood) {
       if (!fc) { fc = document.createElement('button'); fc.id = 'mapFoodChip'; fc.className = 'chip is-active'; fc.dataset.act = 'map-food-clear'; el.querySelector('.mapbar').prepend(fc); }
       fc.innerHTML = R.mapFood.one ? `${esc(R.mapFood.q)} ${ic('x')}` : `「${esc(R.mapFood.q)}」の店 ${R.mapFood.ids.length}件 ${ic('x')}`;
     } else fc?.remove();
@@ -2550,8 +2835,9 @@ async function renderMap() {
     }
     const p = r.primary;
     const shop = R.mapFood?.one ? restaurantById[R.mapFood.ids[0]] : null;
+    const xs = R.mapShow ? otherShowById(R.mapShow) : null;
     const wc = R.mapWc ? restrooms().find((w) => w.id === R.mapWc) : null;
-    const dest = wc ? { name: 'トイレ', pos: wc, open: 'data-act="map-wc-clear"', k: '近くのトイレ', note: wc.approx ? ' · 概略' : '', img: `<span class="mapdest__wc">${ic('wc')}</span>` } : shop ? { name: shop.ja, pos: coordsOf(shop.id), open: `data-open-food="${shop.id}"`, k: '行き先', img: foodImg(shop) } : p?.type === 'ride' ? { name: p.a.short, pos: coordsOf(p.a.id), wait: p.wait, open: `data-open="${p.a.id}"`, img: rideImg(p.a) } : p?.type === 'anchor' || (p?.type === 'free' && p.next) ? (() => { const x = p.anchor || p.next; const rest = x.restaurant && restaurantById[x.restaurant]; const sh = x.show && showById[x.show]; return { name: x.title + (x.kind === 'meal' && x.place ? '・' + x.place : ''), pos: x.pos, open: x.kind === 'show' && x.show ? `data-open-show="${x.show}"` : `data-anchor-edit="${x.id}"`, k: p.type === 'free' && r.leaveBy ? `次の予定 · ${clock(r.leaveBy)}に移動` : null, img: rest ? foodImg(rest) : sh ? showImg(sh) : '' }; })() : null;
+    const dest = wc ? { name: 'トイレ', pos: wc, open: 'data-act="map-wc-clear"', k: '近くのトイレ', note: wc.approx ? ' · 概略' : '', img: `<span class="mapdest__wc">${ic('wc')}</span>` } : xs?.pos ? { name: xs.name, pos: xs.pos, open: `data-open-xshow="${esc(xs.id)}"`, k: `ショー · ${xs.times.map(clock).join(' / ')}`, note: '', img: poster(xs.name, '#7a5bd6') } : shop ? { name: shop.ja, pos: coordsOf(shop.id), open: `data-open-food="${shop.id}"`, k: '行き先', img: foodImg(shop) } : p?.type === 'ride' ? { name: p.a.short, pos: coordsOf(p.a.id), wait: p.wait, open: `data-open="${p.a.id}"`, img: rideImg(p.a) } : p?.type === 'anchor' || (p?.type === 'free' && p.next) ? (() => { const x = p.anchor || p.next; const rest = x.restaurant && restaurantById[x.restaurant]; const sh = x.show && showById[x.show]; return { name: x.title + (x.kind === 'meal' && x.place ? '・' + x.place : ''), pos: x.pos, open: x.kind === 'show' && x.show ? `data-open-show="${x.show}"` : `data-anchor-edit="${x.id}"`, k: p.type === 'free' && r.leaveBy ? `次の予定 · ${clock(r.leaveBy)}に移動` : null, img: rest ? foodImg(rest) : sh ? showImg(sh) : '' }; })() : null;
     const me = position();
     $('#mapcard').hidden = !dest;
     if (dest) {
@@ -2690,6 +2976,7 @@ document.addEventListener('click', async (e) => {
   if (d.openFood) return openFood(d.openFood);
   if (d.openShow) return openShow(d.openShow);
   if (d.openEnt) return openEntertainment(d.openEnt);
+  if (d.rec) return openRecord(d.rec);
   if (d.filterKind && R.filterDraft) { R.filterDraft.kind=d.filterKind; return openExploreFilters(); }
   if (d.done) return markDone(d.done);
   if (d.undo) return undoDone(d.undo);
@@ -2728,11 +3015,14 @@ document.addEventListener('click', async (e) => {
   if (d.ff) { S.foodFilter = d.ff; save(); return renderExplore(); }
   if (d.foodMap) {
     const r = restaurantById[d.foodMap];
-    closeSheet(); S.mapFilter = 'food'; R.mapFood = { q: r.ja.split('・')[0], ids: [r.id], one: true }; save();
+    closeSheet(); S.mapFilter = 'food'; R.mapShow = null; R.mapFood = { q: r.ja.split('・')[0], ids: [r.id], one: true }; save();
     if (!S.gps) gpsIfGranted();
     return go('map');
   }
   if (d.rq !== undefined) { S.rideQ = ''; save(); return renderExplore(); }
+  if (d.sq !== undefined) { S.showQ = ''; save(); return renderExplore(); }
+  if (d.openXshow) return openOtherShow(d.openXshow);
+  if (d.xshowMap) { closeSheet(); S.mapFilter = 'shows'; R.mapFood = null; R.mapWc = null; R.mapShow = d.xshowMap; R.mapShowFitted = null; save(); return go('map'); }
   if (d.fq !== undefined) { S.foodQ = S.foodQ === d.fq ? '' : d.fq; save(); return renderExplore(); }
   if (d.wc) { R.mapWc = d.wc; mapMod?.closePopup?.(); return renderMap(); }
   if (d.mf) { S.mapFilter = d.mf; save(); document.querySelectorAll('[data-mf]').forEach((b) => b.classList.toggle('is-active', b.dataset.mf === d.mf)); return renderMap(); }
@@ -2843,8 +3133,8 @@ document.addEventListener('click', async (e) => {
     case 'share-open': case 'qa-share': return openShare();
     case 'qa-day': return openDaySettings();
     case 'qa-cond': R.draft = null; return openPlanBuilder();
-    case 'food-map': S.mapFilter = 'food'; R.mapFood = { q: S.foodQ, ids: R.foodHits || [] }; save(); return go('map');
-    case 'map-food-clear': R.mapFood = null; return renderMap();
+    case 'food-map': S.mapFilter = 'food'; R.mapShow = null; R.mapFood = { q: S.foodQ, ids: R.foodHits || [] }; save(); return go('map');
+    case 'map-food-clear': R.mapFood = null; R.mapShow = null; R.mapShowFitted = null; return renderMap();
     case 'invite-email': return sendEmailInvite();
     case 'invite-send-mail': {
       const invite = R.pendingInvite;
@@ -2859,8 +3149,8 @@ document.addEventListener('click', async (e) => {
       if (navigator.share) {
         try {
           await navigator.share({
-            title: 'Park Naviのプランに招待',
-            text: `${invite.email} でログインし、メールのPINで認証してください。プランは自動共有されます。`,
+            title: 'Park Navi に招待',
+            text: `${invite.email} でログインし、メールに届く確認コード（PIN）を入力してください。`,
             url: invite.url,
           });
         } catch { /* user cancelled or share unavailable */ }
@@ -2927,11 +3217,12 @@ document.addEventListener('click', async (e) => {
     case 'suggest-off': S.suggestOff = R.suggest?.sig; R.suggest = null; R.suggestOpen = false; save(); return renderAll();
     case 'sim-set': { const m = parseHHMM($('#simAt').value); S.sim = { base: m, setAt: Date.now() }; buildPlan('テスト時刻'); closeSheet(); renderAll(); return toast(`${hhmm(m)} として表示中`, 'ok'); }
     case 'sim-off': S.sim = null; buildPlan('テスト時刻'); closeSheet(); renderAll(); return toast('現在時刻に戻しました');
-    case 'reset':
-      if (!confirm('済みの記録とプランの条件をすべてリセットしますか？')) return;
-      { const cfg = S.cfg; Object.keys(S).forEach((k) => delete S[k]); Object.assign(S, structuredClone(defaults), { cfg, shareAdopted: true }); }
-      snap = null; save(); closeSheet(); renderAll();
-      return toast('リセットしました（2人の共有もやめました・日程はそのまま）');
+    case 'reset': return openResetConfirm();
+    case 'reset-do': return doReset();
+    case 'records-open': return openRecords();
+    case 'rec-back': return openRecords();
+    case 'rec-pdf': return savePdf();
+    case 'invite-open': return openInvite();
     case 'map-me':
       if (!S.gps || !R.gpsPos) return startGPS(true);
       mapMod?.locate(R.gpsPos);
@@ -2949,6 +3240,7 @@ document.addEventListener('click', async (e) => {
 });
 document.addEventListener('input', (e) => {
   if (e.target.id === 'rideQ') { S.rideQ = e.target.value; save(); return renderRideList(); }
+  if (e.target.id === 'showQ') { S.showQ = e.target.value; save(); const box = $('#showList'); if (box) box.innerHTML = showListHtml(); return; }
   if (e.target.id !== 'foodQ') return;
   S.foodQ = e.target.value; save();
   const box = $('#foodList');
@@ -3001,6 +3293,9 @@ addEventListener('resize', measure);
 go(S.tab || 'home');
 renderStatus();
 loadInviteIdentity();
+if (S.share?.code) rememberCode(S.share.code);
+// Back up / recover day records quietly a few seconds after launch.
+setTimeout(() => { loadRecords().catch(() => {}); }, 4000);
 fetchMeta();
 fetchPhotos();
 const shouldPoll = () => { const m = nowMin(); return m >= hours().open - 90 && m <= hours().close + 30; };

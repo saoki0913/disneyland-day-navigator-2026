@@ -120,3 +120,16 @@ test('restrooms from OpenStreetMap: inside the park only, public only, duplicate
   assert.equal(out[1].baby, true);
   for (const id of Object.keys(PARKS)) assert.ok(PARKS[id].RESTROOMS.length >= 8, `${id} fallback restrooms`);
 });
+
+test('meta: places of the park\'s other shows (not in the catalog) for the map', async () => {
+  const { normalizeShowPlaces } = await import('../lib/server.js');
+  const json = { children: [
+    { entityType: 'SHOW', name: 'Main Street Philharmonic', location: { latitude: 33.8105, longitude: -117.9190 } },
+    { entityType: 'SHOW', name: 'Fantasmic!', location: { latitude: 33.812, longitude: -117.9219 } }, // catalog show → not repeated
+    { entityType: 'SHOW', name: 'Far Away Show', location: { latitude: 40.0, longitude: -100.0 } },   // outside the park
+    { entityType: 'ATTRACTION', name: 'Space Mountain', location: { latitude: 33.811, longitude: -117.917 } },
+  ] };
+  const out = normalizeShowPlaces(json);
+  assert.deepEqual(Object.keys(out), ['mainstreetphilharmonic']);
+  assert.equal(out.mainstreetphilharmonic.name, 'Main Street Philharmonic');
+});

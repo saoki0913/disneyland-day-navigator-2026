@@ -182,15 +182,18 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     const top = await page.evaluate(() => document.querySelector('.tl--plan > li[data-ride]').getBoundingClientRect().top);
     // artwork header (~120px) + the テスト時刻 banner shown in these tests: still in the top half of a 667px screen
     assert.ok(top < 300, `plan timeline is visible right away (first ride at ${top}px)`);
-    const replanY = await page.evaluate(() => document.querySelector('.replan').getBoundingClientRect().top);
+    // no separate re-plan panel / bottom 条件 button / share card: 条件 at the top + the time stamp button do it
+    assert.equal(await page.locator('#view-plan .replan, #view-plan .sharecard').count(), 0, 'no 作り直す panel or share card');
+    assert.equal(await page.locator('#view-plan .condsum [data-act="plan-edit"]').count(), 0, 'no bottom 条件を変えて… button');
+    assert.equal(await page.evaluate(() => document.querySelector('#view-plan details.condsum').open), false, 'conditions are folded');
+    const condY = await page.evaluate(() => document.querySelector('.condsum').getBoundingClientRect().top);
     const tlBottom = await page.evaluate(() => document.querySelector('.tl--plan').getBoundingClientRect().bottom);
-    assert.ok(replanY > tlBottom, 're-plan panel is below the timeline');
+    assert.ok(condY > tlBottom, 'folded conditions are below the timeline');
     // no sentences: a time stamp (= re-plan button) and where you are
     assert.match(await page.textContent('.tl__item--now .tl__upd'), /^\s*\d{1,2}:\d{2}\s*$/);
     assert.equal(await page.locator('.tl__item--now [data-act="pick-land"]').count(), 1, 'position chip');
     assert.ok((await page.textContent('.tl__item--now')).trim().length <= 30, 'no explanatory text in the plan header');
     assert.equal(await page.locator('.replan__hint, .replan__uses').count(), 0);
-    assert.match(await page.textContent('.replan [data-act="replan"]'), /作り直す/);
     assert.equal(await page.locator('.tl--plan .tl__grip').count(), 0, 'no decorative icon or handle in normal plan');
     assert.equal(await page.locator('.tl--plan .tl__orderbtns').count(), 0, 'no arrow controls');
   });
@@ -221,7 +224,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await tab(page, 'home');
     assert.equal(await page.getAttribute('#actionbar [data-done]', 'data-done'), target, 'home follows the custom order');
     await tab(page, 'plan');
-    await page.click('.replan [data-act="replan"]'); await accept(page); await page.waitForTimeout(500);
+    await page.click('.tl__item--now [data-act="replan"]'); await accept(page); await page.waitForTimeout(500);
     assert.equal(await page.evaluate(() => window.__dlnavi.S.order), null, 'order reset');
     assert.match(await page.textContent('#toast'), /反映しました|最適です/);
     assert.equal(await page.locator('.tl__item--now.is-fresh').count(), 1, 'fresh stamp');
@@ -246,11 +249,11 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.click(`[data-lock="${target}"]`); await page.waitForTimeout(150);
     assert.match(await page.textContent('#toast'), /固定しました/);
     assert.equal(await page.locator(`[data-lock="${target}"].is-on`).count(), 1);
-    await page.click('.replan [data-act="replan"]'); await accept(page); await page.waitForTimeout(600);
+    await page.click('.tl__item--now [data-act="replan"]'); await accept(page); await page.waitForTimeout(600);
     assert.equal(await seqIdx(), idx, 'locked ride stays put after 更新');
     await page.screenshot({ path: `${SHOTS}/03-plan-lock.png`, fullPage: true });
     await page.click(`[data-lock="${target}"]`); await page.waitForTimeout(150);
-    await page.click('.replan [data-act="replan"]'); await accept(page); await page.waitForTimeout(600);
+    await page.click('.tl__item--now [data-act="replan"]'); await accept(page); await page.waitForTimeout(600);
   });
   await step('Plan stays put on its own; changes only on 更新', async () => {
     await tab(page, 'plan');
@@ -500,7 +503,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.equal((+m[3] * 60 + +m[4]) - (+m[1] * 60 + +m[2]), 90, 'meal lasts 90 min');
     await page.locator('.tl__item--meal [data-anchor-edit]').first().click(); await page.waitForTimeout(200);
     await page.click('[data-meal-reset]'); await page.waitForTimeout(150);
-    await page.locator('.replan [data-act="replan"]').click(); await accept(page); await page.waitForTimeout(600); // back to おすすめ順
+    await page.locator('.tl__item--now [data-act="replan"]').click(); await accept(page); await page.waitForTimeout(600); // back to おすすめ順
   });
   await step('Meal can be changed visually (±15 min stepper + restaurant cards)', async () => {
     await tab(page, 'plan');
@@ -607,7 +610,7 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.screenshot({ path: `${SHOTS}/03-plan-moved.png` });
     await page.click('#toastAct'); await page.waitForTimeout(200); // 元に戻す
     assert.equal(await page.evaluate(() => window.__dlnavi.S.planSnap.seq.join()), before, 'undo');
-    await page.click('.replan [data-act="replan"]'); await accept(page); await page.waitForTimeout(600);
+    await page.click('.tl__item--now [data-act="replan"]'); await accept(page); await page.waitForTimeout(600);
   });
   await step('Position chip: pick the area you are in from the plan header', async () => {
     await tab(page, 'plan');
@@ -722,11 +725,13 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     await page.click('#actionbar [data-done]');
     await tab(page, 'plan');
     const done = await page.locator('.tl--done .tl__item').count();
-    await page.fill('#planTimeInput', '15:30');
-    await page.click('[data-act="plan-time-set"]'); await accept(page);
+    await page.click('[data-act="plan-edit"]');
+    await page.fill('[data-b-start]', '15:30');
+    await page.locator('[data-b-start]').dispatchEvent('change');
+    await page.click('[data-act="plan-apply"]'); await accept(page);
     assert.equal(await page.evaluate(() => window.__dlnavi.S.planTime.base), 930);
     assert.equal(await page.locator('.tl--done .tl__item').count(), done);
-    await page.reload(); await page.waitForSelector('#planTimeInput');
+    await page.reload(); await page.waitForSelector('.tl--plan');
     assert.equal(await page.evaluate(() => window.__dlnavi.S.planTime.base), 930);
     await page.click('[data-act="plan-edit"]');
     await page.fill('[data-b-start]', '16:15');
@@ -977,7 +982,7 @@ for (const [t, expect, file] of [['07:00', /開園/, '11-preopen'], ['11:28', /�
     await tab(page, 'plan');
     const s0 = await seq();
     await page.evaluate(() => { window.__dlnavi.S.sim.base += 150; });
-    await page.click('.replan [data-act="replan"]'); await page.waitForTimeout(900);
+    await page.click('.tl__item--now [data-act="replan"]'); await page.waitForTimeout(900);
     if (await page.locator('#sheet [data-act="proposal-apply"]').count()) {
       assert.match(await page.textContent('#sheet'), /作り直し案/);
       assert.ok(await page.locator('#sheet .pv__row').count() >= 1, 'compact before → after list');
@@ -985,7 +990,7 @@ for (const [t, expect, file] of [['07:00', /開園/, '11-preopen'], ['11:28', /�
       await page.screenshot({ path: `${SHOTS}/19-proposal.png` });
       await page.click('#sheet [data-act="proposal-cancel"]'); await page.waitForTimeout(250);
       assert.equal(await seq(), s0, 'やめる keeps the plan');
-      await page.click('.replan [data-act="replan"]'); await page.waitForTimeout(900);
+      await page.click('.tl__item--now [data-act="replan"]'); await page.waitForTimeout(900);
       await page.click('#sheet [data-act="proposal-apply"]'); await page.waitForTimeout(300);
       assert.notEqual(await seq(), s0, '反映 applies it');
     } else {
@@ -1145,31 +1150,138 @@ for (const [t, expect, file] of [['07:00', /開園/, '11-preopen'], ['11:28', /�
     accessUpdates++;
     const body = r.request().postDataJSON();
     assert.equal(body.email, 'partner@example.com');
+    assert.equal(body.roomCode, undefined, 'no plan is attached to an invitation');
     return r.fulfill({ json: { ok: true, email: body.email, joinUrl: base + '/' } });
   });
   await page.reload(); await page.waitForSelector('.next__title'); await page.waitForTimeout(350);
-  await step('Email invitation: show explicit send controls after Access registration, without auto-opening Mail', async () => {
+  await step('Email invitation: only lets the person into the app (no plan sharing), with explicit send controls', async () => {
     await page.click('#settingsBtn');
-    await page.click('[data-act="share-open"]');
+    await page.click('[data-act="invite-open"]');
     await page.fill('#inviteEmailIn', 'partner@example.com');
     await page.click('[data-act="invite-email"]');
     await page.waitForSelector('[data-act="invite-send-mail"]', { timeout: 12000 });
     assert.equal(accessUpdates, 1);
-    assert.match(await page.textContent('#sheet'), /アクセス許可済み・招待リンクは未送信/);
-    assert.match(await page.textContent('#sheet'), /partner@example.com/);
+    assert.match(await page.textContent('#sheet'), /partner@example.com を登録しました/);
+    assert.match(await page.textContent('#sheet'), /招待だけではプランは共有されません/);
     assert.equal(await page.locator('[data-act="invite-share-link"]').count(), 1);
     assert.equal(await page.locator('[data-act="invite-copy-link"]').count(), 1);
+    assert.equal(await page.evaluate(() => window.__dlnavi.S.share), null, 'inviting does not start a shared plan');
     assert.match(page.url(), /^http/, 'the app stays open rather than trying mailto after await');
     await noHScroll(page);
   });
-  await step('Email invitation: owner can reopen the sharing sheet and see send options', async () => {
+  await step('Email invitation: owner can reopen the invite sheet; plan sharing is a separate share-code sheet', async () => {
+    await page.click('.sheet__close');
+    await page.click('#settingsBtn');
+    await page.click('[data-act="invite-open"]');
+    assert.equal(await page.locator('[data-act="invite-send-mail"]').count(), 1);
+    assert.equal(await page.locator('[data-act="invite-share-link"]').count(), 1);
     await page.click('.sheet__close');
     await page.click('#settingsBtn');
     await page.click('[data-act="share-open"]');
-    assert.equal(await page.locator('[data-act="invite-send-mail"]').count(), 1);
-    assert.equal(await page.locator('[data-act="invite-share-link"]').count(), 1);
+    assert.equal(await page.locator('#inviteEmailIn').count(), 0, 'no invite form in the share sheet');
+    assert.equal(await page.locator('#shareCodeIn').count(), 1, 'join with a share code');
   });
   await step('Email invitation: no unexpected browser errors', async () => assert.deepEqual(errors, []));
+  await ctx.close();
+}
+
+// ---------- H: day records (過去の記録・PDF), reset with confirmation, other shows, map edges ----------
+{
+  const { ctx, page, errors } = await newCtx();
+  const posted = [];
+  await ctx.route('**/api/records', (r) => {
+    if (r.request().method() === 'POST') { const rec = r.request().postDataJSON().record; posted.push(rec); return r.fulfill({ json: { ok: true, record: rec } }); }
+    return r.fulfill({ json: { ok: true, records: [{ v: 1, park: 'dl', date: '2026-10-30', savedAt: 1, items: [{ id: 'indy', name: 'インディ・ジョーンズ', kind: 'ride', min: 560, at: null }, { id: 'show:fantasmic', name: 'ファンタズミック！', kind: 'show', min: 1350, at: null }] }] } });
+  });
+  await step('Records: list shows the server day + today; a day opens with its timeline and a PDF is made', async () => {
+    await page.click('#actionbar [data-done]'); await page.waitForTimeout(200);
+    await page.click('#settingsBtn');
+    await page.click('[data-act="records-open"]');
+    await page.waitForSelector('[data-rec="dl:2026-10-30"]', { timeout: 10000 });
+    assert.equal(await page.locator('[data-rec$=":live"]').count(), 1, "today's record (記録中)");
+    await page.click('[data-rec="dl:2026-10-30"]');
+    await page.waitForSelector('.rec__tl');
+    assert.match(await page.textContent('.rec__tl'), /インディ・ジョーンズ[\s\S]*ファンタズミック/);
+    await page.waitForFunction(() => window.__dlnavi.R.pdf && !window.__dlnavi.R.pdf.busy, null, { timeout: 15000 });
+    const pdf = await page.evaluate(async () => { const b = window.__dlnavi.R.pdf.blob; const t = new Uint8Array(await b.arrayBuffer()); return { size: b.size, head: String.fromCharCode(...t.slice(0, 8)), type: b.type }; });
+    assert.equal(pdf.head, '%PDF-1.4');
+    assert.equal(pdf.type, 'application/pdf');
+    assert.ok(pdf.size > 20000, `a designed page image is embedded (${pdf.size} bytes)`);
+    await page.screenshot({ path: `${SHOTS}/20-record.png` });
+    await noHScroll(page);
+  });
+  await step('Reset: asks in a modal first; やめる keeps everything', async () => {
+    await page.click('.sheet__close');
+    await page.click('#settingsBtn');
+    await page.click('[data-act="reset"]');
+    await page.waitForSelector('[data-act="reset-do"]');
+    assert.match(await page.textContent('#sheet'), /過去の記録」に保存/);
+    await page.screenshot({ path: `${SHOTS}/21-reset-modal.png` });
+    await page.click('#sheet .btnrow [data-close]'); await page.waitForTimeout(150);
+    assert.ok(Object.keys(await page.evaluate(() => window.__dlnavi.S.done)).length >= 1, 'nothing reset on やめる');
+  });
+  await step('Reset: リセットする archives the day (phone + server) and starts a clean new day', async () => {
+    posted.length = 0;
+    await page.click('#settingsBtn');
+    await page.click('[data-act="reset"]');
+    await page.click('[data-act="reset-do"]'); await page.waitForTimeout(600);
+    assert.deepEqual(await page.evaluate(() => window.__dlnavi.S.done), {});
+    assert.ok(posted.some((r) => r.park === 'dl' && r.items.length >= 1), 'the day was sent to the server backup');
+    const logs = await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('dlnavi-1031-v1:log:')));
+    assert.ok(logs.length >= 1, 'and kept on this phone');
+    assert.equal(await page.locator('.next__title').count(), 1, 'the app works as a fresh day');
+  });
+  await step("Shows: the park's other shows are listed and searchable in 探す › ショー, with a detail sheet", async () => {
+    await tab(page, 'explore');
+    await page.click('[data-xtab="shows"]'); await page.waitForTimeout(150);
+    assert.match(await page.textContent('#showList'), /Main Street Philharmonic/);
+    await page.fill('#showQ', 'philharmonic'); await page.waitForTimeout(150);
+    const txt = await page.textContent('#showList');
+    assert.match(txt, /Main Street Philharmonic/);
+    assert.doesNotMatch(txt, /ファンタズミック/);
+    await page.fill('#showQ', 'ファンタズミック'); await page.waitForTimeout(150);
+    assert.match(await page.textContent('#showList'), /ファンタズミック/);
+    await page.fill('#showQ', 'philharmonic'); await page.waitForTimeout(150);
+    await page.click('[data-open-xshow]');
+    await page.waitForSelector('#sheet:not([hidden]) .times');
+    assert.match(await page.textContent('#sheetTitle'), /Main Street Philharmonic/);
+    await page.click('.sheet__close');
+    await page.fill('#showQ', ''); await page.dispatchEvent('#showQ', 'input');
+  });
+  await step('Map: square corners and no gap under the map (the layer runs past the bottom edge)', async () => {
+    await tab(page, 'map'); await page.waitForTimeout(600);
+    const m = await page.evaluate(() => { const w = document.querySelector('.mapwrap'); const cs = getComputedStyle(w); const r = w.getBoundingClientRect(); return { radius: cs.borderTopLeftRadius, bottom: r.bottom, h: innerHeight }; });
+    assert.equal(m.radius, '0px');
+    assert.ok(m.bottom >= m.h, `map reaches the screen bottom (${m.bottom} ≥ ${m.h})`);
+    const tb = await page.evaluate(() => document.querySelector('.tabbar').getBoundingClientRect().top);
+    const card = await page.evaluate(() => { const c = document.querySelector('#mapcard'); return c.hidden ? null : c.getBoundingClientRect().bottom; });
+    if (card != null) assert.ok(card <= tb, 'the destination card sits above the tab bar');
+  });
+  await step('Records / shows / map: no JS errors', async () => assert.deepEqual(errors, []));
+  await ctx.close();
+}
+// ---------- I: every common phone size: no horizontal overflow, nothing hidden behind the tab bar ----------
+for (const [w, h] of [[320, 568], [360, 780], [390, 844], [393, 852], [414, 896], [430, 932]]) {
+  const ctx = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'ja-JP', timezoneId: 'America/Los_Angeles' });
+  await ctx.route('**/api/live*', (r) => r.fulfill({ json: live() }));
+  await ctx.route('**/api/meta*', (r) => r.fulfill({ json: meta }));
+  await ctx.route('**/api/photos*', (r) => r.fulfill({ status: 502, json: { ok: false } }));
+  await ctx.route('**/api/restrooms*', (r) => r.fulfill({ status: 502, json: { ok: false } }));
+  await ctx.route(/tile\.openstreetmap\.org/, (r) => r.abort());
+  await ctx.addInitScript(() => { localStorage.setItem('dlnavi-park', 'dl'); if (!localStorage.getItem('dlnavi-1031-v1')) localStorage.setItem('dlnavi-1031-v1', JSON.stringify({ sim: { base: 600, setAt: Date.now() } })); });
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(base + '/'); await page.waitForSelector('.next__title');
+  await step(`Size ${w}×${h}: all tabs and the condition sheet fit the width`, async () => {
+    for (const t of ['home', 'plan', 'explore', 'map']) { await tab(page, t); if (t !== 'map') await noHScroll(page); }
+    await tab(page, 'home');
+    await page.click('[data-act="qa-cond"]'); await page.waitForTimeout(250);
+    const r = await page.evaluate(() => { const f = document.querySelector('.builder__foot, .builder [data-act="plan-apply"]').getBoundingClientRect(); return { bottom: f.bottom, h: innerHeight }; });
+    assert.ok(r.bottom <= r.h + 1, `the 作る button is on screen (${r.bottom} ≤ ${r.h})`);
+    await noHScroll(page);
+    assert.deepEqual(errors, []);
+  });
   await ctx.close();
 }
 

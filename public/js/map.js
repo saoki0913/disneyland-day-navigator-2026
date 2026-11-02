@@ -11,7 +11,14 @@ let line = null;
 let busy = false, busyAt = 0, pending = null;
 // Set per park by the caller (opts.bounds); Disneyland Park as the fallback.
 let PARK_BOUNDS = [[33.8095, -117.9248], [33.8168, -117.9160]];
-const FIT_PAD = { paddingTopLeft: [0, 50], paddingBottomRight: [0, 70] };
+// The map layer runs HIDDEN px past the bottom of the screen (see .mapwrap in app.css), so every
+// fit / centre keeps that strip out of the visible area.
+const HIDDEN = 120;
+const FIT_PAD = { paddingTopLeft: [0, 50], paddingBottomRight: [0, 70 + HIDDEN] };
+function centerOn(ll, z) {
+  const p = map.project(ll, z).add([0, HIDDEN / 2]);
+  map.setView(map.unproject(p, z), z);
+}
 
 function loadLeaflet() {
   if (window.L) return Promise.resolve(window.L);
@@ -50,7 +57,7 @@ function ensureMap(el) {
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   }).addTo(map);
-  map.fitBounds(PARK_BOUNDS);
+  map.fitBounds(PARK_BOUNDS, FIT_PAD);
   map.on('movestart zoomstart', () => { busy = true; busyAt = Date.now(); });
   map.on('moveend zoomend', () => {
     busy = false;
@@ -126,6 +133,14 @@ function apply(opts) {
       upsert(seen, 's:' + s.id, pos, `<div class="mk mk--show">${opts.icons?.show || ''}</div>`, 24,
         `<b>${esc(s.ja)}</b><br>${esc(s.venue)}<br><button class="linkbtn" data-open-show="${s.id}">くわしく</button>`, { title: s.short });
     }
+    // the park's other shows (from the live schedule) that have a known place
+    for (const x of opts.xshows || []) {
+      if (!valid(x.pos)) continue;
+      const isT = opts.target?.id === x.id;
+      if (isT) nextPos = x.pos;
+      upsert(seen, 'x:' + x.id, x.pos, `<div class="mk mk--show ${isT ? 'is-target' : ''}">${opts.icons?.show || ''}</div>`, isT ? 32 : 24,
+        `<b>${esc(x.name)}</b><br>${esc(x.timesText || '')}<br><button class="linkbtn" data-open-xshow="${esc(x.id)}">くわしく</button>`, { title: x.name, z: isT ? 1000 : 0 });
+    }
   }
   // Restrooms: always on (small, quiet pins) — larger in the トイレ filter; the chosen one is highlighted.
   for (const w of opts.restrooms || []) {
@@ -163,13 +178,13 @@ export function setMe(g) {
     dot: L.marker(ll, { icon: L.divIcon({ className: '', html: '<div class="mk mk--me"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }), zIndexOffset: 2000, title: '現在地', keyboard: false }).addTo(map),
   };
 }
-export function locate(g) { if (map && valid(g)) map.setView([g.lat, g.lon], Math.max(map.getZoom(), 17.5)); }
+export function locate(g) { if (map && valid(g)) centerOn([g.lat, g.lon], Math.max(map.getZoom(), 17.5)); }
 // Show every given point (e.g. me + the shop) with room for the top chips and bottom card.
 export function fitTo(points) {
   const pts = points.filter(valid).map((p) => [p.lat, p.lon]);
   if (!map || !pts.length) return;
-  if (pts.length === 1) return map.setView(pts[0], Math.max(map.getZoom(), 17));
-  map.fitBounds(pts, { paddingTopLeft: [40, 70], paddingBottomRight: [60, 110], maxZoom: 18 });
+  if (pts.length === 1) return centerOn(pts[0], Math.max(map.getZoom(), 17));
+  map.fitBounds(pts, { paddingTopLeft: [40, 70], paddingBottomRight: [60, 110 + HIDDEN], maxZoom: 18 });
 }
 export function fit() { if (map) map.fitBounds(PARK_BOUNDS, FIT_PAD); }
 export function closePopup() { if (map) map.closePopup(); }
