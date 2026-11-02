@@ -996,7 +996,7 @@ function renderLocRow(pos) {
     <button class="btn btn--sm" data-act="pick-land">エリア</button></div>`;
 }
 function footer() {
-  return `<p class="footer">非公式の個人用ナビ · 待ち時間 ThemeParks.wiki / Queue-Times.com</p>`;
+  return `<p class="footer">非公式・Disney等の運営元とは無関係 · 待ち時間 <a href="https://www.themeparks.wiki/" target="_blank" rel="noopener noreferrer">Powered by ThemeParks.wiki</a> / <a href="https://queue-times.com/" target="_blank" rel="noopener noreferrer">Powered by Queue-Times.com</a></p>`;
 }
 
 // =====================================================================
