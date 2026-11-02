@@ -830,6 +830,46 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
   await ctx.close();
 }
 
+// ---------- B6: the same ride more than once (visit counts) ----------
+{
+  const { ctx, page, errors } = await newCtx();
+  const S = () => page.evaluate(() => { const s = window.__dlnavi.S; return { seq: s.planSnap?.seq || [], unmet: s.planSnap?.repeatUnmet || [], reps: s.prefs.repeats || {}, done: s.done }; });
+  await step('Repeat: a ride already ridden can be added again from its sheet (2回目 in the plan)', async () => {
+    const first = await page.getAttribute('.next [data-done], [data-done]', 'data-done');
+    await page.click(`[data-done="${first}"]`); await page.waitForTimeout(400);
+    await tab(page, 'explore');
+    await page.locator(`#view-explore [data-open="${first}"]`).first().click(); await page.waitForTimeout(350);
+    assert.match(await page.textContent('#sheet'), /済み 1回/);
+    await page.click(`#sheet [data-add="${first}"][data-add-how="best"]`); await page.waitForTimeout(500);
+    assert.match(await page.textContent('#toast'), /2回目/);
+    const st = await S();
+    assert.ok(st.seq.includes(`${first}@2`), `2nd visit planned: ${st.seq}`);
+    assert.equal(st.reps[first], 2, 'visit count raised to 2');
+    await tab(page, 'plan');
+    assert.match(await page.textContent('ol.tl:not(.tl--done)'), /2回目/);
+    // ride it the 2nd time → counted
+    await page.click(`ol.tl:not(.tl--done) [data-done="${first}@2"]`); await page.waitForTimeout(400);
+    assert.ok((await S()).done[`${first}@2`], '2nd visit recorded');
+    await tab(page, 'explore');
+    await page.locator(`#view-explore [data-open="${first}"]`).first().click(); await page.waitForTimeout(350);
+    assert.match(await page.textContent('#sheet'), /済み 2回/);
+    await page.click('.sheet__close'); await page.waitForTimeout(150);
+  });
+  await step('Repeat: ×2 chosen in プランの条件 really puts the 2nd visit into a full day', async () => {
+    await tab(page, 'plan');
+    await page.click('[data-act="plan-edit"]'); await page.waitForTimeout(150);
+    await page.click('[data-b-tab="rides"]'); await page.click('[data-b-ridemode="count"]'); await page.waitForTimeout(100);
+    await page.click('[data-b-rep="space"]'); await page.waitForTimeout(80);
+    await page.click('[data-act="plan-apply"]'); await accept(page); await page.waitForTimeout(300);
+    const st = await S();
+    assert.ok(st.seq.includes('space') && st.seq.includes('space@2'), `both visits planned: ${st.seq}`);
+    assert.deepEqual(st.unmet, []);
+    assert.equal(await page.locator('ol.tl:not(.tl--done) .tl__item--over, ol.tl:not(.tl--done) .tag--bad:has-text("閉園")').count(), 0, 'nothing past closing');
+    assert.deepEqual(errors, []);
+  });
+  await ctx.close();
+}
+
 // ---------- C: GPS allowed ----------
 {
   const { ctx, page, errors } = await newCtx({ geo: { latitude: 33.81185, longitude: -117.9214, accuracy: 15 } });

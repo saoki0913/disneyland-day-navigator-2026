@@ -221,6 +221,7 @@ main { position: relative; z-index: 31; padding: 0 14px calc(var(--tabh, 64px) +
 .tl__rm { width: 36px; height: 36px; flex: none; display: grid; place-items: center; border-radius: 50%; background: var(--red-l); color: var(--red); font-size: 17px; }
 .addbtn { margin-top: -2px; background: #e1edfc; color: var(--blue-d); box-shadow: none; }
 .inplan { flex: 1; align-self: center; font-size: 13px; display: inline-flex; align-items: center; gap: 4px; }
+.visits { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; }
 
 /* notes & alerts */
 .note { display: flex; gap: 10px; align-items: flex-start; padding: 11px 14px; border-radius: 16px; background: var(--mustard-l); border: 0; font-size: 13.5px; }

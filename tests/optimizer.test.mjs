@@ -109,3 +109,39 @@ test('a repeated visit is simulated as an independent queue and time slot', () =
   assert.ok(rides[2].start > rides[0].end,'second ride is later');
   assert.ok(rides[2].wait >= 0,'second queue is predicted independently');
 });
+
+// ---------- repeat visits (the same ride more than once) ----------
+import { insertMissing, makeRoom, visitsDone, wantedVisits, visitId, visitNo } from '../public/js/engine.js';
+test('visit helpers count completed visits and list the ones still wanted', () => {
+  const done = { space: 1, 'space@2': 2, indy: 3, 'meal:lunch': 4 };
+  assert.equal(visitsDone(done, 'space'), 2);
+  assert.equal(visitsDone(done, 'matterhorn'), 0);
+  assert.deepEqual(wantedVisits(done, 'space', 3), ['space@3']);
+  assert.deepEqual(wantedVisits({}, 'tiana', 2), ['tiana', 'tiana@2']);
+  assert.equal(visitId('space', 1), 'space'); assert.equal(visitNo('space@3'), 3); assert.equal(visitNo('space'), 1);
+});
+for (const [now, id] of [[480, 'space'], [600, 'matterhorn'], [600, 'tiana'], [780, 'pirates']]) {
+  test(`a ride wanted twice (${id} @${now}) gets both visits into a full day, 75+ min apart, before closing`, () => {
+    const c = { ...ctxFor({ now, live: now > 480 ? liveOf() : {} }), doneMin: {} };
+    const wanted = [id, id + '@2'];
+    const protect = Object.fromEntries(wanted.map((x) => [x, true]));
+    let seq = insertMissing(c, draft(c), wanted);
+    seq = makeRoom(c, optimizePlan(c, seq, { budgetMs: 150, protect }).seq, wanted, { protect });
+    const it = planFromOrder(c, seq).items;
+    const v1 = it.find((i) => i.id === id), v2 = it.find((i) => i.id === id + '@2');
+    assert.ok(v1 && v2, 'both visits planned');
+    assert.ok(!v1.over && !v2.over, `before closing (${v1.start}, ${v2.start})`);
+    assert.ok(v2.start - v1.start >= 60, `spaced (${v1.start} → ${v2.start})`);
+    assert.equal(it.filter((i) => i.type === 'show' && i.anchor.late === 'miss').length, 0, 'no show missed');
+    for (const m of Object.keys(DEFAULT_MUST)) if (c.live[m]?.status !== 'DOWN') assert.ok(seq.includes(m), `must ${m} kept`);
+  });
+}
+test('a 2nd visit of a ride already ridden is planned after it', () => {
+  const c = { ...ctxFor({ now: 660, live: liveOf() }), done: { indy: 1 }, doneMin: { indy: 600 } };
+  const protect = { 'indy@2': true };
+  let seq = insertMissing(c, ['indy', ...draft(c).filter((x) => x !== 'indy')], ['indy@2']);
+  seq = makeRoom(c, optimizePlan(c, seq, { budgetMs: 150, protect }).seq, ['indy@2'], { protect });
+  const v2 = planFromOrder(c, seq).items.find((i) => i.id === 'indy@2');
+  assert.ok(v2 && !v2.over, 'planned before closing');
+  assert.ok(v2.start >= 600 + 60, `after the first ride (${v2.start})`);
+});
