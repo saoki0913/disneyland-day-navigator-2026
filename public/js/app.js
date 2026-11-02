@@ -98,6 +98,7 @@ const R = {
   gpsPos: null, gpsErr: null, gpsBusy: false,
   dragging: false, pendingRender: false, flash: null, replanned: null,
   shareAt: 0, shareErr: null, shareBusy: false, sharePushTimer: 0,
+  inviteIdentity: null, inviteLoading: false, inviteSending: false,
   gpsRendered: null, gpsRenderedAt: 0,
   lastPlanIds: null,
   hist: {},            // { rideId: [[min, wait|null], ...] } today's observed waits (this device)
@@ -2137,8 +2138,8 @@ function openSettings() {
       ${renderLocRow(position())}
       <div class="setrow"><span class="setrow__ico">${ic('refresh')}</span><div class="setrow__b"><div class="setrow__t">待ち時間</div><div class="setrow__s">${liveTxt}</div></div>
         <button class="btn btn--sm" data-act="refresh">更新</button></div>
-      <div class="setrow"><span class="setrow__ico">${ic('users')}</span><div class="setrow__b"><div class="setrow__t">2人で共有</div><div class="setrow__s">${S.share ? `共有中 · コード ${esc(S.share.code)}` : 'オフ'}</div></div>
-        <button class="btn btn--sm" data-act="share-open">${S.share ? '管理' : '始める'}</button></div>
+      <div class="setrow"><span class="setrow__ico">${ic('users')}</span><div class="setrow__b"><div class="setrow__t">メンバー招待・プラン共有</div><div class="setrow__s">${S.share ? 'プランを共有中' : 'メールで招待して自動共有'}</div></div>
+        <button class="btn btn--sm" data-act="share-open">${S.share ? '管理' : '開く'}</button></div>
       <div class="setrow"><span class="setrow__ico">${ic('x')}</span><div class="setrow__b"><div class="setrow__t">記録をリセット</div><div class="setrow__s">済み・プランの条件を消去</div></div>
         <button class="btn btn--sm" data-act="reset">リセット</button></div>
     </div>
@@ -2235,6 +2236,101 @@ async function pullShare({ quiet = false } = {}) {
   finally { R.shareBusy = false; }
 }
 const shareLink = () => `${location.origin}/#share=${S.share.code}`;
+
+// Email invitations grant Cloudflare Access and bind the recipient to the same room.
+// No access-management token is ever sent to the browser.
+function inviteForm() {
+  if (!R.inviteIdentity?.isOwner) return '';
+  return `<div class="box" style="margin-top:12px">
+    <b>メールアドレスで招待</b>
+    <p class="para muted" style="margin:5px 0 10px">相手はメールのリンクからワンタイムPINでログインし、自動で同じプランに参加します。</p>
+    <div class="formrow">
+      <input type="email" id="inviteEmailIn" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="friend@example.com" style="flex:1;min-width:0" aria-label="招待するメールアドレス">
+      <button class="btn btn--primary btn--sm" type="button" data-act="invite-email" ${R.inviteSending ? 'disabled' : ''}>招待</button>
+    </div>
+    <p class="muted" style="font-size:12px;margin:8px 0 0">アクセス許可はすぐに追加されます。メールアプリが開いたら送信を完了してください。</p>
+  </div>`;
+}
+async function ensureShareForInvite() {
+  const created = !S.share;
+  if (created) {
+    // Preserve the existing synchronisation model and use a crypto-secure room code.
+    const alphabet = 'abcdefghjkmnpqrstuvwxyz23456789';
+    const bytes = crypto.getRandomValues(new Uint8Array(8));
+    S.share = { code: [...bytes].map(b => alphabet[b % alphabet.length]).join('') };
+    const now = Date.now();
+    for (const k of SHARE_FIELDS) S.fieldAt[k] = S.fieldAt[k] || now;
+    save();
+  }
+  await pushShare();
+  if (R.shareErr) {
+    if (created) { S.share = null; save(); }
+    throw new Error('共有プランを保存できませんでした');
+  }
+  return S.share.code;
+}
+async function sendEmailInvite() {
+  if (!R.inviteIdentity?.isOwner || R.inviteSending) return;
+  const email = ($('#inviteEmailIn')?.value || '').trim().toLowerCase();
+  if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) return toast('メールアドレスを確認してください', 'error');
+  R.inviteSending = true;
+  try {
+    const roomCode = await ensureShareForInvite();
+    const res = await fetch('/api/invite', {
+      method: 'POST', cache: 'no-store', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, roomCode })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error(data.error === 'invite-configuration-missing'
+      ? '招待のサーバー設定が未完了です' : data.error === 'owner-room-mismatch'
+      ? '共有プランのコードが異なります。ページを再読み込みしてください' : '招待を登録できませんでした');
+    openShare();
+    toast('アクセスを許可しました。メールの送信を完了してください', 'ok');
+    const subject = 'Park Navi のプランに招待します';
+    const body = `Park Naviで同じプランを共有しましょう。\\nこちらを開き、招待されたメールアドレスでPIN認証してください。\\n${location.origin}/\\n\\nログイン後はプランに自動参加します。`;
+    location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  } catch (err) {
+    toast(err.message || '招待に失敗しました', 'error');
+  } finally {
+    R.inviteSending = false;
+  }
+}
+async function autoJoinAssignedRoom(code) {
+  if (!CODE_RE.test(code) || S.share?.code === code) return;
+  try {
+    const res = await fetch(`/api/share/${code}?${API_Q}`, { cache: 'no-store' });
+    const data = await res.json();
+    if (!res.ok || !data.ok) return;
+    S.share = { code };
+    S.shareAdopted = true;
+    save();
+    if (data.exists) applyDoc(data.doc, { quiet: true });
+    else {
+      const now = Date.now();
+      for (const k of SHARE_FIELDS) S.fieldAt[k] = S.fieldAt[k] || now;
+      await pushShare();
+    }
+    R.shareAt = Date.now(); R.shareErr = null;
+    renderAll();
+    toast('招待された共有プランに参加しました', 'ok');
+  } catch { /* try again next page load */ }
+}
+async function loadInviteIdentity() {
+  if (R.inviteLoading) return;
+  R.inviteLoading = true;
+  try {
+    const res = await fetch('/api/invite/me', { cache: 'no-store', credentials: 'same-origin' });
+    if (!res.ok) return;
+    const info = await res.json();
+    if (!info.ok) return;
+    R.inviteIdentity = info;
+    if (info.roomCode) await autoJoinAssignedRoom(info.roomCode);
+    if (!$('#sheet').hidden && $('#inviteEmailIn') == null && $('#sheetTitle')?.textContent?.includes('共有'))
+      openShare();
+  } catch { /* local dev, offline, or temporary network outage */ }
+  finally { R.inviteLoading = false; }
+}
 function startShare() {
   S.share = { code: newCode() };
   // Stamp current settings so they become the shared starting point.
@@ -2274,7 +2370,8 @@ function shareStatus() {
 function openShare() {
   if (S.share) {
     openSheet(`<div class="sheet__content">
-      <div><div class="kicker">Share</div><h2 class="sheet__title" id="sheetTitle">2人で共有中</h2></div>
+      <div><div class="kicker">Share</div><h2 class="sheet__title" id="sheetTitle">プランを共有中</h2></div>
+      ${inviteForm()}
       <div class="sharecode"><span>共有コード</span><b class="num">${esc(S.share.code)}</b></div>
       <div class="btnrow"><button class="btn btn--primary" data-act="share-send">${ic('users')}リンクを送る</button><button class="btn" data-act="share-copy">コピー</button></div>
       <p class="para muted" style="font-size:13px;margin:0">相手はリンクを開くか、設定の「2人で共有」でこのコードを入力すると参加できます。</p>
@@ -2286,12 +2383,13 @@ function openShare() {
     return;
   }
   openSheet(`<div class="sheet__content">
-    <div><div class="kicker">Share</div><h2 class="sheet__title" id="sheetTitle">2人で同じプランを使う</h2></div>
+    <div><div class="kicker">Share</div><h2 class="sheet__title" id="sheetTitle">プランを共有する</h2></div>
+    ${inviteForm()}
     <p class="para" style="margin:0">どちらかが「乗った」を押したり、順番・条件を変えると、もう1台のプランも自動で変わります（数十秒〜1分ほど）。</p>
     <button class="btn btn--primary btn--block" data-act="share-start">${ic('users')}共有を始める（リンクを作る）</button>
-    <div class="field__h" style="margin:4px 0 0"><b>相手から届いたコードで参加</b></div>
+    <details class="more"><summary>共有コードで参加（従来方式）</summary><div style="margin-top:8px">
     <div class="formrow"><input type="text" id="shareCodeIn" autocapitalize="off" autocomplete="off" spellcheck="false" maxlength="8" placeholder="8文字のコード" style="flex:1"><button class="btn btn--navy btn--sm" data-act="share-join">参加</button></div>
-    <p class="muted" style="font-size:12px;margin:0">保存するのはプランと記録だけで、位置情報は送りません。7日で自動削除。</p>
+    </div></details><p class="muted" style="font-size:12px;margin:0">保存するのはプランと記録だけで、位置情報は送りません。7日で自動削除。</p>
   </div>`);
 }
 function offerJoinFromLink() {
@@ -2668,6 +2766,7 @@ document.addEventListener('click', async (e) => {
     case 'qa-cond': R.draft = null; return openPlanBuilder();
     case 'food-map': S.mapFilter = 'food'; R.mapFood = { q: S.foodQ, ids: R.foodHits || [] }; save(); return go('map');
     case 'map-food-clear': R.mapFood = null; return renderMap();
+    case 'invite-email': return sendEmailInvite();
     case 'share-start': return startShare();
     case 'share-join': return joinShare($('#shareCodeIn')?.value);
     case 'share-decline': history.replaceState(null, '', location.pathname); return;
@@ -2789,6 +2888,7 @@ measure();
 addEventListener('resize', measure);
 go(S.tab || 'home');
 renderStatus();
+loadInviteIdentity();
 fetchMeta();
 fetchPhotos();
 const shouldPoll = () => { const m = nowMin(); return m >= hours().open - 90 && m <= hours().close + 30; };
