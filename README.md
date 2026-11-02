@@ -27,7 +27,7 @@ API トークンを使う場合の最小権限：`Account › Cloudflare Pages �
 
 ## GitHub push → Cloudflare Pages 自動デプロイ（無料・既存サービス分離）
 
-- GitHub の本番ブランチ `main` への **push** で `.github/workflows/verify.yml` が起動し、単体テスト114件とモバイルE2E68件を実行します。
+- GitHub の本番ブランチ `main` への **push** で `.github/workflows/verify.yml` が起動し、単体テスト120件とモバイルE2E70件を実行します。
 - **検証が成功した最新コミットのみ** `.github/workflows/deploy-pages.yml` が起動して、本番 `https://dl-navi-1031.pages.dev` にデプロイします。失敗したテストや古いコミットは公開されません。GitHub Actions の `workflow_dispatch` からプレビュー/本番を手動選択することもできます。
 - Cloudflare と GitHub のネイティブ Git 連携は使いません（Cloudflare Git installation が 8000011 で失敗するため）。代わりに公式サポートの `wrangler pages deploy public --project-name dl-navi-1031 --branch main` を使います。
 - **初回に1回だけ必要**：Cloudflare ダッシュボードの API Tokens で、対象アカウントの `Account › Cloudflare Pages › Edit` のみを許可したトークンを発行し、この GitHub リポジトリの `Settings › Secrets and variables › Actions › New repository secret` に **`CLOUDFLARE_API_TOKEN`** として保存します。Cloudflare のアカウントIDはワークフローで既存の対象アカウントに固定しているため、Secret は不要です。トークンを git、チャット、ログに貼らないでください。
@@ -79,6 +79,9 @@ Park Blue（ロイヤルブルー＋空色、白い角丸カード、フォン�
 - 並べ替え：≡ をドラッグ（乗り物・ごはん・ショー）。ごはんは置いた位置で時刻が決まる。ショーは開演時刻固定。
 - 鍵ボタンで乗り物の位置を固定。作り直しても固定した乗り物はその位置のまま。
 - 「編集」で × 削除、「＋追加」で自由に追加（動線のいい位置／次に行く）。乗り物の詳細からも「プランに追加／次に行く」・**乗る回数（−／＋）**。条件シートの乗り物タブでも「回数」に切り替えて、複数回乗りたいものだけタップで ×2 → ×3 → 1回。
+  乗った回数は記録され（「済み 2回」・時刻つき）、回数はそれより少なくできない。一度乗ったものも詳細の「もう1回乗った」「もう1回プランに」や
+  「＋追加」から2回目・3回目として追加できる。回数で指定した2回目以降は「絶対乗る」と同じ扱いで、1日が埋まっていてもおまかせの乗り物を外して
+  閉園までに入れる（前の回から75分以上あける。どうしても入らない時だけ「入りきらない」と表示）。
 - **条件シート**は「基本（開始・ペース・歩く量）／乗り物（次に行く・絶対／おまかせ／乗らない）／ごはん／ショー」の4タブ。どのタブも iPhone SE でスクロールなしで収まる。
 - **間に合うかの知らせ（アイランド）**：次のごはん・ショーへ出発する15分前から、画面上部に小さなガラスのカプセル（アイコン・名前・出発時刻・残り時間のリング）。
   青＝間に合う、黄＝今出発、赤＝間に合わない。タップで「ルート／＋15分・＋30分・省略（ごはん）／次の回・見ない（ショー）」。始まるか完了で自動で消える。
@@ -154,9 +157,9 @@ Park Blue（ロイヤルブルー＋空色、白い角丸カード、フォン�
 ## テスト
 
 ```bash
-npm test                               # 114 unit tests（エンジン・最適化・API正規化・写真選定・パークデータ）
+npm test                               # 120 unit tests（エンジン・最適化・API正規化・写真選定・パークデータ）
 npx wrangler pages dev public --port 8788 &
-node tests/e2e.mjs http://127.0.0.1:8788   # 68 browser E2E steps（iPhoneサイズ・両パーク・更新ルール）
+node tests/e2e.mjs http://127.0.0.1:8788   # 70 browser E2E steps（iPhoneサイズ・両パーク・更新ルール）
 ```
 
 ## コスト

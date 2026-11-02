@@ -4,7 +4,8 @@ import {
 } from './data.js';
 import {
   recommend, simulateDay, planFromOrder, syncSequence, applyLocks, fitShows, buildAnchors, anchorConflicts, crowdRatio, rideRatios, walkMin, distanceM, hhmm, parseHHMM, estimateWait, availability, DEFAULT_MUST, gpsNeedsRedraw, movingPlanMin,
-  optimizeOrder, insertMissing, planCost, planMinutes, optimizePlan, baseRideId, rideAt, flowStats,
+  optimizeOrder, insertMissing, planCost, planMinutes, optimizePlan, makeRoom, baseRideId, rideAt, flowStats,
+  visitId, visitNo, visitsDone, wantedVisits,
 } from './engine.js';
 import { SHARE_FIELDS, mergeDocs, sameDoc, newCode, CODE_RE } from './share.js';
 
@@ -608,6 +609,42 @@ function routeUrl(pos) {
 const routeAttr = (pos) => (pos ? `href="${esc(routeUrl(pos))}" data-route="${pos.lat},${pos.lon}" target="_blank" rel="noopener"` : 'aria-disabled="true"');
 const dots = (n, max = 5) => `<span aria-label="${n}/${max}" style="letter-spacing:1px">${'●'.repeat(n)}<span style="color:var(--line)">${'●'.repeat(max - n)}</span></span>`;
 const doneRides = () => Object.keys(S.done).filter((k) => rideAt(k));
+// ---------- visit counts (the same ride more than once) ----------
+// doneVisits: how many times a ride was ridden today; repCount: how many times you want to ride it
+// (never less than what is already done); nextVisitOf: the id of the next, not yet ridden visit.
+const doneVisits = (base) => visitsDone(S.done, base);
+const repCount = (base, reps = S.prefs?.repeats) => Math.max(Number(reps?.[base]) || 1, doneVisits(base));
+function nextVisitOf(base) { let k = 1; while (S.done[visitId(base, k)]) k++; return visitId(base, k); }
+const lastVisitOf = (base) => { const n = doneVisits(base); let k = 1, last = null; while (k <= 9 && n) { if (S.done[visitId(base, k)]) last = visitId(base, k); k++; } return last; };
+// All visits still wanted, from the visit counts (a count of 1 is the normal single ride and is left to the planner).
+function wantedRepeatVisits(reps = S.prefs?.repeats || {}) {
+  const out = [];
+  for (const [base, raw] of Object.entries(reps)) {
+    const count = Math.min(5, Math.trunc(Number(raw)) || 1);
+    if (!attractionById[base] || count < 2 || S.excluded?.[base]) continue;
+    out.push(...wantedVisits(S.done, base, count));
+  }
+  return out;
+}
+// Put visits into the plan even when the day is full: each goes where the day flows best,
+// and optional rides that no longer fit before closing make room (must / locked / other visits stay).
+function forceVisits(c, seq, ids) {
+  for (const id of ids) {
+    if (seq.includes(id) || S.done[id]) continue;
+    const done = seq.filter((x) => S.done[x]), open = seq.filter((x) => !S.done[x]);
+    let best = null;
+    for (let i = 0; i <= open.length; i++) {
+      const o = [...done, ...open.slice(0, i), id, ...open.slice(i)];
+      const cost = planCost(c, o);
+      if (!best || cost < best.cost) best = { cost, o };
+    }
+    seq = best.o;
+  }
+  const keep = new Set([...ids, ...wantedRepeatVisits()]);
+  seq = makeRoom(c, seq, ids.filter((x) => seq.includes(x)), { locks: S.locks || {}, protect: Object.fromEntries([...keep].map((x) => [x, true])) });
+  const over = new Set(planFromOrder(c, seq).items.filter((i) => i.over && !keep.has(i.id) && !S.locks?.[i.id] && !mustMap()[i.id]).map((i) => i.id));
+  return seq.filter((x) => !over.has(x));
+}
 const PACE = { relax: 'ゆったり', balance: 'ふつう', rides: 'たくさん' };
 
 // =====================================================================
@@ -623,6 +660,11 @@ function doneName(id) {
 // Tap = complete immediately (with undo in the toast). Tapping a completed item asks before reverting.
 function markDone(id) {
   if (S.done[id]) return openUndoConfirm(id);
+  // riding a ride again raises its visit count (so the count always matches what you did)
+  if (rideAt(id) && visitNo(id) > 1) {
+    const base = baseRideId(id);
+    S.prefs.repeats = { ...(S.prefs.repeats || {}), [base]: Math.max(Number(S.prefs.repeats?.[base]) || 1, visitNo(id)) };
+  }
   S.done[id] = Date.now();
   S.doneMin[id] = nowMin();
   S.lastDone = { id, at: Date.now() };
@@ -1062,7 +1104,7 @@ function scheduleRepeatVisits(c, initial, requests, doneMin) {
     const count = Math.min(5, Math.max(1, Math.trunc(Number(raw))));
     for (let visit=2;visit<=count;visit++) {
       const id=`${base}@${visit}`;
-      if (S.done[id]) continue;
+      if (S.done[id] || seq.includes(id)) continue;
       if (!seq.includes(base) && !S.done[base]) { unmet.push(id); continue; }
       let best=null;
       const open=seq.filter((x) => !S.done[x]), complete=seq.filter((x) => S.done[x]);
@@ -1107,8 +1149,15 @@ function buildPlan(why = '') {
   seq = pinSelectedFirst(seq, first);
   const locks = { ...S.locks, ...(first ? { [first]: true } : {}) };
   seq = pinSelectedFirst(fitShows(c2, seq), first);
+  // Rides you want to ride again (visit counts) are planned like must-rides: placed before optimising
+  // and never dropped for other rides, so optional rides make room for them.
+  const wanted = wantedRepeatVisits();
+  seq = insertMissing(c2, seq, wanted);
+  const protect = Object.fromEntries(wanted.map((id) => [id, true]));
   // Keep the next destination fixed while the optimiser chooses the remainder of the route.
-  seq = pinSelectedFirst(optimizePlan(c2, seq, { locks, budgetMs: 600 }).seq, first);
+  seq = pinSelectedFirst(optimizePlan(c2, seq, { locks, budgetMs: 600, protect }).seq, first);
+  // a visit still past closing: optional rides make room for it
+  if (wanted.length) seq = pinSelectedFirst(makeRoom(c2, seq, wanted, { locks, protect }), first);
   seq = applyLocks(seq, prev, S.locks, S.done);
   seq = pinSelectedFirst(fitShows(c2, seq), first);
   // it must fit: rides pushed past closing drop out (locked / must stay and are flagged)
@@ -1632,14 +1681,20 @@ function bestSlot(seq, id) {
 }
 function addToPlan(id, mode = 'best') {
   const sn = editSnapshot();
+  if (attractionById[id] && S.done[id]) {
+    // already ridden: add the next visit (2回目, 3回目 …) and count it in the ride's visit count
+    id = nextVisitOf(id);
+    const base = baseRideId(id);
+    S.prefs.repeats = { ...(S.prefs.repeats || {}), [base]: Math.max(repCount(base), visitNo(id)) };
+  }
   const seq = planSeq().filter((x) => x !== id);
-  if (attractionById[id]) delete S.excluded[id];
+  if (rideAt(id)) delete S.excluded[baseRideId(id)];
   else if (id.startsWith('meal:')) { const m = id.slice(5); S.prefs.mealOverrides[m] = { ...(S.prefs.mealOverrides[m] || {}), off: false }; }
   else if (id.startsWith('show:')) { const x = id.slice(5); S.prefs.shows[x] = { ...(S.prefs.shows[x] || {}), on: true }; }
   if (S.planSnap?.dropped) S.planSnap.dropped = S.planSnap.dropped.filter((x) => x !== id);
   let nseq;
   if (mode === 'next') nseq = [...seq.filter((x) => S.done[x]), id, ...seq.filter((x) => !S.done[x])];
-  else if (attractionById[id]) nseq = bestSlot(seq, id);
+  else if (rideAt(id)) nseq = id === baseRideId(id) ? bestSlot(seq, id) : forceVisits(ctx({ order: null, orderReason: null }), seq, [id]);
   else nseq = seq; // meals/shows are placed by their time (syncSequence)
   layoutPlan(nseq, '追加');
   R.flash = { at: Date.now(), ids: new Set([id]) };
@@ -1673,7 +1728,7 @@ function removeFromPlan(id) {
 function openAddSheet() {
   const c = ctx();
   const inPlan = new Set(planItems().map((i) => i.id).filter(Boolean));
-  const rides = ATTRACTIONS.filter((a) => !S.done[a.id] && !inPlan.has(a.id))
+  const rides = ATTRACTIONS.filter((a) => !inPlan.has(nextVisitOf(a.id)))
     .sort((a, b) => b.pop - a.pop || (PRIORITY[b.id] || 0) - (PRIORITY[a.id] || 0));
   const meals = PLANS[S.plan].meals.filter((m) => !inPlan.has('meal:' + m.id) && !S.done['meal:' + m.id]);
   const shows = SHOWS.filter((x) => !inPlan.has('show:' + x.id) && !S.done['show:' + x.id]);
@@ -1688,7 +1743,7 @@ function openAddSheet() {
     <div class="card rows">${rides.map((a) => {
       const w = waitInfo(a);
       return `<button class="row" type="button" data-add="${a.id}"><span class="row__thumb">${rideImg(a)}</span>
-        <span class="row__body"><span class="row__k">${esc(landById[a.land]?.ja || '')}${S.excluded[a.id] ? ' · 乗らない設定' : ''}</span><span class="row__name">${jw(a.short)}</span><span class="row__meta">${ic('walk')}${walkMin(c.pos, coordsOf(a.id))}分</span></span>
+        <span class="row__body"><span class="row__k">${esc(landById[a.land]?.ja || '')}${S.excluded[a.id] ? ' · 乗らない設定' : ''}${doneVisits(a.id) ? ` · もう1回（${doneVisits(a.id) + 1}回目）` : ''}</span><span class="row__name">${jw(a.short)}</span><span class="row__meta">${ic('walk')}${walkMin(c.pos, coordsOf(a.id))}分</span></span>
         <span class="row__wait">${w.wait == null ? `<span class="tag tag--bad">${esc(STATUS_JA[w.status] || '休止')}</span>` : `<b class="${waitClass(w.wait)}">${w.wait}</b><small>分</small>`}</span></button>`;
     }).join('') || '<div class="empty">追加できる乗り物はありません</div>'}</div>
   </div>`, { keepScroll: true });
@@ -1734,7 +1789,7 @@ function openPlanBuilder(focus) {
           : `<div class="legend" aria-hidden="true"><span><i class="m">${ic('star')}</i>絶対</span><span><i></i>おまかせ</span><span><i class="s">${ic('x')}</i>乗らない</span></div>`}</div>
       <div class="ridepick ${rides.length <= 18 ? 'ridepick--few' : ''} ${D.rideMode === 'count' ? 'ridepick--count' : ''}">${rides.map((a) => {
         const st = D.must[a.id] ? 'must' : D.excluded[a.id] ? 'skip' : '';
-        const n = Number(D.prefs.repeats?.[a.id]) || 1;
+        const n = repCount(a.id, D.prefs.repeats);
         const count = D.rideMode === 'count';
         return `<button class="rp ${st ? 'is-' + st : ''} ${n > 1 ? 'has-rep' : ''}" ${count ? `data-b-rep="${a.id}"` : `data-b-ride="${a.id}"`} ${count && st === 'skip' ? 'disabled' : ''} aria-label="${esc(a.short)}：${count ? `${n}回` : st === 'must' ? '絶対乗る' : st === 'skip' ? '乗らない' : 'おまかせ'}"><span class="rp__st">${st === 'must' ? ic('star') : st === 'skip' ? ic('x') : ''}</span><span class="rp__n">${jw(a.short)}</span>${n > 1 ? `<span class="rp__rep num">×${n}</span>` : ''}</button>`;
       }).join('')}</div>`;
@@ -2006,7 +2061,8 @@ function openAttraction(id, { keepScroll = false } = {}) {
   const raw = R.live?.attractions?.[a.id];
   const must = !!mustMap()[a.id];
   const manualOn = S.manual[a.id] && Date.now() - S.manual[a.id].at < 30 * 60e3;
-  const nextVisit = planRideIds().find((x) => baseRideId(x) === id && !S.done[x]) || id;
+  const nextVisit = planRideIds().find((x) => baseRideId(x) === id && !S.done[x]) || nextVisitOf(id);
+  const rode = doneVisits(id), lastV = lastVisitOf(id);
   openSheet(`
     <div class="sheet__hero">${rideImg(a)}${R.photos[a.id] ? `<a class="credit" href="${esc(R.photos[a.id].page)}" target="_blank" rel="noopener">${esc(credit(a.id))}</a>` : ''}</div>
     <div class="sheet__content">
@@ -2017,13 +2073,14 @@ function openAttraction(id, { keepScroll = false } = {}) {
         ${stat('スリル', 'star', `<span style="font-size:13px">${dots(a.thrill)}</span>`)}
       </div>
       ${!av.ok ? `<div class="note note--bad">${ic('alert')}<div><div class="note__t">${esc(av.reason)}</div></div></div>` : ''}
+      ${rode ? `<div class="visits"><button class="btn btn--sm" data-done="${lastV}" aria-label="済みの記録（タップで取り消し）">${ic('check')}済み ${rode}回</button><span class="muted num">${Object.keys(S.done).filter((k) => baseRideId(k) === id).map((k) => S.doneMin[k]).filter((m) => m != null).sort((x, y) => x - y).map(clock).join(' / ')}</span></div>` : ''}
       <div class="btnrow">
-        ${S.done[nextVisit] ? `<button class="btn" data-done="${nextVisit}">${ic('check')}済み ${S.doneMin[a.id] != null ? clock(S.doneMin[a.id]) : ''}</button>` : `<button class="btn btn--primary" data-done="${nextVisit}" data-close>${ic('check')}乗った</button>`}
+        <button class="btn btn--primary" data-done="${nextVisit}" data-close>${ic('check')}${rode ? `もう1回乗った` : '乗った'}</button>
         <a class="btn" ${routeAttr(pos)}>${ic('route')}ルート</a>
       </div>
-      ${S.done[nextVisit] ? '' : `<div class="btnrow">${planRideIds().includes(a.id) ? `<span class="muted inplan">${ic('check')}プラン内</span>` : `<button class="btn" data-add="${a.id}" data-add-how="best" data-close>${ic('plus')}プランに追加</button>`}<button class="btn" data-add="${a.id}" data-add-how="next" data-close>${ic('flag')}次に行く</button></div>`}
+      <div class="btnrow">${planRideIds().includes(nextVisit) ? `<span class="muted inplan">${ic('check')}プラン内${rode ? `（${visitNo(nextVisit)}回目）` : ''}</span>` : `<button class="btn" data-add="${a.id}" data-add-how="best" data-close>${ic('plus')}${rode ? 'もう1回プランに' : 'プランに追加'}</button>`}<button class="btn" data-add="${a.id}" data-add-how="next" data-close>${ic('flag')}次に行く</button></div>
       <div class="seg seg--glass"><button class="${must ? 'is-active' : ''}" data-ride-st="${a.id}" data-v="must">${ic('star')}絶対</button><button class="${!must && !S.excluded[a.id] ? 'is-active' : ''}" data-ride-st="${a.id}" data-v="">おまかせ</button><button class="${S.excluded[a.id] ? 'is-active' : ''}" data-ride-st="${a.id}" data-v="skip">${ic('x')}乗らない</button></div>
-      ${S.excluded[a.id] ? '' : (() => { const n = Number(S.prefs.repeats?.[a.id]) || 1; return `<div class="reprow"><span class="reprow__k">${ic('refresh')}回数</span><button class="reprow__b" data-rep="${a.id}" data-delta="-1" ${n <= 1 ? 'disabled' : ''} aria-label="回数を減らす">−</button><b class="num">${n}</b><button class="reprow__b" data-rep="${a.id}" data-delta="1" ${n >= 5 ? 'disabled' : ''} aria-label="回数を増やす">＋</button></div>`; })()}
+      ${S.excluded[a.id] ? '' : (() => { const n = repCount(a.id); return `<div class="reprow"><span class="reprow__k">${ic('refresh')}回数</span><button class="reprow__b" data-rep="${a.id}" data-delta="-1" ${n <= Math.max(1, rode) ? 'disabled' : ''} aria-label="回数を減らす">−</button><b class="num">${n}</b><button class="reprow__b" data-rep="${a.id}" data-delta="1" ${n >= 5 ? 'disabled' : ''} aria-label="回数を増やす">＋</button></div>`; })()}
       <p class="para">${esc(a.desc)}</p>
       <div class="box"><b>日本との違い</b>${esc(a.japan)}</div>
       <div class="box"><b>コツ</b>${esc(a.tip)}</div>
@@ -2566,13 +2623,18 @@ document.addEventListener('click', async (e) => {
   if (d.mf) { S.mapFilter = d.mf; save(); document.querySelectorAll('[data-mf]').forEach((b) => b.classList.toggle('is-active', b.dataset.mf === d.mf)); return renderMap(); }
   if (d.land) { S.land = d.land; S.landAt = Date.now(); save(); renderAll(); return toast(landById[d.land].ja, 'ok'); }
   if (d.rep) {
-    const id = d.rep, n = Math.max(1, Math.min(5, (Number(S.prefs.repeats?.[id]) || 1) + Number(d.delta)));
+    const id = d.rep, n = Math.max(1, doneVisits(id), Math.min(5, repCount(id) + Number(d.delta)));
     S.prefs.repeats = { ...(S.prefs.repeats || {}), [id]: n };
     if (S.planSnap?.seq) {
-      const seq = planSeq().filter((x) => !(baseRideId(x) === id && x !== id && Number(x.split('@')[1]) > n && !S.done[x]));
-      const r = scheduleRepeatVisits(ctx({ order: null, orderReason: null }), seq, { [id]: n }, S.doneMin || {});
-      layoutPlan(r.seq, '追加');
-      if (r.unmet.length) toast(`${attractionById[id].short}：${n - r.unmet.length}回まで`, 'warn');
+      const c = ctx({ order: null, orderReason: null });
+      let seq = planSeq().filter((x) => !(baseRideId(x) === id && visitNo(x) > n && !S.done[x]));
+      seq = scheduleRepeatVisits(c, seq, { [id]: n }, S.doneMin || {}).seq;
+      // still missing (the day is full): place them anyway where they flow best; optional rides make room
+      seq = forceVisits(c, seq, n > 1 ? wantedVisits(S.done, id, n) : []);
+      layoutPlan(seq, '追加');
+      const planned = planRideIds().filter((x) => baseRideId(x) === id).length + doneVisits(id);
+      if (planned < n) toast(`${attractionById[id].short}：閉園までに${planned}回まで`, 'warn');
+      else if (Number(d.delta) > 0) toast(`${attractionById[id].short} を${n}回に（プランに追加）`, 'ok');
     } else save();
     renderView(); return openAttraction(id, { keepScroll: true });
   }
@@ -2638,8 +2700,8 @@ document.addEventListener('click', async (e) => {
   if (d.bTab && R.draft) { R.draft.tab = d.bTab; return openPlanBuilder(); }
   if (d.bRidemode && R.draft) { R.draft.rideMode = d.bRidemode; return openPlanBuilder(); }
   if (d.bRep && R.draft) {
-    const reps = { ...(R.draft.prefs.repeats || {}) }, n = Number(reps[d.bRep]) || 1;
-    if (n >= 3) delete reps[d.bRep]; else reps[d.bRep] = n + 1;
+    const reps = { ...(R.draft.prefs.repeats || {}) }, n = repCount(d.bRep, reps), min = Math.max(1, doneVisits(d.bRep));
+    if (n >= Math.max(3, min + 1)) { if (min > 1) reps[d.bRep] = min; else delete reps[d.bRep]; } else reps[d.bRep] = n + 1;
     R.draft.prefs.repeats = reps; return openPlanBuilder();
   }
   if (d.bSet && R.draft) {

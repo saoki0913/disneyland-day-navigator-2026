@@ -4,6 +4,17 @@ export { DEFAULT_MUST };
 // A second visit is an independent itinerary stop (e.g. 'space@2'), not a duplicate DOM key.
 export const baseRideId = (id) => String(id || '').replace(/@\d+$/, '');
 export const rideAt = (id) => attractionById[baseRideId(id)];
+// Visit k of a ride: k = 1 → 'space', k ≥ 2 → 'space@2'.
+export const visitId = (base, k) => (k <= 1 ? base : `${base}@${k}`);
+export const visitNo = (id) => Number(String(id).match(/@(\d+)$/)?.[1] || 1);
+// How many times a ride has been ridden today (counts every completed visit id of that ride).
+export const visitsDone = (done, base) => Object.keys(done || {}).filter((k) => done[k] && baseRideId(k) === base && attractionById[base]).length;
+// The visit ids still wanted for a ride: visits 1..count that are not done yet.
+export function wantedVisits(done, base, count) {
+  const out = [];
+  for (let k = 1; k <= count; k++) if (!done?.[visitId(base, k)]) out.push(visitId(base, k));
+  return out;
+}
 
 // ---------- geometry ----------
 export function distanceM(a, b) {
@@ -795,8 +806,9 @@ function bestInsert(ctx, full, base, id, bound) {
   }
   return bo ? { o: bo, s: bs } : null;
 }
-function localSearch(ctx, seq0, { locks = {}, pool = [], deadline = Infinity, keep = false } = {}) {
-  const must = mustOf(ctx);
+function localSearch(ctx, seq0, { locks = {}, pool = [], deadline = Infinity, keep = false, protect = {} } = {}) {
+  // protected ids (must-rides, repeat visits the user asked for) may move but are never dropped
+  const must = { ...mustOf(ctx), ...protect };
   const done = seq0.filter((x) => ctx.done?.[x]);
   let open = seq0.filter((x) => !ctx.done?.[x]);
   const full = (o) => [...done, ...o];
@@ -843,15 +855,74 @@ function localSearch(ctx, seq0, { locks = {}, pool = [], deadline = Infinity, ke
   return { seq: full(open), score: best };
 }
 /**
+ * Make room for stops that must not be dropped (e.g. a 2nd visit the user asked for) but currently end
+ * past closing: drop ONE optional ride and re-insert the stop where the day scores best, repeatedly.
+ * (A plain local search can't find this: each half of the move alone makes the day worse.)
+ * Only the lowest-value optional rides are tried, so it stays fast.
+ */
+export function makeRoom(ctx, seq, ids, { locks = {}, protect = {} } = {}) {
+  const keep = { ...mustOf(ctx), ...protect };
+  for (const id of ids) {
+    for (let guard = 0; guard < 4; guard++) {
+      const now = planFromOrder(ctx, seq).items.find((i) => i.id === id);
+      if (!seq.includes(id) || !now?.over) break;
+      const done = seq.filter((x) => ctx.done?.[x]);
+      // a later visit can only fit if the earlier visit moves too: try both together first
+      const prev = visitNo(id) > 1 ? visitId(baseRideId(id), visitNo(id) - 1) : null;
+      if (prev && seq.includes(prev) && !ctx.done?.[prev] && !locks[prev]) {
+        const rest0 = seq.filter((x) => !ctx.done?.[x] && x !== id && x !== prev);
+        const placePair = (rest) => {
+          let pair = null;
+          for (let i = 0; i <= rest.length; i++) for (let j = i; j <= rest.length; j++) {
+            if (ctx.firstRide && rest[0] === ctx.firstRide && i === 0) continue;
+            const o = [...done, ...rest.slice(0, i), prev, ...rest.slice(i, j), id, ...rest.slice(j)];
+            const sc = planScore(ctx, o);
+            if (!pair || sc < pair.sc) pair = { s: o, sc };
+          }
+          return pair;
+        };
+        const cur = planScore(ctx, seq);
+        let pair = placePair(rest0);
+        if (!pair || pair.sc >= cur - 0.5) {
+          // still no room: also drop one optional ride (lowest value first)
+          const drops = rest0.filter((x) => rideAt(x) && !keep[x] && !locks[x] && x !== ctx.firstRide)
+            .sort((x, y) => rideValue(rideAt(x), ctx) - rideValue(rideAt(y), ctx)).slice(0, 3);
+          for (const d of drops) { const p = placePair(rest0.filter((x) => x !== d)); if (p && (!pair || p.sc < pair.sc)) pair = p; }
+        }
+        if (pair && pair.sc < cur - 0.5) { seq = pair.s; continue; }
+      }
+      const open = seq.filter((x) => !ctx.done?.[x] && x !== id);
+      const drops = open.filter((x) => rideAt(x) && !keep[x] && !locks[x] && x !== ctx.firstRide)
+        .sort((x, y) => rideValue(rideAt(x), ctx) - rideValue(rideAt(y), ctx)).slice(0, 6);
+      let best = null;
+      for (const drop of drops) {
+        const rest = open.filter((x) => x !== drop);
+        for (let i = 0; i <= rest.length; i++) {
+          if (ctx.firstRide && rest[0] === ctx.firstRide && i === 0) continue;
+          const s = [...done, ...rest.slice(0, i), id, ...rest.slice(i)];
+          const sc = planScore(ctx, s);
+          if (!best || sc < best.sc) best = { s, sc };
+        }
+      }
+      // accept a step that improves the day even if the stop still ends late: the next step drops another ride
+      if (!best || best.sc >= planScore(ctx, seq) - 0.5) break;
+      seq = best.s;
+    }
+  }
+  return seq;
+}
+/**
  * Decide which rides go into the day and in what order. seq0 = a starting sequence (rides + meals/shows).
- * opts: { locks, budgetMs, pool } — pool = ride ids that may be added (default: every ride that is open
+ * opts: { locks, budgetMs, pool, protect } — protect = { id: true } stops that may move but never drop
+ * (e.g. the 2nd/3rd visit of a ride the user wants to ride again). pool = ride ids that may be added (default: every ride that is open
  * now, not done, not excluded and not an "extra"). Deterministic for the same input.
  */
 export function optimizePlan(ctx, seq0, opts = {}) {
   const t0 = Date.now(), budget = opts.budgetMs ?? 600, deadline = t0 + budget * 1.5;
   const pool = opts.pool || ATTRACTIONS.filter((a) => !a.extra && !ctx.done?.[a.id] && !ctx.excluded?.[a.id] && availability(a, ctx).ok).map((a) => a.id);
   const locks = opts.locks || {};
-  let best = localSearch(ctx, seq0, {locks, pool, deadline, keep: opts.keep});
+  const protect = opts.protect || {};
+  let best = localSearch(ctx, seq0, {locks, pool, deadline, keep: opts.keep, protect});
   // Multiple starts reduce sensitivity to the greedy seed. Propose nearby first legs, but
   // accept them only when the complete, time-constrained day is actually better.
   if (ctx.pos && !ctx.firstRide && Date.now() < deadline) {
@@ -862,19 +933,19 @@ export function optimizePlan(ctx, seq0, opts = {}) {
     for (const id of near) {
       if (Date.now() >= deadline) break;
       const seed = [...done, id, ...open.filter((x) => x !== id)];
-      const r = localSearch(ctx, seed, {locks, pool, deadline, keep: opts.keep});
+      const r = localSearch(ctx, seed, {locks, pool, deadline, keep: opts.keep, protect});
       if (r.score < best.score - 0.5) best = r;
     }
   }
   let seed = 7;
   const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
-  const must = mustOf(ctx);
+  const must = { ...mustOf(ctx), ...protect };
   while (Date.now() - t0 < budget) {
-    const cand = best.seq.filter((x) => attractionById[x] && !ctx.done?.[x] && !must[x] && !locks[x] && x !== ctx.firstRide);
+    const cand = best.seq.filter((x) => rideAt(x) && !ctx.done?.[x] && !must[x] && !locks[x] && x !== ctx.firstRide);
     if (cand.length < 2 || opts.keep) break;
     const drop = new Set();
     for (let k = 0; k < 2; k++) drop.add(cand.splice(Math.floor(rnd() * cand.length), 1)[0]);
-    const r = localSearch(ctx, best.seq.filter((x) => !drop.has(x)), {locks, pool, deadline});
+    const r = localSearch(ctx, best.seq.filter((x) => !drop.has(x)), {locks, pool, deadline, protect});
     if (r.score < best.score - 0.5) best = r;
   }
   if (ctx.firstRide && best.seq.includes(ctx.firstRide)) {
