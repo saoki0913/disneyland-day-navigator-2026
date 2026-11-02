@@ -2139,7 +2139,7 @@ function openSettings() {
       <div class="setrow"><span class="setrow__ico">${ic('refresh')}</span><div class="setrow__b"><div class="setrow__t">待ち時間</div><div class="setrow__s">${liveTxt}</div></div>
         <button class="btn btn--sm" data-act="refresh">更新</button></div>
       <div class="setrow"><span class="setrow__ico">${ic('users')}</span><div class="setrow__b"><div class="setrow__t">メンバー招待・プラン共有</div><div class="setrow__s">${S.share ? 'プランを共有中' : 'メールで招待して自動共有'}</div></div>
-        <button class="btn btn--sm" data-act="share-open">${S.share ? '管理' : '開く'}</button></div>
+        <button class="btn btn--sm" data-act="share-open">${R.inviteIdentity?.isOwner ? '招待' : (S.share ? '管理' : '開く')}</button></div>
       <div class="setrow"><span class="setrow__ico">${ic('x')}</span><div class="setrow__b"><div class="setrow__t">記録をリセット</div><div class="setrow__s">済み・プランの条件を消去</div></div>
         <button class="btn btn--sm" data-act="reset">リセット</button></div>
     </div>
