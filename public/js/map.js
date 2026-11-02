@@ -48,7 +48,7 @@ function ensureMap(el) {
   // keyboard:false — a focusable map container makes iOS scroll the page (the tab bar jumps) on tap
   map = L.map(el, { zoomControl: false, attributionControl: true, minZoom: 14, maxZoom: 19, zoomSnap: 0.25, keyboard: false });
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>',
   }).addTo(map);
   map.fitBounds(PARK_BOUNDS);
   map.on('movestart zoomstart', () => { busy = true; busyAt = Date.now(); });
