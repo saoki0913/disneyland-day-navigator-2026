@@ -99,7 +99,7 @@ const R = {
   gpsPos: null, gpsErr: null, gpsBusy: false,
   dragging: false, pendingRender: false, flash: null, replanned: null,
   shareAt: 0, shareErr: null, shareBusy: false, sharePushTimer: 0,
-  inviteIdentity: null, inviteLoading: false, inviteSending: false,
+  inviteIdentity: null, inviteLoading: false, inviteSending: false, pendingInvite: null,
   gpsRendered: null, gpsRenderedAt: 0,
   lastPlanIds: null,
   hist: {},            // { rideId: [[min, wait|null], ...] } today's observed waits (this device)
@@ -2298,15 +2298,33 @@ const shareLink = () => `${location.origin}/#share=${S.share.code}`;
 // No access-management token is ever sent to the browser.
 function inviteForm() {
   if (!R.inviteIdentity?.isOwner) return '';
+  const pending = R.pendingInvite;
   return `<div class="box" style="margin-top:12px">
     <b>メールアドレスで招待</b>
-    <p class="para muted" style="margin:5px 0 10px">相手はメールのリンクからワンタイムPINでログインし、自動で同じプランに参加します。</p>
+    <p class="para muted" style="margin:5px 0 10px">① メールアドレスを許可して共有プランに登録 ② 招待リンクを送信。リンクの送信は別の操作です。</p>
     <div class="formrow">
       <input type="email" id="inviteEmailIn" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="friend@example.com" style="flex:1;min-width:0" aria-label="招待するメールアドレス">
-      <button class="btn btn--primary btn--sm" type="button" data-act="invite-email" ${R.inviteSending ? 'disabled' : ''}>招待</button>
+      <button class="btn btn--primary btn--sm" type="button" data-act="invite-email" ${R.inviteSending ? 'disabled' : ''}>許可・次へ</button>
     </div>
-    <p class="muted" style="font-size:12px;margin:8px 0 0">アクセス許可はすぐに追加されます。メールアプリが開いたら送信を完了してください。</p>
+    ${pending ? `<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+      <b>アクセス許可済み・招待リンクは未送信</b>
+      <p class="para" style="font-size:13px;margin:6px 0">宛先：<strong>${esc(pending.email)}</strong></p>
+      <p class="para muted" style="font-size:13px;margin:0 0 10px">相手はリンクを開き、同じメールアドレスのPINで認証すると、プランに自動参加できます。</p>
+      <div class="btnrow">
+        <button class="btn btn--primary" type="button" data-act="invite-share-link">招待リンクを送る</button>
+        <button class="btn" type="button" data-act="invite-send-mail">メールを作成</button>
+      </div>
+      <button class="btn btn--sm" style="margin-top:8px" type="button" data-act="invite-copy-link">リンクをコピー</button>
+      <p class="muted" style="font-size:12px;margin:7px 0 0">「送る」または「メールを作成」から、LINE・メールなどの送信操作を完了してください。ボタンだけでは自動送信しません。</p>
+    </div>` : `<p class="muted" style="font-size:12px;margin:8px 0 0">許可後に招待リンクの送信ボタンが表示されます。自動メール送信ではありません。</p>`}
   </div>`;
+}
+function inviteMailUrl(recipient, url) {
+  const subject = 'Park Navi のプランに招待します';
+  const body = `Park Naviで同じプランを共有しましょう。
+${url}
+招待されたメールアドレスでCloudflareのワンタイムPIN認証をしてください。ログイン後は同じプランに自動参加します。`;
+  return `mailto:${encodeURIComponent(recipient)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 async function ensureShareForInvite() {
   const created = !S.share;
@@ -2343,11 +2361,9 @@ async function sendEmailInvite() {
       ? '招待のサーバー設定が未完了です' : data.error === 'owner-room-mismatch'
       ? '共有プランのコードが異なります。ページを再読み込みしてください' : '招待を登録できませんでした');
     R.inviteSending = false;
+    R.pendingInvite = { email, url: location.origin + '/' };
     openShare();
-    toast('アクセスを許可しました。メールの送信を完了してください', 'ok');
-    const subject = 'Park Navi のプランに招待します';
-    const body = `Park Naviで同じプランを共有しましょう。\nこちらを開き、招待されたメールアドレスでPIN認証してください。\n${location.origin}/\n\nログイン後はプランに自動参加します。`;
-    location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    toast('アクセスを許可しました。次に招待リンクを送信してください', 'ok');
   } catch (err) {
     toast(err.message || '招待に失敗しました', 'error');
   } finally {
@@ -2830,6 +2846,39 @@ document.addEventListener('click', async (e) => {
     case 'food-map': S.mapFilter = 'food'; R.mapFood = { q: S.foodQ, ids: R.foodHits || [] }; save(); return go('map');
     case 'map-food-clear': R.mapFood = null; return renderMap();
     case 'invite-email': return sendEmailInvite();
+    case 'invite-send-mail': {
+      const invite = R.pendingInvite;
+      if (!R.inviteIdentity?.isOwner || !invite) return;
+      // Open Mail from a direct tap, not after asynchronous API calls (iOS gesture requirement).
+      location.href = inviteMailUrl(invite.email, invite.url);
+      return;
+    }
+    case 'invite-share-link': {
+      const invite = R.pendingInvite;
+      if (!R.inviteIdentity?.isOwner || !invite) return;
+      if (navigator.share) {
+        try {
+          await navigator.share({
+            title: 'Park Naviのプランに招待',
+            text: `${invite.email} でログインし、メールのPINで認証してください。プランは自動共有されます。`,
+            url: invite.url,
+          });
+        } catch { /* user cancelled or share unavailable */ }
+      } else {
+        try {
+          await navigator.clipboard.writeText(invite.url);
+          toast('招待URLをコピーしました。LINEやメールで送信してください', 'ok');
+        } catch { prompt('このURLを相手に送ってください', invite.url); }
+      }
+      return;
+    }
+    case 'invite-copy-link': {
+      const invite = R.pendingInvite;
+      if (!R.inviteIdentity?.isOwner || !invite) return;
+      try { await navigator.clipboard.writeText(invite.url); toast('URLをコピーしました。相手に送ってください', 'ok'); }
+      catch { prompt('このURLを相手に送ってください', invite.url); }
+      return;
+    }
     case 'share-start': return startShare();
     case 'share-join': return joinShare($('#shareCodeIn')?.value);
     case 'share-decline': history.replaceState(null, '', location.pathname); return;
