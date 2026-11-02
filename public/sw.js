@@ -1,7 +1,7 @@
 // Offline shell: cache static assets (network-first, cache fallback). API calls always go to the network.
-const V = 'dlnavi-v23';
-const SHELL = ['/', '/index.html', '/css/app.css', '/js/app.js', '/js/data.js', '/js/parks/dl.js', '/js/parks/dca.js', '/js/engine.js', '/js/map.js', '/js/share.js', '/icon.svg', '/icon-180.png', '/icon-512.png', '/manifest.webmanifest',
-  '/fonts/mplus-rounded-1c-500.woff2', '/fonts/mplus-rounded-1c-700.woff2', '/fonts/mplus-rounded-1c-800.woff2',
+const V = 'dlnavi-v24';
+const SHELL = ['/', '/index.html', '/css/app.css', '/js/app.js', '/js/data.js', '/js/parks/dl.js', '/js/parks/dca.js', '/js/engine.js', '/js/map.js', '/js/share.js', '/js/records.js', '/js/pdf.js', '/icon.svg', '/icon-180.png', '/icon-512.png', '/manifest.webmanifest',
+  '/fonts/mplus-rounded-1c-500.woff2?v=3', '/fonts/mplus-rounded-1c-700.woff2?v=3', '/fonts/mplus-rounded-1c-800.woff2?v=3',
   ...['land-day', 'land-sunset', 'land-night', 'dca-day', 'dca-sunset', 'dca-night', 'clouds', 'bokeh', 'waves', 'skyline'].map((n) => `/img/park/${n}.webp`),
   '/vendor/leaflet/leaflet.js', '/vendor/leaflet/leaflet.css'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(V).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting())); });
