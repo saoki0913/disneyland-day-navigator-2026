@@ -1136,6 +1136,43 @@ for (const [t, expect, file] of [['07:00', /開園/, '11-preopen'], ['11:28', /�
   await ctx.close();
 }
 
+// ---------- G: iOS invitation is a two-step flow (authorization != email sent) ----------
+{
+  const { ctx, page, errors } = await newCtx();
+  let accessUpdates = 0;
+  await ctx.route('**/api/invite/me', (r) => r.fulfill({ json: { ok: true, isOwner: true, roomCode: null } }));
+  await ctx.route('**/api/invite', async (r) => {
+    accessUpdates++;
+    const body = r.request().postDataJSON();
+    assert.equal(body.email, 'partner@example.com');
+    return r.fulfill({ json: { ok: true, email: body.email, joinUrl: base + '/' } });
+  });
+  await page.reload(); await page.waitForSelector('.next__title'); await page.waitForTimeout(350);
+  await step('Email invitation: show explicit send controls after Access registration, without auto-opening Mail', async () => {
+    await page.click('#settingsBtn');
+    await page.click('[data-act="share-open"]');
+    await page.fill('#inviteEmailIn', 'partner@example.com');
+    await page.click('[data-act="invite-email"]');
+    await page.waitForSelector('[data-act="invite-send-mail"]', { timeout: 12000 });
+    assert.equal(accessUpdates, 1);
+    assert.match(await page.textContent('#sheet'), /アクセス許可済み・招待リンクは未送信/);
+    assert.match(await page.textContent('#sheet'), /partner@example.com/);
+    assert.equal(await page.locator('[data-act="invite-share-link"]').count(), 1);
+    assert.equal(await page.locator('[data-act="invite-copy-link"]').count(), 1);
+    assert.match(page.url(), /^http/, 'the app stays open rather than trying mailto after await');
+    await noHScroll(page);
+  });
+  await step('Email invitation: owner can reopen the sharing sheet and see send options', async () => {
+    await page.click('.sheet__close');
+    await page.click('#settingsBtn');
+    await page.click('[data-act="share-open"]');
+    assert.equal(await page.locator('[data-act="invite-send-mail"]').count(), 1);
+    assert.equal(await page.locator('[data-act="invite-share-link"]').count(), 1);
+  });
+  await step('Email invitation: no unexpected browser errors', async () => assert.deepEqual(errors, []));
+  await ctx.close();
+}
+
 await browser.close();
 const fail = results.filter((r) => r[0] === 'FAIL');
 console.log(`\n${results.length - fail.length}/${results.length} passed`);
