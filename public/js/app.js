@@ -2272,7 +2272,7 @@ async function ensureShareForInvite() {
 async function sendEmailInvite() {
   if (!R.inviteIdentity?.isOwner || R.inviteSending) return;
   const email = ($('#inviteEmailIn')?.value || '').trim().toLowerCase();
-  if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) return toast('メールアドレスを確認してください', 'error');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return toast('メールアドレスを確認してください', 'error');
   R.inviteSending = true;
   try {
     const roomCode = await ensureShareForInvite();
@@ -2285,10 +2285,11 @@ async function sendEmailInvite() {
     if (!res.ok || !data.ok) throw new Error(data.error === 'invite-configuration-missing'
       ? '招待のサーバー設定が未完了です' : data.error === 'owner-room-mismatch'
       ? '共有プランのコードが異なります。ページを再読み込みしてください' : '招待を登録できませんでした');
+    R.inviteSending = false;
     openShare();
     toast('アクセスを許可しました。メールの送信を完了してください', 'ok');
     const subject = 'Park Navi のプランに招待します';
-    const body = `Park Naviで同じプランを共有しましょう。\\nこちらを開き、招待されたメールアドレスでPIN認証してください。\\n${location.origin}/\\n\\nログイン後はプランに自動参加します。`;
+    const body = `Park Naviで同じプランを共有しましょう。\nこちらを開き、招待されたメールアドレスでPIN認証してください。\n${location.origin}/\n\nログイン後はプランに自動参加します。`;
     location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   } catch (err) {
     toast(err.message || '招待に失敗しました', 'error');
