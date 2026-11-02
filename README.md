@@ -26,7 +26,7 @@ API トークンを使う場合の最小権限：`Account › Cloudflare Pages �
 
 ## GitHub push → Cloudflare Pages 自動デプロイ（無料・既存サービス分離）
 
-- GitHub の本番ブランチ `main` への **push** で `.github/workflows/verify.yml` が起動し、単体テスト60件とモバイルE2E29件を実行します。
+- GitHub の本番ブランチ `main` への **push** で `.github/workflows/verify.yml` が起動し、単体テスト69件とモバイルE2E32件を実行します。
 - **検証が成功した最新コミットのみ** `.github/workflows/deploy-pages.yml` が起動して、本番 `https://dl-navi-1031.pages.dev` にデプロイします。失敗したテストや古いコミットは公開されません。GitHub Actions の `workflow_dispatch` からプレビュー/本番を手動選択することもできます。
 - Cloudflare と GitHub のネイティブ Git 連携は使いません（Cloudflare Git installation が 8000011 で失敗するため）。代わりに公式サポートの `wrangler pages deploy public --project-name dl-navi-1031 --branch main` を使います。
 - **初回に1回だけ必要**：Cloudflare ダッシュボードの API Tokens で、対象アカウントの `Account › Cloudflare Pages › Edit` のみを許可したトークンを発行し、この GitHub リポジトリの `Settings › Secrets and variables › Actions › New repository secret` に **`CLOUDFLARE_API_TOKEN`** として保存します。Cloudflare のアカウントIDはワークフローで既存の対象アカウントに固定しているため、Secret は不要です。トークンを git、チャット、ログに貼らないでください。
@@ -47,6 +47,9 @@ API トークンを使う場合の最小権限：`Account › Cloudflare Pages �
 
 - **完了の記録**：押すと即完了（トーストで取り消し可）。完了したものはプランタブの「済み」に時刻つきで残り、
   タップすると確認してから未完了に戻せる（戻した後もトーストで再び完了にできる）。
+- **同じアトラクションに何回も**：乗った回数を数えます（「乗った」を押すたびに +1、済みには「2回目」として1行ずつ残る）。
+  詳細の「もう1回乗りたい」や、プランの条件の「乗る回数」（絶対乗るにしたものを ＋／−）で、今日乗りたい回数を指定すると、
+  その回数に届くまでプランに入ります。乗ったことがあるアトラクションを「絶対乗る」にすると「もう1回」の意味になります。
 - **再開・急減アラート**：休止していた施設の再開や、人気施設の待ち時間の急減（15分以上かつ3割以上）を画面上部に表示。
   「行く！」で次の行き先に固定。Androidは振動あり（iPhoneのSafariは振動非対応）。
 - **待ち時間の推移**：アプリが取得した今日の実測値を端末に記録し、一覧に小さな折れ線＋↘↗、詳細に推移グラフ（推定は点線）を表示。
@@ -82,9 +85,9 @@ API トークンを使う場合の最小権限：`Account › Cloudflare Pages �
 ## テスト
 
 ```bash
-npm test                               # 60 unit tests（エンジン・API正規化・写真選定）
+npm test                               # 69 unit tests（エンジン・API正規化・写真選定）
 npx wrangler pages dev public --port 8788 &
-node tests/e2e.mjs http://127.0.0.1:8788   # 29 browser E2E steps（iPhoneサイズ）
+node tests/e2e.mjs http://127.0.0.1:8788   # 32 browser E2E steps（iPhoneサイズ）
 ```
 
 ## コスト

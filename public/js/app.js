@@ -13,11 +13,13 @@ const defaults = {
   plan: 'balance',
   done: {},            // { rideId | 'meal:lunch' | 'show:fantasmic': timestampMs }
   doneMin: {},         // { id: park-local minutes when completed } (for the timeline)
+  count: {},           // { rideId: times ridden today } — a ride can be ridden more than once
+  log: [],             // [{ id, min, at }] every ride, in order (for the 済み list / undo)
   excluded: {},        // rides the user removed for today
   skip: {},            // { rideId: untilMin } — "別の候補" (temporary)
   manual: {},          // { rideId: { wait, at } } — user-entered wait from the official app
   prefs: { mealOverrides: {}, shows: {}, showTimes: {} },
-  must: null,          // { rideId: true } rides the user must ride (null → both Star Wars rides)
+  must: null,          // { rideId: true | n } rides the user must ride; n = total times today (null → both Star Wars rides)
   cond: { maxWait: 60, walk: 'normal' }, // plan conditions (crowd tolerance / walking)
   gps: false,          // user explicitly enabled GPS
   land: null,          // manual "I'm around here" land id
@@ -32,9 +34,19 @@ const defaults = {
 };
 let S = load();
 function load() {
-  try { return deepMerge(structuredClone(defaults), JSON.parse(localStorage.getItem(KEY) || '{}')); }
-  catch { return structuredClone(defaults); }
+  let s;
+  try { s = deepMerge(structuredClone(defaults), JSON.parse(localStorage.getItem(KEY) || '{}')); }
+  catch { s = structuredClone(defaults); }
+  // Migrate records saved before ride counts existed: each completed ride counts once.
+  for (const id of Object.keys(s.done)) {
+    if (!attractionById[id] || s.count[id]) continue;
+    s.count[id] = 1;
+    s.log.push({ id, min: s.doneMin[id] ?? null, at: s.done[id] });
+  }
+  sortLog(s.log);
+  return s;
 }
+function sortLog(log) { return log.sort((x, y) => (x.min ?? 0) - (y.min ?? 0) || x.at - y.at); }
 function deepMerge(a, b) {
   for (const [k, v] of Object.entries(b || {})) {
     if (v && typeof v === 'object' && !Array.isArray(v) && a[k] && typeof a[k] === 'object') a[k] = deepMerge(a[k], v);
@@ -211,7 +223,7 @@ function detectAlerts(prev, next) {
   const fresh = [];
   for (const [id, v] of Object.entries(next.attractions || {})) {
     const a = attractionById[id], p0 = prev.attractions[id];
-    if (!a || !p0 || S.done[id] || S.excluded[id]) continue;
+    if (!a || !p0 || !leftN(id) || S.excluded[id]) continue;
     if (p0.status !== 'OPERATING' && v.status === 'OPERATING' && p0.status !== 'REFURBISHMENT') fresh.push({ id, type: 'reopen', to: v.wait });
     else if (v.status === 'OPERATING' && Number.isFinite(p0.wait) && Number.isFinite(v.wait) && p0.wait - v.wait >= 15 && v.wait <= p0.wait * 0.7 && (a.pop >= 4 || a.must)) fresh.push({ id, type: 'drop', from: p0.wait, to: v.wait });
   }
@@ -221,7 +233,7 @@ function detectAlerts(prev, next) {
   R.alerts = [...fresh.map((f) => ({ ...f, at: now })), ...R.alerts.filter((x) => !fresh.some((f) => f.id === x.id))].slice(0, 3);
   try { navigator.vibrate?.([180, 80, 180]); } catch { /* unsupported (iOS) */ }
 }
-const activeAlerts = () => R.alerts.filter((x) => nowMin() - x.at < 20 && !S.done[x.id]);
+const activeAlerts = () => R.alerts.filter((x) => nowMin() - x.at < 20 && leftN(x.id) > 0);
 
 async function fetchMeta() {
   try {
@@ -282,13 +294,19 @@ function anchors() {
   return buildAnchors(S.plan, { ...S.prefs, showTimes }, S.done);
 }
 const mustMap = () => S.must || { ...DEFAULT_MUST };
+// Ride counts: how many times ridden, how many times wanted (must: true → 1, n → n; others → 1).
+const rideN = (id) => S.count[id] || 0;
+const wantN = (id, must = mustMap()) => (must[id] === true ? 1 : Number(must[id]) > 0 ? Number(must[id]) : must[id] ? 1 : 0);
+const leftN = (id) => Math.max(0, Math.max(1, wantN(id)) - rideN(id));
+const totalRides = () => Object.values(S.count).reduce((s, n) => s + n, 0);
+const timesTag = (id, must = mustMap()) => (wantN(id, must) >= 2 ? `×${wantN(id, must)}` : '');
 function ctx(extra = {}) {
   const h = hours();
   const live = liveMap();
   const now = nowMin();
   return {
     now, openMin: h.open, closeMin: h.close, pos: (() => { const p = position(); return p.lat == null ? null : p; })(),
-    planId: S.plan, done: S.done, excluded: S.excluded, skip: S.skip, live, crowd: crowdRatio(live, now),
+    planId: S.plan, done: S.done, counts: S.count, excluded: S.excluded, skip: S.skip, live, crowd: crowdRatio(live, now),
     anchors: anchors(), coords: coordsMap(), pin: S.pin, must: mustMap(), cond: S.cond, ...extra,
   };
 }
@@ -316,6 +334,7 @@ const IC = {
   expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   edit: '<path d="M4 20h4L19 9l-4-4L4 16Z"/>',
   sliders: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
   ride: '<path d="M3 19c2.5-8 5.5-13 9-13s6.5 5 9 13M3 19h18"/>',
 };
 const ic = (k) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${IC[k] || ''}</svg>`;
@@ -384,8 +403,58 @@ function doneName(id) {
   if (id.startsWith('show:')) return showById[id.slice(5)]?.short || id;
   return '予定';
 }
+// Rides: every tap records one more ride (a ride can be done several times; undo in the toast).
+function recordRide(id) {
+  const at = Date.now(), min = nowMin();
+  S.count[id] = rideN(id) + 1;
+  S.log.push({ id, min, at });
+  S.done[id] = at; S.doneMin[id] = min;
+  S.lastDone = { id, at };
+  delete S.skip[id];
+  if (S.pin?.id === id) S.pin = null;
+  save(); renderAll();
+  const n = rideN(id);
+  toast(`${doneName(id)} 完了（${n > 1 ? `${n}回目・` : ''}${totalRides()}つ目）`, 'ok', { label: '取り消す', fn: () => undoRide(id, true) });
+}
+function undoRide(id, silent = false) {
+  if (!rideN(id)) return;
+  const i = S.log.map((x) => x.id).lastIndexOf(id);
+  const gone = i >= 0 ? S.log.splice(i, 1)[0] : null;
+  S.count[id] = rideN(id) - 1;
+  const prev = [...S.log].reverse().find((x) => x.id === id);
+  if (!S.count[id]) { delete S.count[id]; delete S.done[id]; delete S.doneMin[id]; }
+  else if (prev) { S.done[id] = prev.at; S.doneMin[id] = prev.min; }
+  if (S.lastDone?.id === id && !S.count[id]) S.lastDone = null;
+  save(); renderAll();
+  if (!silent) toast(`${doneName(id)} を1回取り消しました`, '', { label: '元に戻す', fn: () => {
+    S.count[id] = rideN(id) + 1;
+    if (gone) { S.log.push(gone); sortLog(S.log); }
+    S.done[id] = gone?.at ?? Date.now(); S.doneMin[id] = gone?.min ?? nowMin(); save(); renderAll();
+  } });
+}
+function openRideMenu(id) {
+  const times = S.log.filter((x) => x.id === id).map((x) => (x.min != null ? clock(x.min) : '—'));
+  const n = rideN(id), left = leftN(id);
+  openSheet(`<div class="sheet__content" style="text-align:center">
+    <h2 class="sheet__title" id="sheetTitle">${esc(doneName(id))}</h2>
+    <p class="para muted">${n ? `${n}回乗った（<span class="num">${times.join(' / ')}</span>）` : 'まだ乗っていません'}${left && n ? `<br>あと${left}回の予定` : ''}</p>
+    <div class="btnrow"><button class="btn btn--primary" data-done="${id}" data-close>${ic('check')}もう1回乗った</button>
+      <button class="btn" data-ride-again="${id}" data-close>${ic('plus')}もう1回乗りたい</button></div>
+    <div class="btnrow">${n ? `<button class="btn" data-undo="${id}" data-close>1回取り消す</button>` : ''}<button class="btn" data-close>そのまま</button></div>
+  </div>`);
+}
+// Add one more ride of `id` to today's plan (as a "絶対乗る" with a higher count).
+function wantAgain(id) {
+  const must = mustMap();
+  const want = Math.max(must[id] ? wantN(id, must) : 0, rideN(id)) + 1;
+  must[id] = want === 1 ? true : want;
+  delete S.excluded[id];
+  S.must = must; save(); renderAll();
+  toast(`${attractionById[id].short} をもう1回プランに追加（今日${want}回）`, 'ok');
+}
 // Tap = complete immediately (with undo in the toast). Tapping a completed item asks before reverting.
 function markDone(id) {
+  if (attractionById[id]) return recordRide(id);
   if (S.done[id]) return openUndoConfirm(id);
   S.done[id] = Date.now();
   S.doneMin[id] = nowMin();
@@ -393,10 +462,10 @@ function markDone(id) {
   delete S.skip[id];
   if (S.pin?.id === id) S.pin = null;
   save(); renderAll();
-  const n = doneRides().length;
-  toast(`${doneName(id)} 完了${attractionById[id] ? `（${n}つ目）` : ''}`, 'ok', { label: '取り消す', fn: () => undoDone(id, true) });
+  toast(`${doneName(id)} 完了`, 'ok', { label: '取り消す', fn: () => undoDone(id, true) });
 }
 function undoDone(id, silent = false) {
+  if (attractionById[id]) return undoRide(id, silent);
   const prev = { at: S.done[id], min: S.doneMin[id] };
   delete S.done[id]; delete S.doneMin[id];
   if (S.lastDone?.id === id) S.lastDone = null;
@@ -451,7 +520,7 @@ function renderClock() {
 const RTAG = {
   must: ['絶対乗る', 'must'], dip: ['いつもより空き', 'live'], later: ['あとで混む', 'warn'], short: ['待ち短め', 'live'],
   near: ['すぐ近く', 'live'], pop: ['大人気', ''], fit: ['次の予定に間に合う', ''], bump: ['休憩を後ろへ', 'warn'],
-  soft: ['場所取り短め', 'warn'], close: ['閉園前に並べばOK', 'warn'], pin: ['あなたが選択', 'must'],
+  soft: ['場所取り短め', 'warn'], close: ['閉園前に並べばOK', 'warn'], pin: ['あなたが選択', 'must'], repeat: ['もう1回', 'must'],
 };
 const rtags = (reasons, max = 3) => `<div class="tags">${(reasons || []).slice(0, max).map((x) => {
   const [t, k] = RTAG[x.k] || [x.t, ''];
@@ -546,8 +615,9 @@ function renderHome() {
   const h = hours();
   const r = recommend(c);
   const done = doneRides();
+  const rodeN = totalRides();
   const sim = simulateDay(c);
-  const plannedTotal = done.length + sim.rides;
+  const plannedTotal = rodeN + sim.rides;
   let html = '';
 
   if (c.now < h.open) {
@@ -557,8 +627,8 @@ function renderHome() {
   }
   if (c.now >= h.close || dayPhase() === 'after') {
     html += `<div class="card card--pad" style="text-align:center"><div class="kicker">See you again</div><h2 style="margin:4px 0">おつかれさま！</h2>
-      <div class="prog__n" style="font-size:40px">${done.length}<small> 施設</small></div>
-      <div class="tags" style="justify-content:center;margin-top:10px">${done.map((id) => `<span class="tag">${esc(attractionById[id].short)}</span>`).join('')}</div></div>`;
+      <div class="prog__n" style="font-size:40px">${rodeN}<small> 回</small></div>
+      <div class="tags" style="justify-content:center;margin-top:10px">${done.map((id) => `<span class="tag">${esc(attractionById[id].short)}${rideN(id) > 1 ? ` ×${rideN(id)}` : ''}</span>`).join('')}</div></div>`;
     el.innerHTML = html + footer();
     renderActionBar(null);
     return;
@@ -568,12 +638,13 @@ function renderHome() {
   const live = liveMap();
   const musts = Object.keys(mustMap()).filter((id) => attractionById[id]);
   html += `<div class="card"><div class="prog">
-      <div><div class="prog__n">${done.length}<small>/${Math.max(plannedTotal, done.length)}</small></div><div class="prog__k">乗った数</div></div>
-      <div class="prog__bar"><i style="width:${Math.min(100, (done.length / Math.max(1, plannedTotal)) * 100)}%"></i></div>
+      <div><div class="prog__n">${rodeN}<small>/${Math.max(plannedTotal, rodeN)}</small></div><div class="prog__k">乗った数</div></div>
+      <div class="prog__bar"><i style="width:${Math.min(100, (rodeN / Math.max(1, plannedTotal)) * 100)}%"></i></div>
       <button class="btn btn--sm" data-tab-go="plan">プラン${ic('chev')}</button></div>
     ${musts.length ? `<div class="musts">${musts.map((id) => {
-      const down = !S.done[id] && live[id] && live[id].status !== 'OPERATING' && c.now >= h.open;
-      return `<span class="must ${S.done[id] ? 'is-done' : down ? 'is-down' : ''}">${S.done[id] ? ic('check') : ic('star')}${esc(attractionById[id].short)}${down ? '（休止）' : ''}</span>`;
+      const fin = !leftN(id), want = wantN(id);
+      const down = !fin && live[id] && live[id].status !== 'OPERATING' && c.now >= h.open;
+      return `<span class="must ${fin ? 'is-done' : down ? 'is-down' : ''}">${fin ? ic('check') : ic('star')}${esc(attractionById[id].short)}${want > 1 ? ` <span class="num">${Math.min(rideN(id), want)}/${want}</span>` : ''}${down ? '（休止）' : ''}</span>`;
     }).join('')}</div>` : ''}</div>`;
 
   for (const n of r.notes) {
@@ -725,6 +796,7 @@ function footer() {
 // =====================================================================
 function condSummary(D) {
   const must = Object.keys(D.must).filter((id) => attractionById[id]);
+  const mName = (id) => attractionById[id].short + timesTag(id, D.must);
   const meals = PLANS[D.plan].meals.filter((m) => !D.prefs.mealOverrides[m.id]?.off).map((m) => {
     const ov = D.prefs.mealOverrides[m.id] || {};
     return `${m.id === 'lunch' ? 'ランチ' : m.id === 'dinner' ? 'ディナー' : 'おやつ'} ${restaurantById[ov.restaurant || m.restaurant]?.ja.split('・')[0]}`;
@@ -732,7 +804,7 @@ function condSummary(D) {
   const shows = SHOWS.filter((s) => D.prefs.shows[s.id]?.on ?? PLANS[D.plan].shows[s.id]).map((s) => s.short.replace('ハロウィン・', ''));
   return [
     ['条件', `${PACE[D.plan]} · 待ち〜${D.cond.maxWait}分 · 歩く量${WALK_JA[D.cond.walk]}`],
-    ['絶対', must.length ? must.map((id) => attractionById[id].short).join(' / ') : 'なし'],
+    ['絶対', must.length ? must.map(mName).join(' / ') : 'なし'],
     ['ごはん', meals.join(' / ') || 'なし'], ['ショー', shows.join(' / ') || 'なし'],
   ];
 }
@@ -742,7 +814,6 @@ function renderPlan() {
   const el = $('#view-plan');
   const c = ctx();
   const sim = simulateDay(c);
-  const done = doneRides();
   const conflicts = anchorConflicts(c.anchors);
   const D = { plan: S.plan, cond: S.cond, must: mustMap(), prefs: S.prefs };
   const mustIds = Object.keys(mustMap()).filter((id) => attractionById[id]);
@@ -750,7 +821,7 @@ function renderPlan() {
     <dl class="kv condsum__kv">${condSummary(D).map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
     <button class="btn btn--navy btn--block" data-act="plan-edit">${ic('sliders')}条件を変えてプランを作る</button></div>`;
   html += `<div class="kpis">
-    <div class="card kpi"><b>${done.length + sim.rides}</b><span>乗り物</span></div>
+    <div class="card kpi"><b>${totalRides() + sim.rides}</b><span>乗り物</span></div>
     <div class="card kpi"><b>${mustIds.length - sim.missingMust.length}/${mustIds.length}</b><span>絶対乗る</span></div>
     <div class="card kpi"><b>${c.anchors.length}</b><span>ごはん・ショー</span></div></div>`;
   if (sim.missingMust.length) html += `<div class="note note--bad">${ic('alert')}<div><div class="note__t">${sim.missingMust.map((id) => esc(attractionById[id].short)).join('・')} が入りきらない</div><div class="note__s">休止中なら再開後に最優先で案内</div></div></div>`;
@@ -763,7 +834,7 @@ function renderPlan() {
     if (it.type === 'ride') {
       const a = it.a;
       html += `<li class="tl__item ${it.must ? 'tl__item--must' : ''}"><span class="tl__time">${clock(it.start)}</span>
-        <div class="tl__card"><button class="tl__main" data-open="${a.id}"><span class="tl__name">${jw(a.short)}${it.must ? '<span class="tag tag--must">絶対</span>' : ''}</span>
+        <div class="tl__card"><button class="tl__main" data-open="${a.id}"><span class="tl__name">${jw(a.short)}${it.must ? '<span class="tag tag--must">絶対</span>' : ''}${it.nth > 1 ? `<span class="tag tag--must">${it.nth}回目</span>` : ''}</span>
           <span class="tl__meta"><span>${ic('clock')}待ち${it.wait}分</span>${kindTag(it.waitKind)}<span>${ic('walk')}${it.walk}分</span><span>〜<span class="num">${clock(it.end)}</span></span></span></button>
           <button class="check" data-done="${a.id}" aria-label="${esc(a.short)} 乗った">${ic('check')}</button></div></li>`;
     } else if (it.type === 'meal' || it.type === 'show') {
@@ -781,12 +852,18 @@ function renderPlan() {
   }
   html += `</ol>`;
 
-  const doneIds = Object.keys(S.done).sort((a, b) => (S.doneMin[a] ?? 0) - (S.doneMin[b] ?? 0) || S.done[a] - S.done[b]);
-  if (doneIds.length) {
-    html += `<div class="sec"><h2><span class="sec__en">DONE</span>済み</h2><span class="sec__sub">${doneIds.length}件</span></div><ol class="tl tl--done">`;
-    for (const id of doneIds) {
-      html += `<li class="tl__item tl__item--done"><span class="tl__time">${S.doneMin[id] != null ? clock(S.doneMin[id]) : '—'}</span>
-        <div class="tl__card"><div class="tl__main"><span class="tl__name">${jw(doneName(id))}</span></div><button class="check is-done" data-done="${id}" aria-label="完了済み（タップで戻す）">${ic('check')}</button></div></li>`;
+  // Every ride (one row per time ridden) + completed meals/shows, in time order.
+  const seen = {};
+  const doneRows = [
+    ...S.log.map((x) => ({ id: x.id, min: x.min, at: x.at, nth: (seen[x.id] = (seen[x.id] || 0) + 1) })),
+    ...Object.keys(S.done).filter((id) => !attractionById[id]).map((id) => ({ id, min: S.doneMin[id], at: S.done[id] })),
+  ].sort((a, b) => (a.min ?? 0) - (b.min ?? 0) || a.at - b.at);
+  if (doneRows.length) {
+    html += `<div class="sec"><h2><span class="sec__en">DONE</span>済み</h2><span class="sec__sub">${doneRows.length}件</span></div><ol class="tl tl--done">`;
+    for (const x of doneRows) {
+      const ride = !!attractionById[x.id];
+      html += `<li class="tl__item tl__item--done"><span class="tl__time">${x.min != null ? clock(x.min) : '—'}</span>
+        <div class="tl__card"><div class="tl__main"><span class="tl__name">${jw(doneName(x.id))}${ride && x.nth > 1 ? `<span class="tag">${x.nth}回目</span>` : ''}</span></div><button class="check is-done" ${ride ? `data-ride-menu="${x.id}"` : `data-done="${x.id}"`} aria-label="完了済み（タップで変更）">${ic('check')}</button></div></li>`;
     }
     html += `</ol>`;
   }
@@ -824,8 +901,15 @@ function openPlanBuilder(focus) {
         <div class="legend"><span><i class="m"></i>絶対乗る</span><span><i></i>おまかせ</span><span><i class="s"></i>乗らない</span></div>
         <div class="ridepick">${rides.map((a) => {
           const st = D.must[a.id] ? 'must' : D.excluded[a.id] ? 'skip' : '';
-          return `<button class="rp ${st ? 'is-' + st : ''}" data-b-ride="${a.id}" aria-label="${esc(a.short)}：${st === 'must' ? '絶対乗る' : st === 'skip' ? '乗らない' : 'おまかせ'}"><span class="rp__st">${st === 'must' ? ic('check') : ''}</span><span>${jw(a.short)}</span></button>`;
-        }).join('')}</div></div>
+          const want = wantN(a.id, D.must), n = rideN(a.id);
+          const label = st === 'must' ? (want > 1 ? `絶対乗る（今日${want}回）` : '絶対乗る') : st === 'skip' ? '乗らない' : 'おまかせ';
+          return `<button class="rp ${st ? 'is-' + st : ''}" data-b-ride="${a.id}" aria-label="${esc(a.short)}：${label}${n ? `・${n}回乗った` : ''}"><span class="rp__st">${st === 'must' ? (want > 1 ? `<span class="num">×${want}</span>` : ic('check')) : ''}</span><span>${jw(a.short)}${n ? `<small class="rp__n">済${n > 1 ? '×' + n : ''}</small>` : ''}</span></button>`;
+        }).join('')}</div>
+        ${mustIds.filter((id) => attractionById[id]).length ? `<div class="field__h" style="margin-top:12px"><b>乗る回数</b><span>2回以上乗りたいものは＋</span></div>
+        <div class="wantlist">${mustIds.filter((id) => attractionById[id]).map((id) => {
+          const want = wantN(id, D.must), n = rideN(id);
+          return `<div class="cnt"><span>${jw(attractionById[id].short)}${n ? `<small class="rp__n">${n}回済み</small>` : ''}</span><button class="btn btn--sm" data-b-want="${id}" data-delta="-1" aria-label="${esc(attractionById[id].short)}の回数を減らす" ${want <= Math.max(1, n) ? 'disabled' : ''}>−</button><b class="num">${want}回</b><button class="btn btn--sm" data-b-want="${id}" data-delta="1" aria-label="${esc(attractionById[id].short)}の回数を増やす" ${want >= 5 ? 'disabled' : ''}>＋</button></div>`;
+        }).join('')}</div>` : ''}</div>
       <div class="field" id="b-meals"><div class="field__h"><b>ごはん</b><span>お店と時間</span></div>
         ${PLANS[D.plan].meals.map((m) => {
           const ov = D.prefs.mealOverrides[m.id] || {};
@@ -848,7 +932,7 @@ function openPlanBuilder(focus) {
             ${showOn(s.id) ? `<div class="times">${st.times.map((t) => `<button class="time ${t === pick ? 'is-active' : ''}" data-b-show-pick="${s.id}" data-time="${t}">${t}</button>`).join('')}</div>` : ''}</div>`;
         }).join('')}</div>
     </div></div>
-    <div class="sheet__foot"><button class="btn btn--primary btn--block" data-act="plan-apply">この条件でプランを作る<span class="num" style="font-weight:500;margin-left:6px">乗り物 ${doneRides().length + sim.rides} · 絶対 ${mustIds.length - sim.missingMust.length}/${mustIds.length}</span></button></div>`,
+    <div class="sheet__foot"><button class="btn btn--primary btn--block" data-act="plan-apply">この条件でプランを作る<span class="num" style="font-weight:500;margin-left:6px">乗り物 ${totalRides() + sim.rides} · 絶対 ${mustIds.length - sim.missingMust.length}/${mustIds.length}</span></button></div>`,
   { keepScroll: true });
   if (focus) { const f = $('#b-' + focus); if (f) $('.sheet__panel').scrollTop = f.offsetTop - 30; }
 }
@@ -859,7 +943,7 @@ function applyPlanDraft() {
   S.prefs = { ...S.prefs, mealOverrides: D.prefs.mealOverrides, shows: D.prefs.shows };
   for (const id of Object.keys(S.must)) delete S.excluded[id];
   save(); closeSheet(); go('plan');
-  toast(`プランを作りました（乗り物 ${doneRides().length + simulateDay(ctx()).rides}）`, 'ok');
+  toast(`プランを作りました（乗り物 ${totalRides() + simulateDay(ctx()).rides}）`, 'ok');
 }
 
 // =====================================================================
@@ -878,7 +962,7 @@ function renderExplore() {
     const f = S.exploreFilter;
     list = list.filter(({ a, w }) => f === 'all'
       || (f === 'short' && w.wait != null && w.wait <= 30)
-      || (f === 'todo' && !S.done[a.id]) || (f === 'done' && S.done[a.id])
+      || (f === 'todo' && !rideN(a.id)) || (f === 'done' && rideN(a.id))
       || (f === 'down' && w.status && w.status !== 'OPERATING' && c.now >= c.openMin)
       || (f === 'japan' && /日本未上陸|日本にない/.test(a.japan)));
     const sort = S.exploreSort;
@@ -893,11 +977,11 @@ function renderExplore() {
       return (rank.get(x.a.id) ?? 99) - (rank.get(y.a.id) ?? 99) || (!!must[y.a.id] - !!must[x.a.id]) || (PRIORITY[y.a.id] || 0) - (PRIORITY[x.a.id] || 0);
     });
     html += `<div class="card rows">${list.map(({ a, w, walk }) => `
-      <button class="row ${S.done[a.id] ? 'is-done' : ''}" data-open="${a.id}" type="button">
+      <button class="row ${!leftN(a.id) ? 'is-done' : ''}" data-open="${a.id}" type="button">
         <span class="row__thumb">${rideImg(a)}</span>
         <span class="row__body"><span class="row__name">${jw(a.short)}</span>
           <span class="row__meta"><span>${esc(landById[a.land]?.ja)}</span><span>${ic('walk')}${walk}分</span>${sparkSmall(a.id)}</span>
-          <span class="tags" style="margin-top:3px">${must[a.id] ? '<span class="tag tag--must">絶対</span>' : ''}${S.done[a.id] ? '<span class="tag">済み</span>' : ''}${rank.has(a.id) && !S.done[a.id] ? '<span class="tag tag--warn">今おすすめ</span>' : ''}${/日本未上陸/.test(a.japan) ? '<span class="tag">日本にない</span>' : ''}</span></span>
+          <span class="tags" style="margin-top:3px">${must[a.id] ? `<span class="tag tag--must">絶対${timesTag(a.id, must)}</span>` : ''}${rideN(a.id) ? `<span class="tag">済み${rideN(a.id) > 1 ? '×' + rideN(a.id) : ''}</span>` : ''}${rank.has(a.id) && leftN(a.id) ? '<span class="tag tag--warn">今おすすめ</span>' : ''}${/日本未上陸/.test(a.japan) ? '<span class="tag">日本にない</span>' : ''}</span></span>
         <span class="row__wait">${w.wait == null ? `<span class="tag tag--bad">${esc(STATUS_JA[w.status] || '休止')}</span>` : `<b class="${waitClass(w.wait)}">${w.wait}</b><small>分</small><br>${kindTag(w.kind)}`}</span>
       </button>`).join('') || '<div class="empty">該当なし</div>'}</div>`;
     el.innerHTML = html;
@@ -991,9 +1075,11 @@ function openAttraction(id) {
       </div>
       ${!av.ok ? `<div class="note note--bad">${ic('alert')}<div><div class="note__t">${esc(av.reason)}</div>${must ? '<div class="note__s">再開したら最優先で案内します</div>' : ''}</div></div>` : ''}
       <div class="btnrow">
-        ${S.done[a.id] ? `<button class="btn" data-done="${a.id}">${ic('check')}済み ${S.doneMin[a.id] != null ? clock(S.doneMin[a.id]) : ''}</button>` : `<button class="btn btn--primary" data-done="${a.id}" data-close>${ic('check')}乗った</button>`}
+        ${rideN(a.id) ? `<button class="btn" data-ride-menu="${a.id}">${ic('check')}済み${rideN(a.id) > 1 ? ` ×${rideN(a.id)}` : ''} ${S.doneMin[a.id] != null ? clock(S.doneMin[a.id]) : ''}</button>` : `<button class="btn btn--primary" data-done="${a.id}" data-close>${ic('check')}乗った</button>`}
         <a class="btn" href="${routeUrl(pos)}" target="_blank" rel="noopener">${ic('route')}ルート</a>
       </div>
+      ${rideN(a.id) ? `<button class="btn btn--primary btn--block" data-ride-again="${a.id}">${ic('plus')}もう1回乗りたい（プランに追加）</button>` : ''}
+      ${must ? `<div class="cnt"><span>今日乗る回数${rideN(a.id) ? `（${rideN(a.id)}回済み）` : ''}</span><button class="btn btn--sm" data-ride-want="${a.id}" data-delta="-1" aria-label="回数を減らす" ${wantN(a.id) <= Math.max(1, rideN(a.id)) ? 'disabled' : ''}>−</button><b class="num">${wantN(a.id)}回</b><button class="btn btn--sm" data-ride-want="${a.id}" data-delta="1" aria-label="回数を増やす" ${wantN(a.id) >= 5 ? 'disabled' : ''}>＋</button></div>` : ''}
       <div class="seg"><button class="${must ? 'is-active' : ''}" data-ride-st="${a.id}" data-v="must">絶対乗る</button><button class="${!must && !S.excluded[a.id] ? 'is-active' : ''}" data-ride-st="${a.id}" data-v="">おまかせ</button><button class="${S.excluded[a.id] ? 'is-active' : ''}" data-ride-st="${a.id}" data-v="skip">乗らない</button></div>
       <p class="para">${esc(a.desc)}</p>
       <div class="box"><b>日本との違い</b>${esc(a.japan)}</div>
@@ -1155,7 +1241,7 @@ async function renderMap() {
     const r = recommend(c);
     mapMod.draw({
       filter: S.mapFilter, pos: position(), gps: R.gpsPos && S.gps ? R.gpsPos : null,
-      rides: ATTRACTIONS.map((a) => ({ a, pos: coordsOf(a.id), w: waitInfo(a), done: !!S.done[a.id] })),
+      rides: ATTRACTIONS.map((a) => ({ a, pos: coordsOf(a.id), w: waitInfo(a), done: !leftN(a.id) })),
       food: RESTAURANTS.map((x) => ({ r: x, pos: coordsOf(x.id) })),
       shows: SHOWS.map((s) => ({ s, pos: s.venuePos })),
       nextId: r.primary?.a?.id || null,
@@ -1189,6 +1275,15 @@ document.addEventListener('click', async (e) => {
   if (d.openShow) return openShow(d.openShow);
   if (d.done) return markDone(d.done);
   if (d.undo) return undoDone(d.undo);
+  if (d.rideMenu) return openRideMenu(d.rideMenu);
+  if (d.rideAgain) { wantAgain(d.rideAgain); if (!$('#sheet').hidden) openAttraction(d.rideAgain); return; }
+  if (d.rideWant) {
+    const id = d.rideWant, must = mustMap();
+    const want = Math.min(5, Math.max(1, rideN(id), wantN(id, must) + Number(d.delta)));
+    must[id] = want === 1 ? true : want;
+    S.must = must; save(); renderView(); openAttraction(id);
+    return toast(`${attractionById[id].short}：今日${want}回`, 'ok');
+  }
   if (d.pin) {
     S.pin = { id: d.pin, until: nowMin() + 30 }; R.alerts = R.alerts.filter((x) => x.id !== d.pin); save();
     go('home'); return toast(`${attractionById[d.pin].short} を次の行き先にしました`, 'ok');
@@ -1203,10 +1298,11 @@ document.addEventListener('click', async (e) => {
   if (d.rideSt) {
     const id = d.rideSt, must = mustMap();
     delete must[id]; delete S.excluded[id];
-    if (d.v === 'must') must[id] = true;
+    if (d.v === 'must') must[id] = rideN(id) ? rideN(id) + 1 : true; // already ridden → "one more time"
+
     if (d.v === 'skip') S.excluded[id] = true;
     S.must = must; save(); renderView(); openAttraction(id);
-    return toast(d.v === 'must' ? '絶対乗るに追加' : d.v === 'skip' ? '乗らないに設定' : 'おまかせに設定', 'ok');
+    return toast(d.v === 'must' ? (rideN(id) ? `絶対乗るに追加（もう1回・今日${wantN(id)}回）` : '絶対乗るに追加') : d.v === 'skip' ? '乗らないに設定' : 'おまかせに設定', 'ok');
   }
   if (d.anchorEdit) return openAnchorEdit(d.anchorEdit);
   if (d.pickShow) {
@@ -1253,9 +1349,16 @@ document.addEventListener('click', async (e) => {
   }
   if (d.bRide && R.draft) {
     const id = d.bRide, D = R.draft;
+    const n = rideN(id);
     if (D.must[id]) { delete D.must[id]; D.excluded[id] = true; }
     else if (D.excluded[id]) delete D.excluded[id];
-    else D.must[id] = true;
+    else D.must[id] = n ? n + 1 : true; // already ridden → plan one more time
+    return openPlanBuilder();
+  }
+  if (d.bWant && R.draft) {
+    const id = d.bWant, D = R.draft;
+    const want = Math.min(5, Math.max(1, rideN(id), wantN(id, D.must) + Number(d.delta)));
+    D.must[id] = want === 1 ? true : want;
     return openPlanBuilder();
   }
   if (d.bShowPick && R.draft) {

@@ -130,21 +130,51 @@ const noHScroll = async (p) => assert.ok(await p.evaluate(() => document.documen
     assert.match(await page.textContent('.prog__n'), /^1/);
     assert.notEqual(await page.getAttribute('#actionbar [data-done]', 'data-done'), first, 'next recommendation changes');
     await tab(page, 'plan');
-    const doneRow = page.locator(`.tl--done [data-done="${first}"]`);
+    const doneRow = page.locator(`.tl--done [data-ride-menu="${first}"]`);
     assert.equal(await doneRow.count(), 1, 'completed item still listed');
     await doneRow.click(); await page.waitForTimeout(200);
     assert.equal(await page.isVisible('#sheet'), true, 'confirmation sheet');
     await page.screenshot({ path: `${SHOTS}/15-undo-confirm.png` });
     await page.click('#sheet button:has-text("そのまま")'); await page.waitForTimeout(150);
-    assert.equal(await page.locator(`.tl--done [data-done="${first}"]`).count(), 1, 'still done after "そのまま"');
+    assert.equal(await page.locator(`.tl--done [data-ride-menu="${first}"]`).count(), 1, 'still done after "そのまま"');
     // revert then restore from the toast
-    await page.locator(`.tl--done [data-done="${first}"]`).click(); await page.waitForTimeout(150);
+    await page.locator(`.tl--done [data-ride-menu="${first}"]`).click(); await page.waitForTimeout(150);
     await page.click(`[data-undo="${first}"]`); await page.waitForTimeout(200);
-    assert.equal(await page.locator(`.tl--done [data-done="${first}"]`).count(), 0);
-    assert.match(await page.textContent('#toast'), /未完了に戻しました/);
+    assert.equal(await page.locator(`.tl--done [data-ride-menu="${first}"]`).count(), 0);
+    assert.match(await page.textContent('#toast'), /取り消しました/);
     await page.click('#toastAct'); await page.waitForTimeout(200);
-    assert.equal(await page.locator(`.tl--done [data-done="${first}"]`).count(), 1, 'restored from toast');
+    assert.equal(await page.locator(`.tl--done [data-ride-menu="${first}"]`).count(), 1, 'restored from toast');
     await page.screenshot({ path: `${SHOTS}/03-plan-done.png`, fullPage: true });
+  });
+  await step('9b. A ride already done can be added again (count) and is planned a 2nd time', async () => {
+    await tab(page, 'plan');
+    const first = await page.getAttribute('.tl--done [data-ride-menu]', 'data-ride-menu');
+    const must0 = await page.evaluate((id) => (window.__dlnavi.S.must || { rise: true, falcon: true })[id] ?? null, first);
+    await page.click(`.tl--done [data-ride-menu="${first}"]`); await page.waitForTimeout(150);
+    await page.click(`#sheet [data-ride-again="${first}"]`); await page.waitForTimeout(250);
+    assert.match(await page.textContent('#toast'), /もう1回プランに追加/);
+    let st = await page.evaluate(() => window.__dlnavi.S);
+    assert.equal(st.must[first], 2, 'wanted twice');
+    const again = page.locator(`ol.tl:not(.tl--done) [data-done="${first}"]`);
+    assert.equal(await again.count(), 1, 'planned again in the timeline');
+    assert.match(await page.textContent('ol.tl:not(.tl--done)'), /2回目/);
+    await again.click(); await page.waitForTimeout(250);
+    st = await page.evaluate(() => window.__dlnavi.S);
+    assert.equal(st.count[first], 2, 'counted twice');
+    assert.equal(await page.locator(`.tl--done [data-ride-menu="${first}"]`).count(), 2, 'two rows in 済み');
+    assert.equal(await page.locator(`ol.tl:not(.tl--done) [data-done="${first}"]`).count(), 0, 'not planned a 3rd time');
+    // Plan builder: "+" raises the count; "絶対乗る" on a ridden ride means one more time
+    await page.click('[data-act="plan-edit"]'); await page.waitForTimeout(150);
+    await page.click(`[data-b-want="${first}"][data-delta="1"]`); await page.waitForTimeout(100);
+    await page.screenshot({ path: `${SHOTS}/18-plan-ride-count.png` });
+    await page.click('[data-act="plan-apply"]'); await page.waitForTimeout(250);
+    assert.match(await page.textContent('ol.tl:not(.tl--done)'), /3回目/);
+    // restore: undo the 2nd ride and the extra count
+    await page.evaluate(([id, v]) => { const S = window.__dlnavi.S; if (v == null) delete S.must[id]; else S.must[id] = v; }, [first, must0]);
+    await page.click(`.tl--done [data-ride-menu="${first}"] >> nth=1`); await page.waitForTimeout(150);
+    await page.click(`[data-undo="${first}"]`); await page.waitForTimeout(250);
+    st = await page.evaluate(() => window.__dlnavi.S);
+    assert.equal(st.count[first], 1);
   });
   await step('10. Re-optimise after check-in keeps the remaining must-rides', async () => {
     await tab(page, 'plan');

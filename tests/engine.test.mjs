@@ -166,3 +166,33 @@ test('"歩く量 少なめ" plans less total walking than "気にしない"', ()
   const walk = (w) => simulateDay({ ...base({ now: 480 }), cond: { maxWait: 60, walk: w } }).items.filter((i) => i.type === 'ride').reduce((s, i) => s + i.walk, 0);
   assert.ok(walk('low') <= walk('any'), `low:${walk('low')} any:${walk('any')}`);
 });
+
+// ---------- repeat rides (ride counts) ----------
+test('an already-ridden must ride with a higher wanted count is planned again', () => {
+  const c = { ...base({ now: 600, done: { rise: 1, falcon: 1, matterhorn: 1 } }), counts: { rise: 1, falcon: 1, matterhorn: 1 }, must: { rise: true, falcon: true, matterhorn: 2 } };
+  const sim = simulateDay(c);
+  const again = sim.items.filter((i) => i.id === 'matterhorn');
+  assert.equal(again.length, 1, 'matterhorn planned exactly once more');
+  assert.equal(again[0].nth, 2);
+  assert.ok(again[0].reasons.some((x) => x.k === 'repeat'));
+  assert.ok(!sim.items.some((i) => i.id === 'rise' || i.id === 'falcon'), 'satisfied musts are not repeated');
+  assert.deepEqual(sim.missingMust, []);
+});
+
+test('wanting a ride 3 times from scratch plans it 3 times', () => {
+  const sim = simulateDay({ ...base({ now: 480 }), must: { rise: true, falcon: true, space: 3 } });
+  assert.equal(sim.items.filter((i) => i.id === 'space').length, 3);
+  assert.deepEqual(sim.items.filter((i) => i.id === 'space').map((i) => i.nth), [1, 2, 3]);
+});
+
+test('counts reaching the wanted number stop the ride from being recommended', () => {
+  const c = { ...base({ now: 600 }), counts: { space: 2 }, done: { space: 1 }, must: { space: 2 } };
+  const r = recommend(c);
+  assert.notEqual(r.primary?.a?.id, 'space');
+  assert.deepEqual(simulateDay(c).missingMust, []);
+});
+
+test('a must ride still short of its count is reported as missing when it cannot fit', () => {
+  const c = { ...base({ now: 1370 }), counts: { rise: 1, falcon: 1 }, must: { rise: 3, falcon: true } };
+  assert.deepEqual(simulateDay(c).missingMust, ['rise']);
+});

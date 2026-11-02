@@ -143,6 +143,18 @@ export function anchorConflicts(anchors) {
 export const DEFAULT_MUST = { rise: true, falcon: true };
 export const mustOf = (ctx) => ctx.must || DEFAULT_MUST;
 export const isMust = (a, ctx) => !!mustOf(ctx)[a.id];
+// Repeat rides: ctx.counts {rideId: timesRidden} (falls back to ctx.done → 1).
+// A must entry may be `true` (ride once) or a number = total times the user wants to ride today.
+export const timesDone = (ctx, id) => {
+  const n = ctx.counts?.[id];
+  return Number.isFinite(n) ? n : ctx.done?.[id] ? 1 : 0;
+};
+export const wantTimes = (ctx, id) => {
+  const v = mustOf(ctx)[id];
+  return v === true ? 1 : Number.isFinite(v) && v > 0 ? Math.floor(v) : 1;
+};
+// Still to ride: must rides until the wanted count is reached, other rides only if never ridden.
+export const ridesLeft = (ctx, id) => Math.max(0, wantTimes(ctx, id) - timesDone(ctx, id));
 const WALK_W = { low: 1.8, normal: 1, any: 0.5 };
 export function effectivePlan(ctx) {
   const base = PLANS[ctx.planId] || PLANS.balance;
@@ -220,10 +232,10 @@ export function recommend(ctx) {
   }
 
   // Score rides
-  const doneCount = Object.keys(ctx.done || {}).filter((k) => attractionById[k]).length;
+  const doneCount = ATTRACTIONS.reduce((n, a) => n + timesDone(ctx, a.id), 0);
   const cands = [];
   for (const a of ATTRACTIONS) {
-    if (ctx.done?.[a.id] || ctx.excluded?.[a.id]) continue;
+    if (!ridesLeft(ctx, a.id) || (ctx.excluded?.[a.id] && !isMust(a, ctx))) continue;
     const av = availability(a, c2);
     if (!av.ok) { result.blocked.push({ a, reason: av.reason, temporary: av.temporary }); continue; }
     const p = posOf(a);
@@ -231,7 +243,7 @@ export function recommend(ctx) {
     const w = waitFor(a, now + walk, c2);
     const finish = now + walk + w.wait + a.dur;
     const backToAnchor = next ? walkMin(p, next.pos) : 0;
-    const c = { a, walk, wait: w.wait, kind: w.kind, finish, total: walk + w.wait + a.dur };
+    const c = { a, walk, wait: w.wait, kind: w.kind, finish, total: walk + w.wait + a.dur, nth: timesDone(ctx, a.id) + 1 };
     // After the last fixed event you only need to JOIN the queue before closing.
     const fitsClose = !next && now + walk <= ctx.closeMin - 2;
     let bumps = null;
@@ -259,6 +271,7 @@ export function recommend(ctx) {
     c.bumps = bumps;
     if (ctx.skip?.[a.id] && ctx.skip[a.id] > ctx.now) continue;
     const { score, reasons } = scoreRide(a, c, plan, c2);
+    if (c.nth > 1) reasons.push({ k: 'repeat', t: `${c.nth}回目（もう一度乗りたい）` });
     if (c.soft) reasons.push({ k: 'soft', t: c.soft === 'claim' ? `必須を優先：${next.title}の場所取りは短め（開演直前に到着）` : `必須を優先：${next.title}を少し遅らせる（〜${hhmm(finish + backToAnchor)}）` });
     else if (bumps) reasons.push({ k: 'bump', t: `必須のため${next.title}（${hhmm(next.start)}）を後ろにずらす/見送る` });
     else if (c.lastCall) reasons.push({ k: 'close', t: `閉園${hhmm(ctx.closeMin)}までに列に並べば乗れる` });
@@ -312,7 +325,7 @@ export function recommend(ctx) {
 
   // must-ride status notes
   for (const id of Object.keys(mustOf(ctx))) {
-    if (ctx.done?.[id]) continue;
+    if (!ridesLeft(ctx, id)) continue;
     const b = result.blocked.find((x) => x.a.id === id);
     if (b) result.notes.push({ id, text: `${attractionById[id].short}：${b.reason}`, temporary: b.temporary, fit: !!b.fit });
   }
@@ -326,6 +339,8 @@ export function recommend(ctx) {
 export function simulateDay(ctx) {
   const items = [];
   const done = { ...(ctx.done || {}) };
+  const counts = {};
+  for (const a of ATTRACTIONS) counts[a.id] = timesDone(ctx, a.id);
   const anchors = (ctx.anchors || []).map((a) => ({ ...a }));
   let now = Math.max(ctx.now, ctx.openMin);
   let pos = ctx.pos;
@@ -334,13 +349,14 @@ export function simulateDay(ctx) {
   while (now < ctx.closeMin - 2 && guard++ < 80) {
     // Only trust live waits/status near the real current time.
     const liveNear = now - startNow <= 30 ? ctx.live : stripDown(ctx.live, ctx);
-    const r = recommend({ ...ctx, now, pos, done, anchors, live: liveNear, skip: {} });
+    const r = recommend({ ...ctx, now, pos, done, counts, anchors, live: liveNear, skip: {} });
     const p = r.primary;
     if (!p) break;
     if (p.type === 'ride') {
       const start = now + p.walk;
-      items.push({ type: 'ride', id: p.a.id, a: p.a, walk: p.walk, start, wait: p.wait, waitKind: p.kind, end: p.finish, must: isMust(p.a, ctx), reasons: p.reasons });
+      items.push({ type: 'ride', id: p.a.id, a: p.a, walk: p.walk, start, wait: p.wait, waitKind: p.kind, end: p.finish, must: isMust(p.a, ctx), nth: p.nth, reasons: p.reasons });
       done[p.a.id] = true;
+      counts[p.a.id] += 1;
       if (p.bumps) {
         const here = (ctx.coords?.[p.a.id]) || p.a.pos;
         const fixed = anchors.filter((x) => !x.done && !x.flex && x.start > p.finish).sort((x, y) => x.start - y.start)[0];
@@ -390,7 +406,7 @@ export function simulateDay(ctx) {
     items.push({ type: a.kind, id: a.id, anchor: a, start: a.start, end: a.end });
   }
   items.sort((x, y) => x.start - y.start);
-  const missingMust = Object.keys(mustOf(ctx)).filter((id) => !done[id] && !ctx.excluded?.[id]);
+  const missingMust = Object.keys(mustOf(ctx)).filter((id) => attractionById[id] && ridesLeft({ ...ctx, counts }, id) > 0);
   return { items, missingMust, rides: items.filter((i) => i.type === 'ride').length };
 }
 
