@@ -109,7 +109,7 @@ jobs:
           fi
           npx wrangler pages deploy public --project-name dl-navi-1031 --branch "$BRANCH"
 
-      - name: Check publicly served app and health API
+      - name: Confirm Cloudflare Access blocks anonymous requests
         if: steps.fresh.outputs.deploy == 'true'
         env:
           TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'production' }}
@@ -120,6 +120,10 @@ jobs:
             BASE=https://preview.dl-navi-1031.pages.dev
           fi
           echo "Verify $BASE"
-          curl --fail --silent --show-error --retry 8 --retry-delay 3 --retry-all-errors "$BASE/" -o /dev/null
-          curl --fail --silent --show-error --retry 8 --retry-delay 3 --retry-all-errors "$BASE/api/health"
-          echo
+          for ROUTE in / /api/health; do
+            STATUS="$(curl --silent --show-error --retry 6 --retry-delay 3 --retry-all-errors --output /dev/null --write-out '%{http_code}' "$BASE$ROUTE")"
+            case "$STATUS" in
+              301|302|303|307|308|401|403) echo "Cloudflare Access blocked anonymous $ROUTE (HTTP $STATUS)" ;;
+              *) echo "::error::Expected Access to block anonymous $ROUTE, but got HTTP $STATUS"; exit 1 ;;
+            esac
+          done
